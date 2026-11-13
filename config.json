@@ -1,0 +1,62 @@
+{
+  "_note": "Rules for the guard and the drafter. NO prospect data lives here. Every number below is a PLACEHOLDER, not a researched figure (see docs/research-agenda.md, G7 and G8). Tune them from the pilot, not from a guess.",
+  "siteUrl": "https://valleycapitalpartner.com",
+  "killSwitch": false,
+  "channels": {
+    "allowed": ["email", "letter", "call", "linkedin_note"],
+    "banned": {
+      "ai_voice": "AI-generated voice calls are treated as artificial-voice calls under U.S. telemarketing rules and are not used for outbound. A person places calls.",
+      "ringless_voicemail": "Ringless voicemail is treated as a call under U.S. telemarketing rules and is not used. A person leaves voicemail after dialing.",
+      "sms": "No text messages: no consent, wrong channel for this audience.",
+      "whatsapp": "No WhatsApp: no consent, wrong channel for this audience.",
+      "auto_dialer": "No automated dialing."
+    }
+  },
+  "caps": {
+    "firstTouchesPerSenderPerWeek": 15,
+    "emailsPerSenderPerDay": 20,
+    "touchesPerAccountPer90Days": 6,
+    "minGapDays": 2,
+    "institutionOneAtATimeDays": 45
+  },
+  "sequence": [
+    { "step": 1, "channel": "letter", "afterDays": 0 },
+    { "step": 2, "channel": "email", "afterDays": 3 },
+    { "step": 3, "channel": "linkedin_note", "afterDays": 4 },
+    { "step": 4, "channel": "call", "afterDays": 4 },
+    { "step": 5, "channel": "email", "afterDays": 7 }
+  ],
+  "stopEvents": ["reply", "opt_out", "meeting", "handoff"],
+  "calls": { "callablePhoneTypes": ["landline"], "hours": [9, 17] },
+  "personalDomains": [
+    "gmail.com", "googlemail.com", "yahoo.com", "ymail.com", "outlook.com", "hotmail.com", "live.com", "msn.com", "aol.com",
+    "icloud.com", "me.com", "mac.com", "proton.me", "protonmail.com", "gmx.com", "mail.com", "comcast.net", "verizon.net", "att.net", "sbcglobal.net"
+  ],
+  "roleLocalParts": [
+    "info", "contact", "admin", "administrator", "sales", "support", "office", "hello", "team", "noreply", "no-reply", "webmaster",
+    "marketing", "hr", "jobs", "careers", "help", "service", "enquiries", "inquiries", "accounts", "billing", "press", "media", "legal", "compliance"
+  ],
+  "senderRequired": {
+    "email": ["name", "title", "phone", "address", "mailbox"],
+    "letter": ["name", "title", "phone", "address"],
+    "call": ["name", "title", "phone"],
+    "linkedin_note": ["name"]
+  },
+  "limits": {
+    "email": { "words": [40, 120], "subject": 60 },
+    "letter": { "words": [80, 250] },
+    "linkedin_note": { "chars": 300 }
+  },
+  "linkTargets": {
+    "bank": ["/banks/information-to-send/", "/banks/what-we-buy/", "/banks/confidentiality/"],
+    "servicer": ["/servicers/"],
+    "fund": ["/servicers/"],
+    "counsel": ["/receivers/for-lenders-counsel/", "/receivers/"],
+    "receiver": ["/receivers/what-we-ask-for/", "/receivers/"],
+    "broker": ["/servicers/"]
+  },
+  "requiredClaims": {
+    "bank": { "email": ["confidential-no-borrower-contact"], "letter": ["confidential-no-borrower-contact"] }
+  },
+  "allowedAcronyms": ["NPL", "CRE", "REO", "OREO", "UPB", "NDA", "LLC", "FDIC", "OCC", "CMBS", "UBPR", "SEC", "ICBA", "ABA", "CREFC", "MBA"]
+}

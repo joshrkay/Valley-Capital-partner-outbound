@@ -1,0 +1,66 @@
+{
+  "_note": "What the briefer researches, by account type. This is docs/research-agenda.md section 2.2 as data: edit the agenda and this file together. `standard` is the highest evidence tier a question normally allows (government, regulator, company, press). `required` questions must be answered or reported as a gap. Nothing here has been tested against live sources.",
+  "staleAfterDays": { "person": 365, "intent": 365, "exposure": 200, "structure": 730, "default": 540 },
+  "kinds": ["structure", "exposure", "intent", "regulatory", "person", "relationship", "public_statement", "asset", "risk", "timing", "fit"],
+  "types": {
+    "bank": {
+      "label": "Community or regional bank",
+      "questions": [
+        { "id": "bank.identity", "required": true, "standard": "government", "ask": "Legal name, charter and regulator, holding company, headquarters, size, ownership (public, private, mutual), and any pending merger.", "where": ["FDIC BankFind", "FFIEC National Information Center", "state regulator", "the bank's own site", "SEC filings if public"] },
+        { "id": "bank.exposure", "required": true, "standard": "government", "ask": "How much commercial real estate by category (multifamily is its own Call Report line; hotel and retail are not separate), how much is past due or non-accrual by category, the trend over eight quarters, and how that compares with peers. For a public bank, the credit-quality tables in the 10-K and 10-Q, which sometimes break out hotels and retail.", "where": ["FFIEC and FDIC Call Report data and UBPR", "10-K and 10-Q credit quality tables"] },
+        { "id": "bank.intent", "required": true, "standard": "company", "ask": "Has the bank said it will sell, reduce or exit commercial real estate or problem loans? Has it sold loans before, to whom, and through which advisor?", "where": ["earnings releases and call transcripts", "8-K", "annual report", "trade press", "recorded assignments of mortgage and UCC-3 assignments (past loan sales, and who bought)"] },
+        { "id": "bank.regulatory", "required": false, "standard": "government", "ask": "Any consent order, written agreement, memorandum of understanding or prompt-corrective-action status, or any enforcement action naming the institution.", "where": ["FDIC, OCC and Federal Reserve enforcement databases"] },
+        { "id": "bank.people", "required": true, "standard": "company", "ask": "Confirm who holds the decision for the kind of debt we want, and that the named person holds the role. Title keywords by department: special assets, workout, managed assets, recovery, OREO, credit resolution (non-performing loans); secondary marketing, whole loan, loan sales, loan syndications, capital markets (performing pools, participations, whole-loan sales); chief credit officer, chief lending officer, senior credit officer (at a smaller bank often the decision-maker); the president. Title, tenure, prior roles, public speaking, associations. Two dated sources. A name on a recorded affidavit, assignment of mortgage or court declaration is good evidence of the role, but it concerns a particular asset, so mark it asset-specific.", "where": ["bank leadership pages", "press releases", "filings", "conference speaker pages", "association directories", "recorded assignments of mortgage, notices of default and court declarations (the officer who signed)"] },
+        { "id": "bank.access", "required": false, "standard": "company", "ask": "Who advises or represents the bank (counsel, loan sale advisor, title officers, auditors)? Outside counsel named in foreclosure, receivership and bankruptcy filings is often the fastest warm path.", "where": ["filings", "press", "court filings", "foreclosure notices", "bankruptcy dockets"] },
+        { "id": "bank.timing", "required": false, "standard": "company", "ask": "Next earnings date, recent leadership change, conferences the named person will attend.", "where": ["investor relations page", "press", "event sites"] },
+        { "id": "bank.assets", "required": false, "standard": "government", "ask": "Loans or properties publicly tied to the bank in a court or regulatory record. CONTEXT ONLY, never for a message.", "where": ["court dockets", "press"] },
+        { "id": "bank.risk", "required": true, "standard": "government", "ask": "Any reason not to approach now: receivership or imminent failure, an active sale process run by an advisor, an adverse enforcement action against the named person.", "where": ["FDIC failed-bank and receivership pages", "enforcement databases", "press"] }
+      ]
+    },
+    "servicer": {
+      "label": "Special servicer",
+      "questions": [
+        { "id": "servicer.identity", "required": true, "standard": "company", "ask": "Parent company, ownership, special servicer ratings, offices, scale.", "where": ["company site", "rating agency publications", "filings"] },
+        { "id": "servicer.portfolio", "required": true, "standard": "government", "ask": "What they special service by property type and size, and recent transfers, as far as public trust reports show.", "where": ["SEC filings for CMBS trusts (10-D, ABS-EE)"] },
+        { "id": "servicer.disposition", "required": false, "standard": "press", "ask": "How they resolve loans (note sales, REO sales, discounted payoffs), which advisors they use, who buys.", "where": ["press", "trust reports", "advisor announcements"] },
+        { "id": "servicer.people", "required": true, "standard": "company", "ask": "Confirm the named person's role and tenure, and find the heads of asset management for our sectors. Two dated sources.", "where": ["company site", "press", "events"] },
+        { "id": "servicer.rights", "required": false, "standard": "government", "ask": "The controlling class or directing certificateholder on trusts they manage, where public.", "where": ["trust documents on EDGAR"] },
+        { "id": "servicer.risk", "required": true, "standard": "company", "ask": "An active process with a named advisor, litigation or a rating action that would make an approach unwelcome.", "where": ["press", "filings"] }
+      ]
+    },
+    "fund": {
+      "label": "Debt fund, mortgage REIT, bridge lender or other lender",
+      "questions": [
+        { "id": "fund.identity", "required": true, "standard": "company", "ask": "Type, sponsor, size, strategy, listing status.", "where": ["company site", "SEC"] },
+        { "id": "fund.portfolio", "required": true, "standard": "company", "ask": "Loan book by property type, non-accrual and sold-loan disclosures, maturities, securitization or CLO structure.", "where": ["10-K and 10-Q", "investor presentations"] },
+        { "id": "fund.intent", "required": false, "standard": "company", "ask": "Stated plans to sell or resolve non-performing loans, and who they sold to.", "where": ["earnings materials", "press"] },
+        { "id": "fund.people", "required": true, "standard": "company", "ask": "Confirm the named person's role; find heads of asset management, workouts and credit. Two dated sources.", "where": ["company site", "press"] },
+        { "id": "fund.risk", "required": true, "standard": "company", "ask": "Any reason not to approach now (active process, litigation, regulatory action).", "where": ["press", "filings"] }
+      ]
+    },
+    "counsel": {
+      "label": "Creditors' rights or restructuring counsel",
+      "questions": [
+        { "id": "counsel.identity", "required": true, "standard": "company", "ask": "Firm, office, practice group, and the partners who handle receiverships and foreclosures.", "where": ["firm site", "state bar"] },
+        { "id": "counsel.record", "required": false, "standard": "government", "ask": "Public dockets: receivership or foreclosure filings by state and sector, for which lenders, with which receivers.", "where": ["CourtListener", "state court portals"] },
+        { "id": "counsel.standing", "required": true, "standard": "government", "ask": "Bar status and any public discipline for the named lawyer.", "where": ["state bar lookup"] },
+        { "id": "counsel.people", "required": true, "standard": "company", "ask": "The named partner's role, publications, speaking, associations.", "where": ["firm site", "events"] }
+      ]
+    },
+    "receiver": {
+      "label": "Receiver",
+      "questions": [
+        { "id": "receiver.record", "required": true, "standard": "government", "ask": "Appointments by court, sector and year, and the counsel and lenders they work with.", "where": ["court records", "press"] },
+        { "id": "receiver.identity", "required": true, "standard": "company", "ask": "Firm, principals, sectors, states, licensing where required.", "where": ["company site", "state records"] }
+      ]
+    },
+    "broker": {
+      "label": "Loan sale advisor or note broker",
+      "questions": [
+        { "id": "broker.identity", "required": true, "standard": "company", "ask": "Firm, sectors, geographies, principals; confirm the named person's role.", "where": ["company site"] },
+        { "id": "broker.activity", "required": false, "standard": "press", "ask": "Public closed-deal and offering announcements: size, sector, lender type.", "where": ["press", "company site"] },
+        { "id": "broker.clients", "required": false, "standard": "company", "ask": "Which lenders and servicers they act for, where public.", "where": ["press", "company site"] }
+      ]
+    }
+  }
+}

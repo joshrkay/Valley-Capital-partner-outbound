@@ -1,0 +1,88 @@
+---
+import Base from '../layouts/Base.astro';
+import Hero from '../components/Hero.astro';
+import Cta from '../components/Cta.astro';
+
+// Every answer restates what the rest of this site already says. Edit the wording here, and keep it consistent with the core pages.
+const faqs: { q: string; a: string }[] = [
+  {
+    q: 'What does Valley Capital Partners invest in?',
+    a: 'Hospitality, multifamily, and retail real estate. We buy properties and the loans secured by them, and we continue to buy non-performing notes from banks, special servicers, and other lenders. The answers below describe our hotel loan purchases in the most detail, because that is the sector this site covers in depth.',
+  },
+  {
+    q: 'What do you buy in hospitality?',
+    a: 'Loans secured by hotels that have stopped performing or cannot be repaid at maturity. That includes past-due, non-accrual, matured, and classified loans, including loans in forbearance, foreclosure, receivership, or borrower bankruptcy. We buy whole loans and participation interests, and hotels a bank already owns. The collateral can be a limited-service, select-service, extended-stay, or full-service hotel, branded or independent.',
+  },
+  {
+    q: 'Do you buy hotels as well as loans?',
+    a: 'Yes. We buy the loan at any point before the lender takes title, and we buy the hotel through a receiver\'s sale, at foreclosure, or from a lender that has taken title.',
+  },
+  {
+    q: 'How does a loan sale work?',
+    a: 'We sign a confidentiality agreement, yours or ours, before any loan-level information is shared. You send a one-page summary, and we respond with an indicative price and the assumptions behind it, or tell you the loan is not for us. We then complete due diligence on the loan file, title, franchise documents, and operating results, and inspect the hotel. A loan sale agreement sets a fixed price and closing date. At closing, funds are wired, the note is endorsed, the mortgage is assigned, and the file is transferred.',
+  },
+  {
+    q: 'What do you need to give an indication of price?',
+    a: 'A one-page summary is enough to start: the unpaid principal balance and accrued interest, payment status and maturity date, the hotel\'s name, brand, location, and room count, the most recent appraisal if there is one, and whether the hotel is open and who is operating it. A full file is not needed yet.',
+  },
+  {
+    q: 'Will you contact the borrower or the brand?',
+    a: 'Not without the consent of the party that sent us the information. We do not contact borrowers, guarantors, brands, or hotel staff without it, and information is used only to evaluate the loan. If we do not proceed, we return or destroy the file on request.',
+  },
+  {
+    q: 'How are your acquisitions funded?',
+    a: 'By a private family office, whose principal has a founding background in online travel and hospitality, and by the firm\'s own committed capital. We do not rely on third-party financing to close, so there is no financing contingency. Proof of funds is provided with a bid, and we identify our capital source to sellers under a confidentiality agreement.',
+  },
+  {
+    q: 'Does the hotel stay open after a loan is sold?',
+    a: 'That is the aim. When we buy the loan, the lender is paid at closing and the hotel stays open. Where a receiver is in place, the receiver and manager remain in place under the existing order.',
+  },
+  {
+    q: 'What changes for a hotel owner when their loan is sold?',
+    a: 'The loan documents stay the same, so your obligations and rights are the ones already in the note, mortgage, and any guaranty. What changes is who makes the decisions. A buyer that acquired the loan at a different basis often has room to agree to terms the original lender could not. Owners should consult their own counsel before negotiating with a lender.',
+  },
+  {
+    q: 'How quickly will I hear back?',
+    a: 'If a loan is not for us, the seller hears that within days, with the reason. Otherwise we respond with an indicative price and the assumptions behind it, and we hold to the figure unless diligence turns up a reason to change it.',
+  },
+  {
+    q: 'Is a conversation confidential?',
+    a: 'Yes. The existence of a discussion is confidential, as is everything in the file. A conversation and an indicative price carry no obligation to sell.',
+  },
+  {
+    q: 'In what capacity does the firm act?',
+    a: 'We tell you which seat we are in and confirm it in writing before any engagement or agreement. We may act as a principal buyer of a loan or hotel, as a capital provider funding an owner\'s discounted payoff or recapitalization, or as an arranger who introduces another capital source for a fee disclosed in advance.',
+  },
+  {
+    q: 'Do you buy government-guaranteed hotel loans?',
+    a: 'We review them, and we work within the agency\'s consent requirements for a sale.',
+  },
+];
+
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'FAQPage',
+  mainEntity: faqs.map(({ q, a }) => ({ '@type': 'Question', name: q, acceptedAnswer: { '@type': 'Answer', text: a } })),
+};
+---
+<Base title="FAQ" description="Answers to common questions from banks, receivers, special servicers, and owners about selling or resolving a non-performing loan, most of them about hotel loans." jsonLd={jsonLd}>
+  <Hero eyebrow="FAQ" title="Questions we are asked about loan sales." lead="Short answers for banks, receivers, servicers, and owners, most of them about hotel loans. For anything specific, write to us.">
+    <a class="btn btn-light arrow" href="/contact/">Ask a question</a>
+  </Hero>
+  <main id="main">
+    <section class="section">
+      <div class="wrap">
+        <div class="acc faq">
+          {faqs.map(({ q, a }, i) => (
+            <details name="faq" open={i === 0}>
+              <summary><span class="n">{String(i + 1).padStart(2, '0')}</span><span class="t">{q}</span><span class="pm"></span></summary>
+              <div class="body"><p>{a}</p></div>
+            </details>
+          ))}
+        </div>
+        <p class="fine">General information only. Nothing here is legal, accounting, or regulatory advice, and nothing is a commitment to purchase any loan.</p>
+      </div>
+    </section>
+  </main>
+  <Cta title="Have a loan or a property you would like us to review?" text="Send a summary of the loan, the property, or both. We reply with an indication of interest or a clear decline." />
+</Base>

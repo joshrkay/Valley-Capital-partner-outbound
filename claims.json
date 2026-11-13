@@ -1,0 +1,104 @@
+{
+  "_note": "The only statements about the firm that an outbound message may make. The drafter writes {{claim:ID}} and the script inserts the text below word for word; the model never writes these itself. Each approved claim is a sentence that already appears on the site (`source`), and a test fails if the site's wording drifts from it. A claim about a sector the site does not cover is not approved. Counsel has not reviewed any of these: needsCounsel marks the ones that promise something.",
+  "claims": [
+    {
+      "id": "confidential-no-borrower-contact",
+      "text": "We do not contact borrowers, guarantors, brands, or hotel staff without the consent of the party that sent it.",
+      "source": "src/pages/contact.astro",
+      "approved": true,
+      "sectors": ["hospitality"],
+      "audiences": ["bank", "servicer", "fund", "counsel", "receiver", "broker"],
+      "needsCounsel": false
+    },
+    {
+      "id": "no-obligation",
+      "text": "A conversation and an indicative price carry no obligation to sell.",
+      "source": "src/pages/faq.astro",
+      "approved": true,
+      "sectors": ["hospitality", "multifamily", "retail"],
+      "audiences": ["bank", "servicer", "fund", "counsel", "receiver", "broker"],
+      "needsCounsel": false
+    },
+    {
+      "id": "one-page-summary",
+      "text": "A one-page summary is enough to find out.",
+      "source": "src/pages/banks/what-we-buy.astro",
+      "approved": true,
+      "sectors": ["hospitality"],
+      "audiences": ["bank"],
+      "needsCounsel": false
+    },
+    {
+      "id": "reply-or-decline",
+      "text": "We reply with an indicative price, or tell you plainly that the loan is not for us.",
+      "source": "src/pages/banks/what-we-buy.astro",
+      "approved": true,
+      "sectors": ["hospitality"],
+      "audiences": ["bank"],
+      "needsCounsel": false
+    },
+    {
+      "id": "no-financing-contingency",
+      "text": "We do not rely on third-party financing to close, so there is no financing contingency.",
+      "source": "src/pages/faq.astro",
+      "approved": true,
+      "sectors": ["hospitality", "multifamily", "retail"],
+      "audiences": ["bank", "servicer", "fund", "counsel", "receiver", "broker"],
+      "needsCounsel": true
+    },
+    {
+      "id": "proof-of-funds",
+      "text": "Proof of funds is provided with a bid",
+      "source": "src/pages/faq.astro",
+      "approved": true,
+      "sectors": ["hospitality", "multifamily", "retail"],
+      "audiences": ["servicer", "fund", "broker"],
+      "needsCounsel": true
+    },
+    {
+      "id": "principal-reply",
+      "text": "A principal will reply and arrange a time to talk.",
+      "source": "src/pages/contact.astro",
+      "approved": true,
+      "sectors": ["hospitality", "multifamily", "retail"],
+      "audiences": ["bank", "servicer", "fund", "counsel", "receiver", "broker"],
+      "needsCounsel": false
+    },
+    {
+      "id": "nda-first",
+      "text": "We sign a confidentiality agreement, yours or ours, before any loan-level information is shared.",
+      "source": "src/pages/faq.astro",
+      "approved": true,
+      "sectors": ["hospitality", "multifamily", "retail"],
+      "audiences": ["bank", "servicer", "fund", "counsel", "receiver", "broker"],
+      "needsCounsel": false
+    },
+    {
+      "id": "hold-to-figure",
+      "text": "We hold to the figure unless diligence turns up a reason to change it.",
+      "source": "src/pages/faq.astro",
+      "approved": true,
+      "sectors": ["hospitality", "multifamily", "retail"],
+      "audiences": ["bank", "servicer", "fund", "counsel", "receiver", "broker"],
+      "needsCounsel": true
+    },
+    {
+      "id": "principal-buyer",
+      "text": "We purchase the loan or the hotel for our own account and own it after closing.",
+      "source": "src/pages/firm.astro",
+      "approved": true,
+      "sectors": ["hospitality"],
+      "audiences": ["bank", "servicer", "fund", "counsel", "receiver", "broker"],
+      "needsCounsel": false
+    },
+    {
+      "id": "confidential-no-property-contact",
+      "text": "We do not contact borrowers, guarantors, or property staff without the consent of the party that sent it.",
+      "source": "",
+      "approved": false,
+      "sectors": ["multifamily", "retail"],
+      "audiences": ["bank", "servicer", "fund", "counsel", "receiver", "broker"],
+      "needsCounsel": true
+    }
+  ]
+}

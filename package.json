@@ -1,0 +1,20 @@
+{
+  "name": "valley-outbound",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Outbound agents for Valley Capital Partners: a guard, a deep-research briefer, and a drafter. Private. Nothing here can send a message.",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "outbound": "node cli.mjs",
+    "outbound:test": "node --test test/*.test.mjs",
+    "test": "node --test test/*.test.mjs",
+    "sync-site": "node scripts/sync-site.mjs",
+    "sync-site:check": "node scripts/sync-site.mjs --check"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.8.0"
+  }
+}

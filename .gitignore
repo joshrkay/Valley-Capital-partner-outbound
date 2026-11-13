@@ -1,0 +1,9 @@
+node_modules/
+.env
+.env.*
+*.local.json
+
+# Prospect data must never be committed. The code refuses a data directory inside this repo; this is the backstop.
+data/
+KILL
+.DS_Store

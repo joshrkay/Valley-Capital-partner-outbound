@@ -1,0 +1,66 @@
+{
+  "_note": "Per-audience word rules for outbound copy. The bank rules are NOT duplicated here: they are read from the website's scripts/terminology.json (the rules its `npm run check` already enforces on /banks/), via the copy in site-snapshot/, so there is one source of truth. Servicer rules follow docs/terminology.md ('note sale'; 'REO'). Counsel, receivers, funds and brokers have no rules yet because their vocabulary has not been researched (docs/research-agenda.md, D2); the linter warns instead of guessing.",
+  "bankRulesFrom": "scripts/terminology.json",
+  "audiences": {
+    "servicer": {
+      "avoid": [
+        { "pattern": "\\bloan sale\\b", "say": "note sale" },
+        { "pattern": "\\bOREO\\b", "say": "REO" }
+      ]
+    },
+    "fund": { "avoid": [] },
+    "counsel": { "avoid": [] },
+    "receiver": { "avoid": [] },
+    "broker": { "avoid": [] }
+  },
+  "banned": [
+    "pounce\\w*", "steal\\w*", "bargain\\w*", "cheap\\w*", "fire[- ]?sale", "desperate", "struggling", "in trouble",
+    "ASAP", "act now", "limited time", "don'?t miss", "once[- ]in[- ]a[- ]\\w+", "exclusive (?:offer|deal|opportunity)",
+    "flip(?:ping|ped|s)?", "get rid of", "dump(?:ing|ed)?", "bad debt", "toxic", "hard money", "cash investors", "network of (?:private )?(?:lenders|investors)",
+    "lucrative", "thrilled", "excited to", "delighted"
+  ],
+  "cliches": [
+    "hope this (?:email |message |note )?finds you", "just (?:following up|checking in|circling back|touching base)", "circling back", "touching base",
+    "bumping (?:this|my)", "per my last", "pick your brain", "reaching out (?:to you )?(?:today|because)", "i wanted to reach out"
+  ],
+  "brokerPhrases": [
+    "(?:a |our |my )?group of (?:private )?investors", "my investors", "our investors", "i represent (?:a )?(?:group of )?(?:buyers|investors|clients)",
+    "we represent (?:a )?(?:group of )?(?:buyers|investors|clients)", "on behalf of (?:a |our |my )?(?:clients?|buyers?|investors?)"
+  ],
+  "bluntAsks": [
+    "do you have any (?:notes|loans|assets|credits|properties)", "what (?:notes|loans|assets|credits|properties) do you have", "anything (?:you(?:'re| are) )?(?:looking to sell|for sale)",
+    "list of (?:all )?(?:your|the) (?:\\w+ )?(?:loans|notes|credits|assets)", "what(?:'s| is) on your desk", "(?:ahead of|before|by) quarter[- ]end", "off (?:your|the) books"
+  ],
+  "prefer": {
+    "bank": ["loan sale", "principal balance", "past due", "non-accrual", "risk rating", "problem loan", "special assets", "workout", "reserve", "charge-off", "OREO", "flag", "rooms"],
+    "servicer": ["note sale", "REO", "special servicer", "workout"]
+  },
+  "observational": [
+    "\\b(?:i|we)\\s+(?:read|saw|noticed|came across|watched|heard|followed|admired?|enjoyed)\\b",
+    "\\bcongrat\\w+",
+    "\\byour\\s+(?:recent|latest|post|article|interview|panel|talk|keynote|speech|comments?|remarks?|presentation|piece|op-?ed)\\b",
+    "\\bcaught your\\b", "\\b(?:been\\s+)?following your\\b", "\\bimpressed\\b", "\\blove (?:what|how|your)\\b"
+  ],
+  "claimPhrases": [
+    { "pattern": "proof of funds", "claim": "proof-of-funds" },
+    { "pattern": "certainty of execution", "claim": "" },
+    { "pattern": "hard deposit", "claim": "" },
+    { "pattern": "guarantee[ds]?", "claim": "" },
+    { "pattern": "track record", "claim": "" },
+    { "pattern": "we(?:'ve| have) (?:closed|completed|bought|acquired|purchased)", "claim": "" },
+    { "pattern": "financing contingency", "claim": "no-financing-contingency" },
+    { "pattern": "all[- ]cash", "claim": "" },
+    { "pattern": "(?:close|closing) in \\d+ days", "claim": "" },
+    { "pattern": "fast(?:er)? clos\\w+", "claim": "" },
+    { "pattern": "regulatory approval", "claim": "" },
+    { "pattern": "no obligation", "claim": "no-obligation" },
+    { "pattern": "balance[- ]sheet (?:buyer|capital|purchaser)", "claim": "" },
+    { "pattern": "own balance sheet", "claim": "" },
+    { "pattern": "as[- ]is,? where[- ]is", "claim": "" },
+    { "pattern": "without (?:any )?(?:reps|representations)", "claim": "" },
+    { "pattern": "release of (?:all )?lender[- ]liability", "claim": "" },
+    { "pattern": "cents on the dollar", "claim": "" },
+    { "pattern": "of UPB", "claim": "" },
+    { "pattern": "(?:typically|usually|generally) (?:clear|buy|pay|bid)", "claim": "" }
+  ]
+}

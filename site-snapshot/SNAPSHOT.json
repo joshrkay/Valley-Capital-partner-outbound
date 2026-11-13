@@ -1,0 +1,14 @@
+{
+  "source": "/home/user/Valley-Capital-partner",
+  "commit": "8865c883bf9b4feed1ab2a1b075255f1c4170c9a",
+  "fetchedAt": "2026-11-13T16:16:40.894Z",
+  "files": {
+    "desk/lint.json": "bc474b3f835382679c6ac21efb8afa39dec4010eb1b98735bf4e29707762cb0c",
+    "docs/terminology.md": "a483a0ded1706b2c580365ad8d71c3565160d704ae436b9f26dceb46ef363e21",
+    "scripts/terminology.json": "b99be85e6dc720ff09f635746a6299b51d5be83312294c895cf85fec531f774f",
+    "src/pages/banks/what-we-buy.astro": "ec0cd66a53ba81d0fa0dde56946fd77669d4ab07cb09115304ba3410eaa2aa85",
+    "src/pages/contact.astro": "b7fd69316d875a19cfa2b144b37ebb1cd9a4ee8d8b155dac8f764353d0f91731",
+    "src/pages/faq.astro": "c8df3895a5aac3c20c08937afbc8c1bbaa35a7bb8ada08f7b0654167cde8bf9a",
+    "src/pages/firm.astro": "fdc9bdf78fbf9ecd498fcea27a18a7cc051826f0dad5ad723ec6f4dcea60bee2"
+  }
+}

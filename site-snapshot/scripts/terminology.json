@@ -1,0 +1,43 @@
+{
+  "_about": "Machine-checkable terminology rules; the human version is docs/terminology.md. Each rule applies to pages whose address starts with 'scope'. 'avoid' entries are regular expressions, matched case-insensitively against the page's main text. A match fails `npm run check`.",
+  "rules": [
+    {
+      "scope": "/banks/",
+      "audience": "community and regional banks",
+      "avoid": [
+        {
+          "pattern": "(?<!\\()note sale",
+          "say": "loan sale"
+        },
+        {
+          "pattern": "sell(ing)? the note\\b",
+          "say": "sell the loan"
+        },
+        {
+          "pattern": "\\btroubled\\b",
+          "say": "problem loan"
+        },
+        {
+          "pattern": "\\bdistressed\\b",
+          "say": "problem loan"
+        },
+        {
+          "pattern": "special-assets",
+          "say": "special assets"
+        },
+        {
+          "pattern": "\\bnon accrual\\b",
+          "say": "non-accrual"
+        },
+        {
+          "pattern": "\\bdelinquen",
+          "say": "past due"
+        },
+        {
+          "pattern": "\\bnonaccrual\\b",
+          "say": "non-accrual (hyphenated)"
+        }
+      ]
+    }
+  ]
+}
