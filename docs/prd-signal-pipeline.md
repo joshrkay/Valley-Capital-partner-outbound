@@ -244,6 +244,7 @@ Every adapter (E3–E5) is built on this shared framework.
 **E2-S2. Field check.** *As an operator, I want a run to fail loudly when a requested field doesn't come back so that a renamed or misspelled field can't silently erase a signal.* P0, R1.
 - [ ] FDIC drops unknown field names silently, and returns a missing value as an explicit `null` with the key still present. Both were verified live on November 13, 2026. So: **every returned row must contain every requested field as a key.** Given a key is absent from any row, then the run fails, names the field and how many rows lacked it, and writes nothing.
 - [ ] A key that is present with a `null` value is allowed and counted per field.
+- [ ] One verified exception, listed in code (`OPTIONAL_KEYS`): `/institutions` **omits** `WEBADDR` for a bank with no website instead of sending null. On November 13, 2026 it did so for 1 of 268 banks. An absent optional key is stored as null and noted in the run log. If it is absent from every row, the run still fails. No other field is optional.
 - [ ] Tests: a fake response with one row missing one key fails the run; nulls pass and are counted.
 
 **E2-S3. Sources on every record.** *As a principal, I want every stored value to say where it came from so that I can check any number I'm shown.* P0, R1.
@@ -267,9 +268,10 @@ Every adapter (E3–E5) is built on this shared framework.
 **E3-S1. The bank list for our metros.** *As a principal, I want the list of banks that actually operate in our six metros so that we look at the lenders there, not just banks headquartered in five states.* P0, R1.
 - [ ] The list = active institutions with at least one branch in a metro, from `/locations` with `filters=CBSA_NO:(12420 OR 19740 OR 31080 OR 38060 OR 29820 OR 41740)`. A principal can add headquarters-state banks from `/institutions` with `STALP:("TX" OR "CO" OR "CA" OR "AZ" OR "NV") AND ACTIVE:1`.
 - [ ] A sanity check, not a test fixture: on November 13, 2026 the branch query returned 4,413 branches of 268 distinct banks, and the headquarters query returned 549 banks.
-- [ ] Each bank's headquarters state comes from its `/institutions` record, never from a branch row. In live data, a branch row's `STALP` looked like the branch's state despite the definition **[verify]**.
+- [ ] Each bank's headquarters state comes from its `/institutions` record, never from a branch row. Verified live: a branch row's `STALP` is the **branch's** state despite FDIC's definition. For example, a national bank headquartered in SD shows CO on its Denver branches.
 - [ ] For each bank, record branches per metro and, from the latest Summary of Deposits (taken each June 30), deposits per metro and the share of the bank's deposits in the six metros.
 - [ ] Given a bank has closed, merged or failed since the last run (`ACTIVE`, `/history`, `/failures`), then it is flagged rather than silently dropped, and a failure sets its risk screen to "do not approach".
+- [ ] Only `/failures` records with `RESTYPE: "FAILURE"` mark a bank as failed. The endpoint also returns open-bank **assistance** (`RESTYPE: "ASSISTANCE"`: 593 records, including two of today's largest banks in 2008–2009), which is kept as `assistanceOn`, for context only. A first live run that counted assistance as failure wrongly flagged three open banks.
 
 **E3-S2. Quarterly financials.** *As a principal, I want at least eight quarters of commercial real estate credit data for every bank on the list so that a trend, not one quarter, drives the score.* P0, R1.
 - [ ] For each bank, pull the Appendix A fields for the last 8 published quarters. Every run re-pulls all 8, because Call Reports get amended.
@@ -584,7 +586,11 @@ Base `https://api.fdic.gov/banks`. Titles are FDIC's own, from `risview_properti
 
 **Branches (`/locations`):** `CERT`, `CBSA_NO`, `CBSA`, `COUNTY`, `STCNTY` (state + county FIPS), `MAINOFF` (main office flag).
 
-**Summary of Deposits (`/sod`):** `CERT`, `YEAR`, `DEPSUMBR` (domestic deposits, branch), `MSABR`, `CNTYNAMB`, `STALPBR`.
+**Summary of Deposits (`/sod`):** `CERT`, `YEAR`, `DEPSUMBR` (domestic deposits, branch), `DEPSUM` (the bank's total deposits, repeated on each row; the base for metro share), `MSABR`, `CNTYNAMB`, `STCNTYBR`, `STALPBR`. `STCNTYBR` and `MSABR` arrive as **numbers**, so Denver's `08031` comes as `8031`. The county join zero-pads them to five digits.
+
+**Failures (`/failures`):** `CERT`, `NAME`, `FAILDATE`, `RESTYPE`. Only `FAILURE` counts; `ASSISTANCE` does not.
+
+**First live run (November 13, 2026):** 268 banks; 8 quarters, September 30, 2024 to June 30, 2026; SOD year 2026; 11,160 rows read; about 6 seconds; no missing fields; 24 fields with explicit nulls. A second run found no new quarter and 0 changes. 16 banks have branches in the metros but no SOD rows there.
 
 **Financials (`/financials`):**
 
