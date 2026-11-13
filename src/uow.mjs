@@ -8,16 +8,17 @@ import { randomBytes } from 'node:crypto';
 import { mount, writeJson, writeText, appendJsonl } from './store.mjs';
 
 // What each kind of action reads and writes. A prefix ending in "/" covers a folder; anything else is one exact path; "" is everything.
+// audit.jsonl is never listed: the engine only appends to it, and an append needs no load, so no action downloads the whole audit log.
 const GUARD = ['senders.json', 'suppression.json', 'touches.jsonl', 'KILL'];
 export const LOADS = Object.freeze({
   guard: GUARD,
-  candidates: ['candidates/', 'accounts/', 'suppression.json', 'audit.jsonl'],
-  account: ['accounts/', 'audit.jsonl'],
-  pilot: ['pilot/', 'research/', 'audit.jsonl'],
-  research: ['accounts/', 'research/', 'facts/', 'briefs/', 'pilot/', 'audit.jsonl'],
-  draft: [...GUARD, 'accounts/', 'research/', 'facts/', 'drafts/', 'audit.jsonl'],
-  sources: ['sources/', 'audit.jsonl'],
-  score: ['sources/', 'candidates/', 'audit.jsonl'],
+  candidates: ['candidates/', 'accounts/', 'suppression.json'],
+  account: ['accounts/'],
+  pilot: ['pilot/', 'research/'],
+  research: ['accounts/', 'research/', 'facts/', 'briefs/', 'pilot/'],
+  draft: [...GUARD, 'accounts/', 'research/', 'facts/', 'drafts/'],
+  sources: ['sources/'],
+  score: ['sources/', 'candidates/'],
 });
 
 const covers = (prefix, rel) => prefix === '' || rel === prefix || (prefix.endsWith('/') && rel.startsWith(prefix)) || rel.startsWith(`${prefix}/`);
