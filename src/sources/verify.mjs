@@ -4,10 +4,12 @@
 import { join } from 'node:path';
 import { readJson, listFiles } from '../store.mjs';
 import { getJson, getText, pacer, realSleep } from './http.mjs';
-import { FDIC_BASE, FDIC_FIELDS, orFilter, fdicPaths } from './fdic.mjs';
+import { FDIC_BASE, FDIC_FIELDS, orFilter, fdicPaths, FAILURE_CODES, STRUCTURE_CODES, STRUCTURE_LOOKBACK_MONTHS, eventOf, isoDate, monthsBefore } from './fdic.mjs';
 import { parseCmbsAssets, edgarPaths, SEC } from './edgar.mjs';
 
 const check = (id, ok, summary, detail) => ({ id, ok: !!ok, summary, ...(detail ? { detail } : {}) });
+// A warning flags a gap in the source itself, which the adapter already works around. It is shown, but it does not fail the run.
+const warning = (id, flagged, summary, detail) => ({ ...check(id, true, summary, detail), ...(flagged ? { warn: true } : {}) });
 const pick = (arr, n, seed = 1) => {   // a small deterministic shuffle, so a re-run checks the same records unless the seed changes
   const a = [...arr]; let x = seed;
   for (let i = a.length - 1; i > 0; i--) { x = (x * 1103515245 + 12345) % 2147483648; const j = x % (i + 1); [a[i], a[j]] = [a[j], a[i]]; }
@@ -46,7 +48,7 @@ export async function verifyFdic({ dir, metros, fetchImpl = globalThis.fetch, sa
   // 3. Values: every stored field for the latest quarter equals what FDIC serves now. 4. Ratios: our arithmetic equals FDIC's own.
   const certs = listFiles(join(dir, 'sources', 'fdic', 'financials'), '.json').map((f) => f.replace(/\.json$/, ''));
   const stored = new Map(certs.map((c) => [c, readJson(join(dir, 'sources', 'fdic', 'financials', `${c}.json`))?.quarters?.[state.latestRepdte]]).filter(([, q]) => q));
-  const fields = [...new Set(['CERT', ...FDIC_FIELDS.financials, 'NCRECONR', 'NCLNLSR', 'LNLSGR'])];
+  const fields = [...new Set(['CERT', ...FDIC_FIELDS.financials, 'NCRECONR', 'NCLNLSR', 'LNLSGR', 'LNCDT1R'])];
   const fresh = new Map();
   const list = [...stored.keys()];
   for (let i = 0; i < list.length; i += 50) for (const r of await all('financials', `${orFilter('CERT', list.slice(i, i + 50))} AND REPDTE:${state.latestRepdte}`, fields)) fresh.set(String(r.CERT), r);
@@ -66,8 +68,63 @@ export async function verifyFdic({ dir, metros, fetchImpl = globalThis.fetch, sa
     const f = fresh.get(c); if (!f) continue;
     if (q.LNRECONS && f.NCRECONR !== null && f.NCRECONR !== undefined) { ratios++; const ours = (q.NCRECONS ?? 0) / q.LNRECONS * 100; if (Math.abs(ours - f.NCRECONR) > 0.01) ratioDiffs.push({ cert: c, ratio: 'construction noncurrent', ours: Number(ours.toFixed(4)), fdic: f.NCRECONR }); }
     if (f.LNLSGR && f.NCLNLSR !== null && f.NCLNLSR !== undefined) { ratios++; const ours = (q.NCLNLS ?? 0) / f.LNLSGR * 100; if (Math.abs(ours - f.NCLNLSR) > 0.01) ratioDiffs.push({ cert: c, ratio: 'total noncurrent', ours: Number(ours.toFixed(4)), fdic: f.NCLNLSR }); }
+    // The concentration screen's tier 1 field: FDIC's own construction-to-tier-1 ratio is LNRECONS / RBCT1J (checked live on 267 banks).
+    if (q.RBCT1J > 0 && f.LNCDT1R !== null && f.LNCDT1R !== undefined) { ratios++; const ours = (q.LNRECONS ?? 0) / q.RBCT1J * 100; if (Math.abs(ours - f.LNCDT1R) > 0.01) ratioDiffs.push({ cert: c, ratio: 'construction to tier 1 capital', ours: Number(ours.toFixed(4)), fdic: f.LNCDT1R }); }
   }
-  checks.push(check('fdic.ratios', !ratioDiffs.length && ratios > 0, ratioDiffs.length ? `${ratioDiffs.length} of ${ratios} ratios computed from our stored values disagree with FDIC's own (by more than 0.01 points).` : `All ${ratios} ratios computed from our stored values agree with FDIC's own published ratios (construction noncurrent, NCRECONR; total noncurrent, NCLNLSR).`, ratioDiffs.length ? { first: ratioDiffs.slice(0, 10) } : undefined));
+  checks.push(check('fdic.ratios', !ratioDiffs.length && ratios > 0, ratioDiffs.length ? `${ratioDiffs.length} of ${ratios} ratios computed from our stored values disagree with FDIC's own (by more than 0.01 points).` : `All ${ratios} ratios computed from our stored values agree with FDIC's own published ratios (construction noncurrent, NCRECONR; total noncurrent, NCLNLSR; construction to tier 1 capital, LNCDT1R).`, ratioDiffs.length ? { first: ratioDiffs.slice(0, 10) } : undefined));
+
+  // 5. The concentration screen (PRD E3-S7). A CBLR bank must send RBC as 0 or null, and any other bank a positive RBC: that is what the
+  // choice of denominator rests on. The 12-quarters-back CRE we store for the growth test must equal FDIC's.
+  let cblr = 0, standard = 0; const denomOdd = [];
+  for (const [c, q] of stored) {
+    const flag = q.CBLRIND === null || q.CBLRIND === undefined ? null : Number(q.CBLRIND);
+    if (flag === 1) { cblr++; if (Number(q.RBC) > 0) denomOdd.push({ cert: c, CBLRIND: 1, RBC: q.RBC }); }
+    else if (flag === 0) { standard++; if (!(Number(q.RBC) > 0)) denomOdd.push({ cert: c, CBLRIND: 0, RBC: q.RBC ?? null }); }
+  }
+  const baseRep = state.growthBaseRepdte;
+  const bases = new Map(baseRep ? certs.map((c) => [c, readJson(join(dir, 'sources', 'fdic', 'financials', `${c}.json`))?.growthBase?.[baseRep]]).filter(([, b]) => b) : []);
+  const baseDiffs = []; let baseCompared = 0;
+  const bl = [...bases.keys()];
+  for (let i = 0; i < bl.length; i += 50) {
+    const live = new Map((await all('financials', `${orFilter('CERT', bl.slice(i, i + 50))} AND REPDTE:${baseRep}`, FDIC_FIELDS.growthBase)).map((r) => [String(r.CERT), r]));
+    for (const c of bl.slice(i, i + 50)) for (const k of FDIC_FIELDS.growthBase.filter((x) => x !== 'CERT' && x !== 'REPDTE')) { baseCompared++; if ((bases.get(c)[k] ?? null) !== (live.get(c)?.[k] ?? null)) baseDiffs.push({ cert: c, field: k, ours: bases.get(c)[k] ?? null, fdic: live.get(c)?.[k] ?? null }); }
+  }
+  checks.push(check('fdic.concentration', !denomOdd.length && !baseDiffs.length && bases.size > 0,
+    `${standard} banks divide by total risk-based capital (RBC) and ${cblr} CBLR banks by tier 1 capital plus the allowance${denomOdd.length ? `; ${denomOdd.length} report RBC against what their CBLR flag says, so their denominator is in doubt` : '; every CBLR flag matches how RBC is reported'}. ${bases.size ? `${baseCompared - baseDiffs.length} of ${baseCompared} stored values for the growth base quarter, ${baseRep}, equal FDIC's.` : 'No growth base quarter is stored: run outbound sources run fdic.'}`,
+    denomOdd.length || baseDiffs.length ? { denominator: denomOdd.slice(0, 10), growthBase: baseDiffs.slice(0, 10) } : undefined));
+
+  // 6. Failures (PRD E3-S5). Every failure any of FDIC's three sources shows since the lookback date is in our record of failed banks.
+  // A failure that /institutions or /history shows and /failures does not means FDIC's /failures index is behind: a warning, because
+  // the adapter already takes failure from all three.
+  const since = state.structureSince ?? monthsBefore(new Date().toISOString().slice(0, 10), STRUCTURE_LOOKBACK_MONTHS);
+  const failedStored = readJson(p.failed, null);
+  const failuresLive = await get('failures', { filters: `FAILDATE:[${since} TO *]`, fields: 'CERT,FAILDATE,RESTYPE', limit: 10000 });
+  const fromFailures = new Map((failuresLive.data ?? []).map((d) => d.data).filter((f) => String(f.RESTYPE ?? '').toUpperCase() === 'FAILURE').map((f) => [String(f.CERT), isoDate(f.FAILDATE)]));
+  const fromInst = new Map((await all('institutions', `ACTIVE:0 AND ${orFilter('CHANGEC1', FAILURE_CODES)} AND ENDEFYMD:[${since} TO *]`, ['CERT', 'ENDEFYMD', 'CHANGEC1'])).map((r) => [String(r.CERT), isoDate(r.ENDEFYMD)]));
+  const histRows = await all('history', `${orFilter('CHANGECODE', Object.keys(STRUCTURE_CODES))} AND EFFDATE:[${since} TO *]`, FDIC_FIELDS.history);
+  const liveEvents = histRows.map(eventOf).filter((e) => e.targetCert && e.effective);
+  const fromHist = new Map(liveEvents.filter((e) => e.kind === 'failure').map((e) => [e.targetCert, e.effective]));
+  const allFailed = [...new Set([...fromFailures.keys(), ...fromInst.keys(), ...fromHist.keys()])].sort((a, b) => a - b);
+  const notOurs = failedStored ? allFailed.filter((c) => !failedStored[c]) : allFailed;
+  checks.push(check('fdic.failures', !!failedStored && !notOurs.length,
+    !failedStored ? 'No record of failed banks yet (sources/fdic/failed.json). Run: outbound sources run fdic' : notOurs.length ? `${notOurs.length} of ${allFailed.length} failures FDIC shows since ${since} are not in our record of failed banks. Run: outbound sources run fdic` : `All ${allFailed.length} failures FDIC shows since ${since} (/failures, /institutions and /history together) are in our record; ${Object.values(failedStored).filter((f) => f.inMetros).length} had a presence in the six metros.`,
+    notOurs.length ? { missing: notOurs.slice(0, 20) } : undefined));
+  const behind = [...new Set([...fromInst.keys(), ...fromHist.keys()])].filter((c) => !fromFailures.has(c)).sort((a, b) => a - b);
+  const builtAt = failuresLive.meta?.index?.createTimestamp ?? null;
+  checks.push(warning('fdic.failures-index', behind.length,
+    behind.length ? `${behind.length} failure(s) in /institutions or /history ${behind.length === 1 ? 'is' : 'are'} missing from /failures: FDIC's /failures index is behind${builtAt ? ` (built ${builtAt.slice(0, 10)})` : ''}. Our record takes failure from all three sources.` : `FDIC's /failures index${builtAt ? ` (built ${builtAt.slice(0, 10)})` : ''} lists every failure that /institutions and /history show since ${since}.`,
+    behind.length ? { missingFromFailures: behind.map((c) => ({ cert: c, institutions: fromInst.get(c) ?? null, history: fromHist.get(c) ?? null })).slice(0, 20) } : undefined));
+
+  // 7. Structure events (PRD E3-S6). Every deal since the lookback date with a bank on our list on either side is stored, with the same
+  // acquirer, target and date.
+  const eventsStored = readJson(p.events, null);
+  const onList = new Set(Object.entries(institutions).filter(([, i]) => i.inUniverse).map(([c]) => c));
+  const knownCerts = new Set(Object.keys(institutions));
+  const ourDeals = liveEvents.filter((e) => (e.acquirerCert && onList.has(e.acquirerCert)) || knownCerts.has(e.targetCert));
+  const eventDiffs = ourDeals.filter((e) => { const s = eventsStored?.[e.transnum]; return !s || s.acquirerCert !== e.acquirerCert || s.targetCert !== e.targetCert || s.effective !== e.effective; });
+  checks.push(check('fdic.events', !!eventsStored && !eventDiffs.length,
+    !eventsStored ? 'No structure events stored yet (sources/fdic/events.json). Run: outbound sources run fdic' : eventDiffs.length ? `${eventDiffs.length} of ${ourDeals.length} deals FDIC shows since ${since} involving a bank on our list are missing from our events, or differ. Run: outbound sources run fdic` : `All ${ourDeals.length} deals FDIC shows since ${since} involving a bank on our list are stored with the same acquirer, target and date (${Object.keys(eventsStored).length} events kept in all).`,
+    eventDiffs.length ? { first: eventDiffs.slice(0, 10).map((e) => ({ transnum: e.transnum, acquirerCert: e.acquirerCert, targetCert: e.targetCert, effective: e.effective, ours: eventsStored?.[e.transnum] ? { acquirerCert: eventsStored[e.transnum].acquirerCert, targetCert: eventsStored[e.transnum].targetCert, effective: eventsStored[e.transnum].effective } : null })) } : undefined));
 
   const sampleRows = pick([...stored.keys()], sample, seed).map((c) => {
     const q = stored.get(c);

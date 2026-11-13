@@ -43,19 +43,25 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound suppress list
 
   Signals (PRD E2, E3): public data only. Nothing here contacts anyone.
-  outbound sources run fdic [--include-hq]       bank list for the six metros, deposit footprint, 8 quarters of CRE credit data (free, no key)
+  outbound sources run fdic [--include-hq]       bank list for the six metros, deposit footprint, 8 quarters of CRE credit data (free, no key),
+                                                  plus failures (from /failures, /institutions and /history), mergers and acquisitions,
+                                                  and the concentration screen's capital fields. FDIC's failed-bank list CSV is read too,
+                                                  if a person saved it as sources/fdic/failed-banks.csv in the data folder (optional)
   outbound sources run edgar                      CMBS loans in the six metros and buy-box sectors, from each trust's monthly SEC filing,
                                                   with workout codes and the special servicer (needs config.sec.userAgent filled in)
   outbound sources status                         the last run of each source, and the latest FDIC quarter seen
   outbound sources verify [fdic|edgar] [--sample N]   check the stored data against the live sources (read-only): fresh, complete,
-                                                  values and ratios equal FDIC's own, the CMBS parser equal to a plain count; plus a
-                                                  short list of records with their public URL to compare by eye. Exits 1 on any failure.
+                                                  values and ratios equal FDIC's own, every failure and deal stored, the CMBS parser equal
+                                                  to a plain count; plus a short list of records with their public URL to compare by eye.
+                                                  Exits 1 on any failure. WARN flags a gap in FDIC's own data (a stale /failures index).
 
   Candidates (PRD E6): which banks, why now, and what paper they likely hold. A principal decides; nothing is contacted.
   outbound score run [--draft-buybox]             score every bank on distress, fit and timing (refuses while buybox.json has [CONFIRM]
                                                   placeholders; --draft-buybox runs anyway and labels the list PROVISIONAL)
-  outbound candidates list [--tier A|B] [--all]   the list: tier, score by axis, metros, and the "why now" card
-  outbound candidates show --key fdic:CERT        one bank: paper profile, score components with their sources, signals
+  outbound candidates list [--tier A|B] [--all]   the list: tier, score by axis, metros, and the "why now" card; then failed banks
+                                                  in the metros, whose loans the FDIC sells (with the FDIC loan-sale page)
+  outbound candidates show --key fdic:CERT        one bank: paper profile (with the concentration ratios and their denominator),
+                                                  score components with their sources, signals (state or event)
   outbound candidates promote --key K --by NAME   create the account with the pipeline's research attached; then research it
   outbound candidates dismiss --key K --by NAME --reason TEXT      it returns only if a new signal fires
   outbound candidates snooze  --key K --by NAME --until YYYY-MM-DD
@@ -101,7 +107,7 @@ async function runVerify(dir, which, rules, flags) {
   const lines = [];
   for (const r of reports) {
     lines.push(`== ${r.source.toUpperCase()}`);
-    for (const c of r.checks) lines.push(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}: ${c.summary}`);
+    for (const c of r.checks) lines.push(`${c.ok ? (c.warn ? 'WARN' : 'PASS') : 'FAIL'}  ${c.id}: ${c.summary}`);
     if (r.sample.length) { lines.push('', `Compare by eye (${r.sample.length} records, each with the public URL to check against):`); for (const s of r.sample) lines.push(`- ${JSON.stringify(s)}`); }
     lines.push('');
   }
@@ -250,7 +256,10 @@ async function main() {
       const tiers = flags.tier && flags.tier !== true ? [String(flags.tier).toUpperCase()] : ['A', 'B'];
       const l = listCandidates({ dir, suppression: sup, tiers, all: !!flags.all });
       const row = (i) => `${i.tier ?? '-'}  ${String(i.score).padStart(6)}  d${i.axes.distress} f${i.axes.fit} t${i.axes.timing}  ${i.key.padEnd(11)} ${i.name} (${i.metroLabels?.join(', ') ?? ''})${i.status !== 'new' ? ` [${i.status}]` : ''}\n     ${i.card?.text ?? (i.filtersFailed?.length ? `filtered: ${i.filtersFailed.join('; ')}` : '')}`;
-      return out(`${l.provisional ? 'PROVISIONAL: the buy box still has placeholders.\n' : ''}Data as of ${l.latestRepdte} (run ${l.runId}). ${l.items.length} candidate(s). Columns: tier, score, distress/fit/timing, key, bank.\n\n${l.items.map(row).join('\n\n')}`);
+      // Failed banks are never candidates: the bank is gone and the FDIC sells its loans. They are listed so a principal sees them.
+      const failed = (f) => `-  ${f.key.padEnd(11)} ${f.name} failed on ${f.failedOn} (${f.metros.map((m) => m.label).join(', ')}). Sources agreeing: ${f.agree.join(', ')}${f.missingFrom.length ? `; not yet in: ${f.missingFrom.join(', ')}` : ''}.`;
+      const failedBlock = l.failedBanks.length ? `\n\nFailed banks with a presence in the metros. The FDIC is the seller of their loans: ${l.failedBanks[0].loanSales}\n${l.failedBanks.map(failed).join('\n')}` : '';
+      return out(`${l.provisional ? 'PROVISIONAL: the buy box still has placeholders.\n' : ''}Data as of ${l.latestRepdte} (run ${l.runId}). ${l.items.length} candidate(s). Columns: tier, score, distress/fit/timing, key, bank.\n\n${l.items.map(row).join('\n\n')}${failedBlock}`);
     }
     if (sub === 'show') return out(getCandidate({ dir, key: need(flags, 'key') }));
     if (sub === 'promote') {

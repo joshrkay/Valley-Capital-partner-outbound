@@ -194,3 +194,85 @@ test('scoreBank never names a model and does not read the clock', () => {
   const args = { cert: '1', institution: { NAME: 'Alpha Example Bank', ACTIVE: 1, status: 'active' }, footprint: { branchesByMetro: { 38060: 1 } }, financials: { CERT: '1', quarters: quarters(rising) }, scoring: scoring(), buybox: filledBuybox(), metros, latestRepdte: '20260630' };
   assert.deepEqual(scoreBank(args), scoreBank(structuredClone(args)));
 });
+
+// ---- Signal kinds, the concentration screen and structure events (PRD E3-S5 to S7) -----------------------------------------------
+test('every signal type in the shipped config declares its kind, and the kind must match how it is computed', () => {
+  const s = scoring();
+  for (const r of s.signals) assert.equal(r.kind, 'state', r.id);
+  assert.deepEqual(s.concentration.signals.map((r) => [r.id, r.kind]), [['concentration-construction', 'state'], ['concentration-cre', 'state']]);
+  assert.deepEqual(s.structureEvents.signals.map((r) => [r.id, r.kind, r.windowQuarters]), [['acquired-metro-bank', 'event', 4]]);
+  assert.match(s.structureEvents._note, /PLACEHOLDER/);
+  assert.match(s.concentration._note, /UNCONFIRMED/);
+  const noKind = scoring(); delete noKind.signals[0].kind;
+  assert.match(validateScoring(noKind).errors.join(), /cre-noncurrent-rising: kind must be "state" \(got none\)/);
+  const wrong = scoring(); wrong.concentration.signals[0].kind = 'event';
+  assert.match(validateScoring(wrong).errors.join(), /concentration-construction: kind must be "state"/);
+  const asState = scoring(); asState.structureEvents.signals[0].kind = 'state';
+  assert.match(validateScoring(asState).errors.join(), /acquired-metro-bank: kind must be "event"/);
+  const dup = scoring(); dup.concentration.signals[0].id = 'cre-noncurrent-rising';
+  assert.match(validateScoring(dup).errors.join(), /duplicated/);
+  const bad = scoring(); bad.structureEvents.signals[0].windowQuarters = 0; bad.structureEvents.signals[0].kinds = ['takeover']; bad.concentration.signals[1].growthThreshold = undefined;
+  assert.equal(validateScoring(bad).errors.length, 3);
+});
+
+// Capital and CRE for the screen. Q() gives construction 100,000, multifamily 300,000, other nonfarm nonresidential 400,000.
+const capital = (over = {}) => ({ RBC: 250000, RBCT1J: 230000, LNATRES: 20000, CBLRIND: 0, LNCOMRE: 50000, ...over });
+const withBase = (qs, base = { LNRECONS: 60000, LNREMULT: 200000, LNRENROT: 250000, LNCOMRE: 20000 }) => ({ CERT: '1', quarters: qs, growthBase: { 20230630: { REPDTE: '20230630', ...base, _source: src('20230630') } } });
+
+test('the paper profile shows the screen\'s ratios, each with its fields, dates and the denominator it used', () => {
+  const fin = withBase(quarters(() => capital()));
+  const p = buildProfile({ financials: fin, footprint: { branchesByMetro: { 38060: 1 } }, institution: { via: { branch: true } }, buybox: filledBuybox(), metros, scoring: scoring() });
+  const c = p.concentration;
+  assert.equal(c.period, '20260630');
+  assert.match(c.note, /unconfirmed/);
+  assert.deepEqual([c.denominator.basis, c.denominator.label, c.denominator.value], ['totalRiskBasedCapital', 'total risk-based capital', 250000]);
+  assert.equal(c.constructionToCapital.value, 0.4);
+  assert.equal(c.constructionToCapital.denominator, 'total risk-based capital');
+  assert.equal(c.creToCapital.value, 850000 / 250000);
+  assert.equal(c.creToCapital.denominator, 'total risk-based capital');
+  assert.ok(Math.abs(c.creGrowth36m.value - (850000 - 530000) / 530000) < 1e-12);
+  assert.deepEqual([c.creGrowth36m.from.repdte, c.creGrowth36m.to.repdte], ['20230630', '20260630']);
+  for (const x of [...c.denominator.inputs, ...c.constructionToCapital.inputs, ...c.creToCapital.inputs, ...c.creGrowth36m.from.inputs]) assert.ok(x.field && /^\d{8}$/.test(x.repdte) && typeof x.value === 'number', JSON.stringify(x));
+  assert.deepEqual(c.screen, { construction: { threshold: 1, meets: false }, cre: { threshold: 3, growthThreshold: 0.5, meets: true } });
+  const cblr = buildProfile({ financials: withBase(quarters(() => capital({ CBLRIND: 1, RBC: 0 }))), footprint: {}, buybox: filledBuybox(), metros, scoring: scoring() }).concentration;
+  assert.equal(cblr.denominator.basis, 'tier1PlusAllowance');
+  assert.match(cblr.constructionToCapital.denominator, /^tier 1 capital plus the allowance for credit losses/);
+  assert.equal(cblr.constructionToCapital.value, 100000 / 250000);
+});
+
+test('end to end: an acquisition is an EVENT signal kept for its window; the screen is a STATE signal recomputed each quarter', () => {
+  const dir = world([{ cert: '1', name: 'Alpha Example Bank', quarters: withBase(quarters(() => capital({ LNRECONS: 300000 }))).quarters }]);
+  put(dir, 'sources/fdic/financials/1.json', withBase(quarters(() => capital({ LNRECONS: 300000 }))));
+  put(dir, 'sources/fdic/events.json', { 2026000777: { transnum: '2026000777', code: 223, kind: 'merger', label: 'Merger - Without Assistance', effective: '2026-06-01', acquirerCert: '1', targetCert: '777', acquirerOnOurList: true, targetOnOurList: false, targetInMetros: true, targetMetros: [{ cbsa: '38060', branches: 4, basis: ['branches in the FDIC structure event'] }], targetLastCre: { repdte: '20260331', value: 64000, fields: {} }, _source: src('2026-06-01') } });
+  const it = score(dir).items[0];
+  const byType = Object.fromEntries(it.signals.map((s) => [s.type, s]));
+  assert.equal(byType['acquired-metro-bank'].kind, 'event');
+  assert.deepEqual(byType['acquired-metro-bank'].metros, [{ cbsa: '38060', branches: 4, basis: ['branches in the FDIC structure event'], label: 'Phoenix' }]);
+  assert.equal(byType['concentration-construction'].kind, 'state');
+  assert.equal(byType['concentration-construction'].value, 300000 / 250000);
+  // The card states both from its templates.
+  const text = it.card.text;
+  assert.match(text, /Construction and land loans are 120% of total risk-based capital, at or above the 100% concentration screen \(June 30, 2026\)\./);
+  assert.match(text, /The concentration screen follows the 2006 interagency guidance as we understand it; its definition is not yet confirmed/);
+  assert.match(text, /It acquired another bank \(FDIC cert 777\) with 4 branches in Phoenix, effective June 1, 2026\. That bank held \$64\.0 million of CRE loans at its last report \(March 31, 2026\)\./);
+  // A new quarter below the screen: the state signal is gone. The acquisition is still shown: its window has not ended.
+  const f = readFileSync(join(dir, 'sources', 'fdic', 'financials', '1.json'), 'utf8');
+  const next = JSON.parse(f); next.quarters['20260930'] = { ...next.quarters['20260630'], REPDTE: '20260930', LNRECONS: 50000, _source: src('20260930') };
+  put(dir, 'sources/fdic/financials/1.json', next);
+  const later = runScoring({ dir, buybox: filledBuybox(), scoring: scoring(), metros, now: new Date('2027-02-15T12:00:00Z') }).items[0];
+  assert.ok(!later.signals.some((s) => s.type === 'concentration-construction'), 'a state signal drops away when its condition ends');
+  assert.ok(later.signals.some((s) => s.id === byType['acquired-metro-bank'].id), 'an event signal keeps its id and stays within its window');
+  const after = runScoring({ dir, buybox: filledBuybox(), scoring: scoring(), metros, now: new Date('2027-06-02T12:00:00Z') }).items[0];
+  assert.ok(!after.signals.some((s) => s.type === 'acquired-metro-bank'), 'after 4 quarters the event is no longer a signal');
+});
+
+test('failed banks in the metros are listed beside the candidates, never as candidates, with the FDIC as seller', () => {
+  const dir = world([{ cert: '1', name: 'Alpha Example Bank' }]);
+  const rec = (cert, failedOn, inMetros) => ({ cert, name: 'Example Bank', failedOn, agree: ['institutions', 'history'], missingFrom: ['failures'], acquirerCert: '555', inMetros, metros: inMetros ? [{ cbsa: '31080', branches: 1, basis: ['main office'] }] : [], lastCre: null, seller: 'FDIC', loanSales: 'https://www.fdic.gov/resources/resolutions/asset-sales/loan-sales', _source: src(failedOn) });
+  put(dir, 'sources/fdic/failed.json', { 99999: rec('99999', '2026-09-25', true), 88888: rec('88888', '2026-08-01', false), 77777: rec('77777', '2023-01-10', true) });
+  const out = score(dir);
+  assert.deepEqual(out.failedBanks.map((f) => f.cert), ['99999'], 'only those with a presence in the metros, within the window');
+  const f = out.failedBanks[0];
+  assert.deepEqual([f.key, f.seller, f.loanSales, f.metros[0].label, f.missingFrom[0]], ['fdic:99999', 'FDIC', 'https://www.fdic.gov/resources/resolutions/asset-sales/loan-sales', 'Los Angeles', 'failures']);
+  assert.ok(!out.items.some((i) => i.cert === '99999'));
+});
