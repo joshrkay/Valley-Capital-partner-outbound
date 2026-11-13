@@ -262,6 +262,25 @@ Every adapter (E3–E5) is built on this shared framework.
 - [ ] Where a source asks automated clients to identify themselves (the SEC asks for a User-Agent with a contact and a request-rate ceiling **[verify current policy]**), the contact comes from configuration filled in by a principal. It is never hard-coded and never a personal address.
 - [ ] Concurrency and request rate are set per source in configuration.
 
+**E2-S6. Checking the scrapers against their sources.** *As a principal, I want proof that what we stored is what the sources say, and that nothing was missed, so that a quiet data error never reaches a decision.* P0, R1. **Built** (`src/sources/verify.mjs`, `outbound sources verify`, `outbound platform verify`).
+- [x] FDIC:
+  - the latest quarter is stored;
+  - the list of banks equals FDIC's list of banks with a branch in the metros;
+  - every stored value for the latest quarter equals FDIC's;
+  - ratios computed from stored values equal FDIC's own (`NCRECONR`, `NCLNLSR`) within 0.01 points.
+- [x] EDGAR:
+  - every filer has a recorded outcome, and a CMBS-looking name set aside as non-CMBS is flagged;
+  - for a few trusts, re-read from SEC, parsed loan counts and balances equal a plain count of the file;
+  - every stored loan belongs to a trust in the latest run and carries its source.
+- [x] Read-only; exits 1 on any failure. A spot-check list of records with their public URL lets a person compare by eye, and is left out of scheduled-job logs.
+- [x] The worker workflow runs the checks weekly for FDIC and monthly for CMBS.
+- [x] **First live runs (2026-11-13):** FDIC passed every check (8,576 values; 500 ratios). The EDGAR checks found five defects in the adapter, all fixed with tests:
+  - the namespace attribute order;
+  - depositor co-filings;
+  - amendments without an EX-102;
+  - per-property records counted as loans (2,594 in 60 trusts);
+  - servicer names cut short.
+
 ---
 
 ### E3. FDIC bank distress signals

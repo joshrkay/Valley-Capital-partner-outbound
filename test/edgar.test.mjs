@@ -7,9 +7,9 @@ import { join } from 'node:path';
 import { makeDir } from './kit.mjs';
 import { loadRules } from '../src/rules.mjs';
 import { readJson, readJsonl } from '../src/store.mjs';
-import { parseFormIndex, latestByCik, quartersFor, parseCmbsAssets, decodeEntities, metroIndex, toLoan, loanSignals, specialServicerFromReport, runEdgar, edgarPaths, CMBS_NS } from '../src/sources/edgar.mjs';
+import { parseFormIndex, latestByCik, filingsByCik, coFiled, mergePropertyRecords, quartersFor, parseCmbsAssets, decodeEntities, metroIndex, toLoan, loanSignals, specialServicerFromReport, runEdgar, edgarPaths, CMBS_NS } from '../src/sources/edgar.mjs';
 import { getText } from '../src/sources/http.mjs';
-import { fakeSec, FORM_IDX, EX102, NOT_CMBS, REPORT } from './edgar-fake.mjs';
+import { fakeSec, FORM_IDX, EX102, NOT_CMBS, REPORT, idxLine } from './edgar-fake.mjs';
 
 const rules = loadRules();
 const NOW = new Date('2026-11-13T12:00:00Z');
@@ -72,9 +72,9 @@ test('signals: note sale, special servicing until the loan goes back to the mast
 });
 
 test('the special servicer: the reviewed name when it matches, otherwise only the first cell, never a person or their details', () => {
-  assert.deepEqual(specialServicerFromReport(REPORT('Example Special Servicing LLC'), ['Example Special Servicing LLC']), { name: 'Example Special Servicing LLC', matched: true });
+  assert.deepEqual(specialServicerFromReport(REPORT('Example Special Servicing LLC'), ['Example Special Servicing LLC']), { name: 'Example Special Servicing LLC', matched: true, all: ['Example Special Servicing LLC'] });
   const unknown = specialServicerFromReport(REPORT('Other Asset Management LLC'), ['Example Special Servicing LLC']);
-  assert.deepEqual(unknown, { name: 'Other Asset Management LLC', matched: false });
+  assert.deepEqual(unknown, { name: 'Other Asset Management LLC', matched: false, all: ['Other Asset Management LLC'] });
   assert.doesNotMatch(JSON.stringify(unknown), /Pat Person|555|@/);
   assert.equal(specialServicerFromReport('<p>No such label here</p>').name, null);
 });
@@ -128,4 +128,77 @@ test('a capped text read stops downloading once it has enough', async () => {
   assert.equal(r.truncated, true);
   assert.equal(r.text.length, 4096);
   assert.ok(pulled < 20, `read ${pulled} chunks of a 1000-chunk body`);
+});
+
+test('the namespace is read by name, whatever order the root tag lists its attributes in', () => {
+  const xsi = 'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"';
+  for (const root of [`<assetData ${xsi} xmlns="${CMBS_NS}">`, `<assetData xmlns="${CMBS_NS}" ${xsi} >`, `<p:assetData ${xsi} xmlns:p="${CMBS_NS}">`]) {
+    assert.equal(parseCmbsAssets(`<?xml version="1.0"?>${root}</assetData>`).namespace, CMBS_NS, root);
+  }
+  assert.equal(parseCmbsAssets(`<assetData ${xsi}></assetData>`).namespace, null, 'a schema-instance namespace is never mistaken for the document\'s');
+});
+
+test('a filing listed under both the trust and its depositor is kept once, under the trust', () => {
+  const e = parseFormIndex([FORM_IDX, idxLine('ABS-EE', 'Example Mortgage Securities Corp', 900, '2026-10-28', '0009999999-26-000102')].join('\n'), ['ABS-EE']);
+  const by = filingsByCik(e, ['ABS-EE'], '2026-09-29');
+  assert.equal(by.has('900'), false, 'the depositor does not get its own copy');
+  assert.equal(by.get('1000001')[0].accession, '0009999999-26-000102');
+  assert.equal(coFiled(e, ['ABS-EE'], '2026-09-29').length, 1);
+});
+
+test('a full run counts a co-filed filing once, and falls back from an amendment that has no EX-102', async () => {
+  const dir = makeDir();
+  const sec = { ...SEC_CFG, ...fakeSec({
+    extraLines: [
+      idxLine('ABS-EE', 'Example Mortgage Securities Corp', 900, '2026-10-28', '0009999999-26-000102'),          // the depositor co-files the trust's filing
+      idxLine('ABS-EE/A', 'Example Commercial Mortgage Trust 2021-C1', 1000001, '2026-11-02', '0009999999-26-000199'),   // a later amendment, cover only
+    ],
+    extraFiles: { 'https://www.sec.gov/Archives/edgar/data/1000001/000999999926000199/index.json': JSON.stringify({ directory: { item: [{ name: 'absee-a.htm', size: '5000' }] } }) },
+  }) };
+  const r = await run(dir, sec);
+  assert.equal(r.outcome, 'ok', JSON.stringify(r));
+  assert.equal(r.cmbsTrusts, 1); assert.equal(r.coFiled, 1);
+  const loans = readJson(edgarPaths(dir).loans);
+  assert.deepEqual(Object.keys(loans).sort(), ['cmbs:1000001:1', 'cmbs:1000001:4'], 'no loan is keyed under the depositor');
+  const o = readJson(edgarPaths(dir).state).outcomes.find((x) => x.cik === '1000001');
+  assert.deepEqual([o.outcome, o.accession, o.fellBackFrom], ['cmbs', '0009999999-26-000102', ['0009999999-26-000199']]);
+  assert.ok(!sec.calls.some((c) => c.url.includes('/data/900/')), 'the depositor\'s copy is never fetched');
+});
+
+test('every filer gets an outcome, so a verification can account for each one', async () => {
+  const dir = makeDir();
+  await run(dir, { ...SEC_CFG, ...fakeSec() });
+  const outcomes = readJson(edgarPaths(dir).state).outcomes;
+  assert.deepEqual(outcomes.map((o) => [o.cik, o.outcome]).sort(), [['1000001', 'cmbs'], ['1000002', 'too_large'], ['1000003', 'not_cmbs']]);
+});
+
+test('servicer names match without case or punctuation, past a table of contents, and a trust can name two', () => {
+  const known = ['Example Partners', 'Example Cooperative Bank'];
+  const cover = (...cells) => `<table>${cells.map((c) => `<tr><td>Special Servicer</td><td>${c}</td><td>Attention: Jo Example (555) 010-0100</td></tr>`).join('')}</table>`;
+  assert.equal(specialServicerFromReport(cover('Example Partners,LLC'), known).name, 'Example Partners');
+  assert.equal(specialServicerFromReport(cover('EXAMPLE PARTNERS, Inc.'), known).name, 'Example Partners');
+  // a table of contents uses the label first, before the parties box
+  const toc = `<p><span>Special Servicer</span> Mortgage Loan Detail (Part 1) 14-16</p>${cover('Example Partners, LLC')}`;
+  assert.deepEqual(specialServicerFromReport(toc, known), { name: 'Example Partners', matched: true, all: ['Example Partners'] });
+  assert.deepEqual(specialServicerFromReport(cover('Example Partners, LLC', 'Example Cooperative Bank, N.A.'), known).all, ['Example Partners', 'Example Cooperative Bank']);
+  // unknown, after a heading: the heading is skipped, the firm is taken, the contact never is
+  const r = specialServicerFromReport(`<p><span>Special Servicer</span> Mortgage Loan Detail 14</p>${cover('Unlisted Loan Services, LLC')}`, known);
+  assert.deepEqual([r.name, r.matched], ['Unlisted Loan Services, LLC', false]);
+});
+
+test('property-only records are folded into their parent loan, so a portfolio is one loan with all its properties', () => {
+  const rec = (n, fields, props) => ({ fields: { assetNumber: n, reportingPeriodEndDate: '10-13-2026', ...fields }, properties: props.map((c) => ({ propertyCounty: c, propertyState: 'CA' })) });
+  const raw = [
+    rec('10', { originalLoanAmount: '50000000', maturityDate: '01-01-2028', reportPeriodEndActualBalanceAmount: '48000000' }, []),
+    rec('10-001', {}, ['Los Angeles']), rec('10-002', {}, ['San Diego']),
+    rec('11', { originalLoanAmount: '1', maturityDate: '01-01-2030' }, ['Orange']),
+    rec('99-001', {}, ['Kern']),   // no parent in the file: kept as it is
+  ];
+  const { assets, merged } = mergePropertyRecords(raw);
+  assert.equal(merged, 2);
+  assert.deepEqual(assets.map((a) => a.fields.assetNumber), ['10', '11', '99-001']);
+  assert.deepEqual(assets[0].properties.map((p) => p.propertyCounty), ['Los Angeles', 'San Diego']);
+  const idx = metroIndex(rules.metros);
+  const loan = toLoan({ asset: assets[0], trust: { cik: '1', name: 'T' }, idx, sectors: ['multifamily'], src: {} });
+  assert.equal(loan, null, 'no property type in this fixture, so no sector: dropped, as any loan outside the buy box is');
 });

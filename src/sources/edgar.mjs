@@ -44,13 +44,31 @@ export function parseFormIndex(text, forms) {
 // The latest filing per trust among the given forms (an amendment counts), filed on or after `since`.
 export function latestByCik(entries, forms, since) {
   const best = new Map();
-  for (const e of entries) {
-    if (!forms.includes(e.form) || e.date < since) continue;
-    const b = best.get(e.cik);
-    if (!b || e.date > b.date || (e.date === b.date && e.accession > b.accession)) best.set(e.cik, e);
-  }
+  for (const [cik, list] of filingsByCik(entries, forms, since)) best.set(cik, list[0]);
   return best;
 }
+
+// Every filing per trust in the window, newest first, so an amendment without an EX-102 can fall back to the filing it amends.
+// One filing is often listed under two CIKs, the trust and its depositor (seen 2026-11-13: a Benchmark trust's ABS-EE also under its
+// depositor). It is kept under one only: the higher CIK, because the issuing trust is always registered after its depositor.
+export function filingsByCik(entries, forms, since) {
+  const inWindow = entries.filter((e) => forms.includes(e.form) && e.date >= since);
+  const owner = new Map();   // accession -> cik that keeps it
+  for (const e of inWindow) { const o = owner.get(e.accession); if (!o || Number(e.cik) > Number(o)) owner.set(e.accession, e.cik); }
+  const by = new Map();
+  for (const e of inWindow) {
+    if (owner.get(e.accession) !== e.cik) continue;
+    if (!by.has(e.cik)) by.set(e.cik, []);
+    by.get(e.cik).push(e);
+  }
+  for (const list of by.values()) list.sort((a, b) => (a.date !== b.date ? (a.date > b.date ? -1 : 1) : a.accession > b.accession ? -1 : 1));
+  return by;
+}
+export const coFiled = (entries, forms, since) => {
+  const owners = new Map();
+  for (const e of entries.filter((x) => forms.includes(x.form) && x.date >= since)) owners.set(e.accession, [...(owners.get(e.accession) ?? []), e]);
+  return [...owners.values()].filter((l) => l.length > 1);
+};
 
 export function quartersFor(now, sinceDays) {
   const qs = new Set();
@@ -71,8 +89,11 @@ function leaves(body) {
   return out;
 }
 export function parseCmbsAssets(xml) {
-  const head = xml.slice(0, 2000);
-  const namespace = /<(?:[\w-]+:)?assetData\b[^>]*\sxmlns(?::[\w-]+)?="([^"]+)"/.exec(head)?.[1] ?? null;
+  // The root's own namespace: xmlns="..." for an unprefixed <assetData>, xmlns:p="..." for <p:assetData>. Attribute order varies by
+  // filing agent (seen 2026-11-13: some put xmlns:xsi first, some last), so the attribute is looked up by name, never by position.
+  const root = /<(?:([\w-]+):)?assetData\b([^>]*)>/.exec(xml.slice(0, 4000));
+  const attr = root ? (root[1] ? `xmlns:${root[1]}` : 'xmlns') : null;
+  const namespace = attr ? new RegExp(`\\s${attr.replace(':', '\\:')}="([^"]+)"`).exec(root[2])?.[1] ?? null : null;
   const assets = [];
   for (const m of xml.matchAll(new RegExp(`<${P}assets\\b[^>]*>([\\s\\S]*?)</${P}assets>`, 'g'))) {
     const properties = [];
@@ -80,6 +101,23 @@ export function parseCmbsAssets(xml) {
     assets.push({ fields: leaves(body), properties });
   }
   return { namespace, assets };
+}
+
+// Some filers list a portfolio loan as one parent record (asset "10", with the loan's terms) and one record per property
+// ("10-001" ... "10-065", property only: no balance, rate or maturity). Seen 2026-11-13: 93 of 157 records in one trust. Folded into
+// the parent, so a portfolio is one loan with all its properties, never 65 loans with no balance. Others nest every <property>
+// inside the one record; both forms end up the same.
+export function mergePropertyRecords(assets) {
+  const byNum = new Map(assets.map((a) => [a.fields.assetNumber, a]));
+  const out = []; let merged = 0;
+  for (const a of assets) {
+    const m = /^(.+)-(\d+)$/.exec(a.fields.assetNumber ?? '');
+    const propertyOnly = !a.fields.originalLoanAmount && !a.fields.maturityDate && !a.fields.reportPeriodEndActualBalanceAmount;
+    const parent = m && propertyOnly ? byNum.get(m[1]) : null;
+    if (parent && parent !== a) { parent.properties.push(...a.properties); merged++; continue; }
+    out.push(a);
+  }
+  return { assets: out, merged };
 }
 
 // ---- Where a property is -------------------------------------------------------------------------------------------------------
@@ -151,26 +189,35 @@ export function loanSignals(loan, { now = new Date(), maturityMonths = 18 } = {}
 // The labels that start the next cell on a distribution report's cover, seen in October 2026 filings.
 const COVER_LABELS = ['Asset Representations Reviewer', 'Certificate Administrator', 'Trustee', 'Operating Advisor', 'Master Servicer', 'Directing Certificateholder', 'Depositor', 'Underwriter', 'Current Mortgage Loan', 'Mortgage Loan Detail', 'Bond / Collateral', 'Certificate Distribution', 'Table of Contents'].map((l) => l.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&').replace(/ /g, '\\s+'));
 // Only the firm's name is taken. A named person and their contact details appear next to it; they are never read into storage.
+const squash = (t) => String(t).toLowerCase().replace(/[^a-z0-9]/g, '');
+
+// Returns { name, matched, all }: the first special servicer named on the cover, whether it is on the reviewed list, and every one the
+// cover names (a trust can have two: seen 2026-11-13, one for its co-op loans). A reviewed name counts only when it directly follows
+// the label, compared without case or punctuation ("LNR Partners,LLC" and "LNR Partners, Inc." both match "LNR Partners"). Every
+// occurrence of the label is tried, because covers also use it in a table of contents.
 export function specialServicerFromReport(html, known = []) {
-  // Two views of the cover. `flat` joins everything with single spaces, because a phrase is often split across tags
-  // (<span>Special</span> <span>Servicer</span>); the label and the reviewed names are searched there. `cells` keeps tag boundaries and
-  // runs of spaces as " | ", and is used only to cut an unrecognized name at the end of its own cell.
+  // `flat` joins everything with single spaces (a phrase is often split across tags); `cells` keeps tag boundaries as " | " and is
+  // used only to cut an unrecognized name at the end of its own cell.
   const decoded = decodeEntities(String(html).replace(/<[^>]+>/g, '\u0000'));
   const flat = decoded.replace(/[\s\u00a0\u0000]+/g, ' ');
   const cells = decoded.replace(/[\s\u00a0]*\u0000[\s\u00a0\u0000]*|[\s\u00a0]{2,}/g, ' | ').replace(/[\s\u00a0]/g, ' ');
-  const i = flat.search(/Special Servicer\b/i);
-  if (i < 0) return { name: null, matched: false };
-  const after = flat.slice(i + 'Special Servicer'.length, i + 'Special Servicer'.length + 160);
-  const hit = known.find((k) => after.toLowerCase().includes(k.toLowerCase()));
-  if (hit) return { name: hit, matched: true };
-  // Unrecognized: keep only the first cell after the label, cut at a cover label or a contact-looking token, so a person's name or
-  // details are never captured. The result is flagged for a principal to review; it is never treated as known.
-  const j = cells.search(/Special(?: \| | )Servicer\b/i);
-  const tail = j < 0 ? after : cells.slice(j).replace(/^Special(?: \| | )Servicer/i, '');
-  const firm = tail.replace(/^[\s:|-]+/, '').split(' | ')[0]
-    .split(new RegExp(`\\s(?:${COVER_LABELS.join('|')}|Attention|Attn|Contact|Phone|Tel|Email|E-mail|Fax|www\\.|\\(\\d{3}\\)|\\d{3}[-.]\\d{3})`, 'i'))[0]
-    .trim().slice(0, 80);
-  return { name: firm || null, matched: false };
+  const all = [];
+  for (const m of [...flat.matchAll(/Special Servicer\b/gi)].slice(0, 25)) {
+    const next = squash(flat.slice(m.index + m[0].length, m.index + m[0].length + 120));
+    const hit = known.find((k) => next.startsWith(squash(k)));
+    if (hit && !all.includes(hit)) all.push(hit);
+  }
+  if (all.length) return { name: all[0], matched: true, all };
+  // Unrecognized: the first cell after a label that is not another heading, cut at a cover label or a contact-looking token, so a
+  // person's name or details are never captured. Flagged for a principal to review; never treated as known.
+  const heading = new RegExp(`^(?:${COVER_LABELS.join('|')}|Table of Contents|Principal Prepayment|\\d)`, 'i');
+  for (const m of [...cells.matchAll(/Special(?: \| | )Servicer\b/gi)].slice(0, 25)) {
+    const cell = cells.slice(m.index + m[0].length).replace(/^[\s:|-]+/, '').split(' | ')[0];
+    if (!/[A-Za-z]/.test(cell) || heading.test(cell)) continue;
+    const firm = cell.split(new RegExp(`\\s(?:${COVER_LABELS.join('|')}|Attention|Attn|Contact|Phone|Tel|Email|E-mail|Fax|www\\.|\\(\\d{3}\\)|\\d{3}[-.]\\d{3})`, 'i'))[0].trim().slice(0, 80);
+    if (firm) return { name: firm, matched: false, all: [firm] };
+  }
+  return { name: null, matched: false, all: [] };
 }
 
 // ---- The run ----------------------------------------------------------------------------------------------------------------------
@@ -199,24 +246,39 @@ export async function runEdgar({ dir, metros, buybox, sec, scoring = {}, fetchIm
     // 1. Which trusts filed lately.
     const entries = [];
     for (const q of quartersFor(now, sinceDays)) entries.push(...parseFormIndex(await text(`${SEC}/Archives/edgar/full-index/${q}/form.idx`), ['ABS-EE', 'ABS-EE/A', '10-D', '10-D/A']));
-    const absee = [...latestByCik(entries, ['ABS-EE', 'ABS-EE/A'], since).values()].sort((a, b) => (a.cik < b.cik ? -1 : 1)).slice(0, maxTrusts);
+    const byCik = filingsByCik(entries, ['ABS-EE', 'ABS-EE/A'], since);
+    const ciks = [...byCik.keys()].sort().slice(0, maxTrusts);
     const tenD = latestByCik(entries, ['10-D', '10-D/A'], since);
-    counts.filings = absee.length;
+    counts.filings = ciks.length;
+    counts.coFiled = coFiled(entries, ['ABS-EE', 'ABS-EE/A'], since).length;
+    const outcomes = [];   // one line per trust: what happened to it, so a verification can account for every filer
 
     // 2. Each trust's EX-102: CMBS only, metro and sector loans only.
     const loans = {}, trusts = {};
-    for (const f of absee) {
-      const base = `${SEC}/Archives/edgar/data/${f.cik}/${f.accession.replace(/-/g, '')}`;
+    for (const cik of ciks) {
+      let f, base, ex;
+      const tried = [];
       try {
-        const items = (await json(`${base}/index.json`))?.directory?.item ?? [];
-        const ex = items.filter((i) => /102/.test(i.name) && /\.xml$/i.test(i.name)).sort((a, b) => Number(b.size ?? 0) - Number(a.size ?? 0))[0];
-        if (!ex) { counts.noEx102++; continue; }
-        if (Number(ex.size ?? 0) > (sec.maxEx102Bytes ?? 5_000_000)) { counts.notCmbsSized++; continue; }   // auto and card pools run to 100+ MB
+        // Newest first; an amendment that carries no EX-102 falls back to the filing it amends (at most three filings are tried).
+        for (const cand of byCik.get(cik).slice(0, 3)) {
+          const b = `${SEC}/Archives/edgar/data/${cand.cik}/${cand.accession.replace(/-/g, '')}`;
+          const items = (await json(`${b}/index.json`))?.directory?.item ?? [];
+          const x = items.filter((i) => /102/.test(i.name) && /\.xml$/i.test(i.name)).sort((p, q) => Number(q.size ?? 0) - Number(p.size ?? 0))[0];
+          tried.push(cand.accession);
+          if (x) { f = cand; base = b; ex = x; break; }
+        }
+        const company = byCik.get(cik)[0].company;
+        if (!ex) { counts.noEx102++; outcomes.push({ cik, company, outcome: 'no_ex102', tried }); continue; }
+        if (Number(ex.size ?? 0) > (sec.maxEx102Bytes ?? 5_000_000)) { counts.notCmbsSized++; outcomes.push({ cik, company, outcome: 'too_large', bytes: Number(ex.size) }); continue; }   // auto and card pools run to 100+ MB
         const parsed = parseCmbsAssets(await text(`${base}/${ex.name}`));
-        if (parsed.namespace !== CMBS_NS) { counts.notCmbs++; continue; }
+        const records = parsed.assets.length;
+        if (parsed.namespace !== CMBS_NS) { counts.notCmbs++; outcomes.push({ cik, company, outcome: 'not_cmbs', namespace: parsed.namespace }); continue; }
         counts.cmbsTrusts++;
         const bad = parsed.assets.filter((a) => !a.fields.assetNumber || !a.fields.reportingPeriodEndDate);
-        if (bad.length) { counts.trustErrors++; notes.push(`trust ${f.cik}: ${bad.length} asset(s) without assetNumber or reporting period; trust skipped`); continue; }
+        if (bad.length) { counts.trustErrors++; outcomes.push({ cik, company, outcome: 'bad_records', count: bad.length }); notes.push(`trust ${f.cik}: ${bad.length} asset(s) without assetNumber or reporting period; trust skipped`); continue; }
+        const folded = mergePropertyRecords(parsed.assets);
+        parsed.assets = folded.assets;
+        counts.propertyRecordsMerged = (counts.propertyRecordsMerged ?? 0) + folded.merged;
         const trust = { cik: f.cik, name: f.company, accession: f.accession, filed: f.date };
         const src = (asset) => sourceBlock({ source: 'edgar', endpoint: `ABS-EE ${f.accession} ${ex.name}`, query: { cik: f.cik }, recordId: `${f.cik}:${asset.fields.assetNumber}`, period: asset.fields.reportingPeriodEndDate, fetchedAt, runId: run.runId });
         let kept = 0;
@@ -226,9 +288,10 @@ export async function runEdgar({ dir, metros, buybox, sec, scoring = {}, fetchIm
           if (loan) { loan.signals = loanSignals(loan, { now, maturityMonths: scoring?.cmbs?.maturityMonths ?? 18 }); loans[loan.key] = loan; kept++; }
         }
         counts.loansKept += kept;
+        outcomes.push({ cik, company, outcome: 'cmbs', accession: f.accession, records, loans: parsed.assets.length, propertyRecordsMerged: folded.merged, kept, ...(f.form === 'ABS-EE/A' ? { amendment: true } : {}), ...(tried.length > 1 ? { fellBackFrom: tried.slice(0, -1) } : {}) });
         trusts[f.cik] = { ...trust, period: parsed.assets[0] ? mdy(parsed.assets[0].fields.reportingPeriodEndDate) : null, loans: parsed.assets.length, loansInMarket: kept, specialServicer: null,
           _source: sourceBlock({ source: 'edgar', endpoint: `ABS-EE ${f.accession}`, query: { cik: f.cik }, recordId: f.cik, period: f.date, fetchedAt, runId: run.runId }) };
-      } catch (e) { counts.trustErrors++; notes.push(`trust ${f.cik}: ${String(e.message).slice(0, 120)}`); }
+      } catch (e) { counts.trustErrors++; outcomes.push({ cik, outcome: 'error', error: String(e.message).slice(0, 120) }); notes.push(`trust ${cik}: ${String(e.message).slice(0, 120)}`); }
     }
 
     // 3. The special servicer, for trusts with a loan in the market only (each report runs to megabytes; only the cover is read).
@@ -242,7 +305,7 @@ export async function runEdgar({ dir, metros, buybox, sec, scoring = {}, fetchIm
         if (!ex) continue;
         const ss = specialServicerFromReport(await text(`${base}/${ex.name}`, sec.reportHeadBytes ?? 131072), sec.knownSpecialServicers ?? []);
         counts.reports++;
-        t.specialServicer = ss.name; t.specialServicerMatched = ss.matched; t.distributionReport = d.accession;
+        t.specialServicer = ss.name; t.specialServicers = ss.all; t.specialServicerMatched = ss.matched; t.distributionReport = d.accession;
         if (ss.name && !ss.matched) notes.push(`trust ${t.cik}: special servicer "${ss.name}" is not on the reviewed list (config.sec.knownSpecialServicers)`);
       } catch (e) { notes.push(`trust ${t.cik} 10-D: ${String(e.message).slice(0, 120)}`); }
     }
@@ -267,7 +330,7 @@ export async function runEdgar({ dir, metros, buybox, sec, scoring = {}, fetchIm
     writeJson(p.loans, loans);
     writeJson(p.trusts, trusts);
     writeJson(p.servicers, servicers);
-    writeJson(p.state, { lastRun: run.runId, ranAt: fetchedAt, since, counts });
+    writeJson(p.state, { lastRun: run.runId, ranAt: fetchedAt, since, counts, outcomes });
     const suspect = counts.cmbsTrusts === 0 || counts.trustErrors > Math.max(3, counts.cmbsTrusts * 0.1);
     const line = finishRun(dir, run, { rowsRead: counts.loansRead, rowsWritten: Object.keys(loans).length, rowsChanged: changed, outcome: 'ok', suspect, notes: notes.slice(0, 50), errors, now: clock() });
     return { runId: run.runId, outcome: line.outcome, ...counts, changed, servicers: Object.keys(servicers).length, notes: notes.length };

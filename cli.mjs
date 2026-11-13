@@ -6,6 +6,8 @@ import { loadRules } from './src/rules.mjs';
 import { readJson, readJsonl, writeJson, readText, listFiles, exists, safeId, audit } from './src/store.mjs';
 import { runFdic } from './src/sources/fdic.mjs';
 import { runEdgar } from './src/sources/edgar.mjs';
+import { verifyFdic, verifyEdgar } from './src/sources/verify.mjs';
+import { LOADS } from './src/uow.mjs';
 import { runScoring } from './src/score.mjs';
 import { listCandidates, getCandidate, promote, dismiss, snooze } from './src/candidates.mjs';
 import { loadContext, checkTouch, recordObservedSend, recordEvent, addSuppression, dueList, touchFromAccount } from './src/guard.mjs';
@@ -44,6 +46,9 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound sources run edgar                      CMBS loans in the six metros and buy-box sectors, from each trust's monthly SEC filing,
                                                   with workout codes and the special servicer (needs config.sec.userAgent filled in)
   outbound sources status                         the last run of each source, and the latest FDIC quarter seen
+  outbound sources verify [fdic|edgar] [--sample N]   check the stored data against the live sources (read-only): fresh, complete,
+                                                  values and ratios equal FDIC's own, the CMBS parser equal to a plain count; plus a
+                                                  short list of records with their public URL to compare by eye. Exits 1 on any failure.
 
   Candidates (PRD E6): which banks, why now, and what paper they likely hold. A principal decides; nothing is contacted.
   outbound score run [--draft-buybox]             score every bank on distress, fit and timing (refuses while buybox.json has [CONFIRM]
@@ -66,6 +71,7 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound enqueue sources.fdic|sources.edgar|score.run|research.run|draft.run [--account ID] [--channel C] [--step N] [--draft-buybox] [--include-hq]
   outbound platform push [--from DIR]             copy a data folder into the platform (default: OUTBOUND_DATA_DIR); safe to re-run
   outbound platform pull --to DIR                 write everything back to a new or empty folder outside this repository
+  outbound platform verify [fdic|edgar] [--sample N]   the same checks on the platform's data (read-only); no spot-check list unless asked
 `;
 
 function parse(argv) {
@@ -83,6 +89,23 @@ function parse(argv) {
 const loadAccount = (dir, id) => { safeId(id); const a = readJson(join(dir, 'accounts', `${id}.json`), null); if (!a) throw new Error(`No account file: ${join(dir, 'accounts', `${id}.json`)}`); return a; };
 const today = () => new Date().toISOString().slice(0, 10);
 const out = (x) => console.log(typeof x === 'string' ? x : JSON.stringify(x, null, 2));
+// Runs the scraper checks and prints them: PASS or FAIL per check, then the records to compare by eye. Returns true when all pass.
+async function runVerify(dir, which, rules, flags) {
+  const sample = Number(flags.sample ?? 5);
+  const reports = [];
+  if (!which || which === 'fdic') reports.push(await verifyFdic({ dir, metros: rules.metros, sample }));
+  if (!which || which === 'edgar') reports.push(await verifyEdgar({ dir, sec: rules.config.sec, sample }));
+  const lines = [];
+  for (const r of reports) {
+    lines.push(`== ${r.source.toUpperCase()}`);
+    for (const c of r.checks) lines.push(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}: ${c.summary}`);
+    if (r.sample.length) { lines.push('', `Compare by eye (${r.sample.length} records, each with the public URL to check against):`); for (const s of r.sample) lines.push(`- ${JSON.stringify(s)}`); }
+    lines.push('');
+  }
+  console.log(lines.join('\n'));
+  return reports.every((r) => r.checks.every((c) => c.ok));
+}
+
 const need = (flags, k) => { if (!flags[k] || flags[k] === true) throw new Error(`--${k} is required.`); return flags[k]; };
 
 async function main() {
@@ -107,6 +130,12 @@ async function main() {
     }
     if (cmd === 'platform' && sub === 'push') return out(await push({ client, dir: flags.from && flags.from !== true ? flags.from : dataDir() }));
     if (cmd === 'platform' && sub === 'pull') return out(await pull({ client, to: need(flags, 'to') }));
+    if (cmd === 'platform' && sub === 'verify') {   // read-only: the unit of work changes nothing, so nothing is written back
+      // No spot-check list unless asked: this command runs in scheduled-job logs, which carry check results only, never bank names.
+      const { result } = await client.unitOfWork(LOADS.sources, (dir) => runVerify(dir, pos[2], rules, { ...flags, sample: flags.sample ?? 0 }), { retries: 0 });
+      if (!result) process.exitCode = 1;
+      return;
+    }
     out(HELP); process.exitCode = 1; return;
   }
 
@@ -191,6 +220,7 @@ async function main() {
       if (r.outcome === 'failed') process.exitCode = 1;
       return out(r);
     }
+    if (sub === 'verify') { if (!(await runVerify(dir, pos[2], rules, flags))) process.exitCode = 1; return; }
     if (sub === 'status') {
       const last = {};
       for (const r of readJsonl(join(dir, 'sources', 'runs.jsonl'))) last[r.source] = r;

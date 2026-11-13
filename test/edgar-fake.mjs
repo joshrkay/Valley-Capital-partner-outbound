@@ -27,11 +27,11 @@ export const NOT_CMBS = `<?xml version="1.0"?><assetData xmlns="http://www.sec.g
 // The cover, as real reports lay it out: the label split across tags, then the firm, then a named contact in the next cell.
 export const REPORT = (firm) => `<html><body><table><tr><td><span>Special</span> <span>Servicer</span></td><td>${firm}&nbsp;&nbsp;&nbsp;</td><td>Attention: Pat Person (555) 010-0100 pat.person@example.test</td></tr></table>${'<p>loan detail</p>'.repeat(5000)}</body></html>`;
 
-export function fakeSec({ firm = 'Example Special Servicing LLC', ex102 = EX102 } = {}) {
+export function fakeSec({ firm = 'Example Special Servicing LLC', ex102 = EX102, extraLines = [], extraFiles = {} } = {}) {
   const calls = [];
   const files = {
     'https://www.sec.gov/Archives/edgar/full-index/2026/QTR3/form.idx': '',
-    'https://www.sec.gov/Archives/edgar/full-index/2026/QTR4/form.idx': FORM_IDX,
+    'https://www.sec.gov/Archives/edgar/full-index/2026/QTR4/form.idx': [FORM_IDX, ...extraLines].join('\n'),
     'https://www.sec.gov/Archives/edgar/data/1000001/000999999926000102/index.json': JSON.stringify({ directory: { item: [{ name: 'exh_102.xml', size: String(ex102.length) }, { name: 'exh_103.xml', size: '900' }] } }),
     'https://www.sec.gov/Archives/edgar/data/1000001/000999999926000102/exh_102.xml': ex102,
     'https://www.sec.gov/Archives/edgar/data/1000002/000999999926000201/index.json': JSON.stringify({ directory: { item: [{ name: 'ex102auto.xml', size: '126372387' }] } }),
@@ -40,6 +40,7 @@ export function fakeSec({ firm = 'Example Special Servicing LLC', ex102 = EX102 
     'https://www.sec.gov/Archives/edgar/data/1000001/000999999926000101/index.json': JSON.stringify({ directory: { item: [{ name: 'trust_10d.htm' }, { name: 'trust_ex991-202610.htm', size: '1500000' }] } }),
     'https://www.sec.gov/Archives/edgar/data/1000001/000999999926000101/trust_ex991-202610.htm': REPORT(firm),
   };
+  Object.assign(files, extraFiles);
   const fetchImpl = async (url, init = {}) => {
     calls.push({ url, ua: init.headers?.['user-agent'] });
     if (!(url in files)) return new Response('not found', { status: 404 });

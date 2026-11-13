@@ -1,5 +1,5 @@
 # The platform worker (PRD E12-S4, E11-S1). Runs queued jobs (data pulls, scoring, research, drafting) and queues the weekly FDIC
-# check. Off until the platform exists: set the repository variable PLATFORM_ENABLED to "true", and the secrets SUPABASE_URL,
+# check and the monthly CMBS pull, and verifies each against its source. Off until the platform exists: set the repository variable PLATFORM_ENABLED to "true", and the secrets SUPABASE_URL,
 # SUPABASE_SERVICE_ROLE_KEY and ANTHROPIC_API_KEY. The worker prints job ids, kinds and outcomes only; it never prints names, figures
 # or message text, and this workflow uploads no artifacts. A job queued from the web app waits for the next hourly run.
 name: platform worker
@@ -7,7 +7,8 @@ name: platform worker
 on:
   schedule:
     - cron: '17 12-23 * * 1-5'   # hourly on weekdays, 12:17 to 23:17 UTC: run whatever is queued
-    - cron: '41 13 * * 1'        # Mondays 13:41 UTC: queue the weekly check for a new FDIC quarter
+    - cron: '41 13 * * 1'        # Mondays 13:41 UTC: queue the weekly check for a new FDIC quarter, then verify the FDIC data
+    - cron: '23 14 20 * *'       # the 20th, 14:23 UTC: queue the monthly CMBS pull (most trusts have filed by then), then verify it
   workflow_dispatch:
 
 permissions:
@@ -36,5 +37,16 @@ jobs:
       - name: Queue the weekly FDIC check
         if: ${{ github.event.schedule == '41 13 * * 1' }}
         run: node cli.mjs enqueue sources.fdic
+      - name: Queue the monthly CMBS pull
+        if: ${{ github.event.schedule == '23 14 20 * *' }}
+        run: node cli.mjs enqueue sources.edgar
       - name: Run queued jobs
         run: node cli.mjs worker --max 20
+      # The scraper checks (src/sources/verify.mjs): read-only, and a failure turns this run red, which is the alert. Here they print
+      # check results only (counts, no names): `platform verify` leaves out the spot-check list unless --sample is given.
+      - name: Verify the FDIC data
+        if: ${{ github.event.schedule == '41 13 * * 1' }}
+        run: node cli.mjs platform verify fdic
+      - name: Verify the CMBS data
+        if: ${{ github.event.schedule == '23 14 20 * *' }}
+        run: node cli.mjs platform verify edgar

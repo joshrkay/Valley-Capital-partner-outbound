@@ -97,6 +97,36 @@ npm run outbound -- sources run edgar                    # each CMBS trust's lat
 
 It writes `sources/edgar/loans.json`, `trusts.json` and `servicers.json`. Every loan and property detail is **context for a principal, never for a message**.
 
+### Checking the scrapers
+
+Tests use fakes, so they prove the code does what we meant, not that the sources say what we think. `sources verify` checks the stored data against the live sources. It is read-only and exits 1 on any failure:
+
+```bash
+npm run outbound -- sources verify fdic        # fresh, complete, every stored value and ratio equal to FDIC's own
+npm run outbound -- sources verify edgar       # every filer accounted for, the parser equal to a plain count of the file
+```
+
+| Check | What it proves | Live result, 2026-11-13 |
+|---|---|---|
+| `fdic.fresh` | We hold the latest quarter FDIC has published | Pass (June 30, 2026) |
+| `fdic.coverage` | Every bank with a branch in the metros is on our list, and none has left | Pass (268 of 268) |
+| `fdic.values` | Every stored field for that quarter equals what FDIC serves now | Pass (8,576 of 8,576) |
+| `fdic.ratios` | Ratios computed from our stored values equal FDIC's own published ratios | Pass (500 of 500) |
+| `edgar.accounted` | Every filer has a recorded outcome, and nothing that looks like CMBS was set aside | Pass (60 of 60) |
+| `edgar.parse` | Re-reading a few trusts from SEC, our loan counts and total balances equal a plain count of each file | Pass (4 of 4) |
+| `edgar.loans` | Every stored loan belongs to a trust read in the latest run, and carries its source filing | Pass (192) |
+
+It also prints a few records, each with the exact public URL, for a person to compare by eye.
+
+The first runs of these checks found real defects, all now fixed and tested:
+- loan files that declare their namespace in the other order were rejected;
+- a filing co-filed by a depositor was hidden (and would have been counted twice);
+- an amendment without a loan file hid its trust;
+- per-property records of a portfolio loan were counted as loans: 2,594 records in 60 trusts;
+- servicer names were cut short.
+
+**Scheduled:** the worker workflow verifies FDIC weekly after its pull, and CMBS monthly after its pull. There, `platform verify` prints check results only (no bank names), and a failure turns the run red.
+
 **What the research does and does not do.** The paper profile, the fit and the signals decide who a principal approaches, when, and which sector to lead with. They never appear in a message. The drafter sees only the sector, and a test proves no FDIC figure reaches it.
 
 ## The platform (PRD E12)
