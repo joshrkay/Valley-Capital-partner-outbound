@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dataDir } from './src/paths.mjs';
 import { loadRules } from './src/rules.mjs';
 import { readJson, writeJson, listFiles, safeId, audit } from './src/store.mjs';
-import { loadContext, checkTouch, recordTouch, recordEvent, addSuppression, dueList, touchFromAccount } from './src/guard.mjs';
+import { loadContext, checkTouch, recordObservedSend, recordEvent, addSuppression, dueList, touchFromAccount } from './src/guard.mjs';
 import { runBriefer } from './src/research.mjs';
 import { runDrafter, approveDraft } from './src/draft.mjs';
 import { makeClient } from './src/model.mjs';
@@ -18,6 +18,7 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
 
   outbound research run --account ID [--dry-run]  Agent 2: deep web research and a verified brief (costs money; --dry-run shows the request)
   outbound research show --account ID             print the brief
+  outbound account set-person --account ID --name N [--title T] --by NAME   a principal names the person (e.g. from an institution brief's candidates)
   outbound account confirm-role --account ID --by NAME    a principal confirms the named person's role after reading the brief
 
   outbound draft run --account ID --channel email|letter|linkedin_note|call [--step N] [--sender ID] [--date YYYY-MM-DD] [--ack-risk] [--dry-run]
@@ -26,7 +27,7 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
 
   outbound guard check  --account ID --channel C [--step N] [--sender ID] [--date D]
   outbound guard due    [--sender ID] [--date D]
-  outbound guard record --account ID --channel C --step N --sender ID [--date D]     after a person has actually sent it
+  outbound guard record --account ID --channel C --step N --sender ID [--date D]     after a person has actually sent it (always logged; broken rules are shown)
   outbound guard event  --account ID --type reply|opt_out|bounce|meeting|handoff [--date D] [--note TEXT]
   outbound suppress add --type email|domain|person|institution|asset --value V --reason R [--alias A]...
   outbound suppress list
@@ -91,6 +92,16 @@ async function main() {
     return out(r);
   }
 
+  if (cmd === 'account' && sub === 'set-person') {   // a principal picks the person, usually from an institution brief's candidates
+    const id = need(flags, 'account'); const by = need(flags, 'by');
+    const a = loadAccount(dir, id);
+    a.person = { ...(a.person ?? {}), name: need(flags, 'name'), title: flags.title === true ? '' : flags.title ?? '' };
+    a.contact = { ...(a.contact ?? {}), roleConfirmed: false, roleConfirmedBy: undefined, roleConfirmedAt: undefined };   // a new person's role is unconfirmed
+    writeJson(join(dir, 'accounts', `${id}.json`), a);
+    audit(dir, { type: 'person_set', accountId: id, by });
+    return out(`Person set for ${a.name}: ${a.person.name}. Their role is unconfirmed. Read the sources in the brief, or run the briefer again for person research, then: outbound account confirm-role --account ${id} --by NAME`);
+  }
+
   if (cmd === 'account' && sub === 'confirm-role') {
     const id = need(flags, 'account'); const by = need(flags, 'by');
     const a = loadAccount(dir, id);
@@ -127,7 +138,10 @@ async function main() {
     const sentCount = c.touches.filter((t) => t.accountId === account.id && t.type === 'touch').length;
     const t = touchFromAccount(account, { channel: need(flags, 'channel'), step: Number(flags.step ?? sentCount + 1), date: flags.date ?? today(), sender: flags.sender ?? c.senders[0]?.id });
     if (sub === 'check') return out(checkTouch(t, c));
-    if (sub === 'record') return out(recordTouch(dir, t, c));
+    if (sub === 'record') {   // the send already happened, so it is always logged; a rule it broke is shown, not used to drop the record
+      const r = recordObservedSend(dir, t, c);
+      return out(r.violations.length ? `RECORDED, but this send broke ${r.violations.length} rule(s). Review before the next touch:\n${r.violations.map((e) => `- ${e.code}: ${e.message}`).join('\n')}` : r.rec);
+    }
   }
 
   if (cmd === 'pilot') {

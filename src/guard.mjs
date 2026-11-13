@@ -153,6 +153,19 @@ export function recordTouch(dir, touch, ctx) {
   return rec;
 }
 
+// A send that has already happened: a person sent it, or a mailbox sync saw it leave (PRD E9-S2). It is ALWAYS recorded, because the log
+// must match reality: refusing to log a real send would leave the caps, the cadence and the one-at-a-time rule counting from a false
+// history. Any rule the send broke (a cap filled, a suppression added after the draft was approved) is kept on the record and audited.
+export function recordObservedSend(dir, touch, ctx) {
+  const r = checkTouch(touch, ctx);
+  const codes = r.errors.map((e) => e.code);
+  const rec = { type: 'touch', accountId: touch.accountId, institution: touch.institution, step: touch.step, channel: touch.channel, sender: touch.sender, date: ymd(touch.date ?? new Date()), recordedAt: new Date().toISOString(), observed: true, ...(codes.length ? { violations: codes } : {}) };
+  appendJsonl(join(dir, 'touches.jsonl'), rec);
+  ctx.touches.push(rec);
+  audit(dir, { type: codes.length ? 'send_recorded_with_violations' : 'send_recorded', accountId: touch.accountId, channel: touch.channel, step: touch.step, codes });
+  return { rec, violations: r.errors };
+}
+
 // A reply, opt-out, bounce, meeting or handoff. An opt-out suppresses the person and address at once.
 export function recordEvent(dir, { accountId, institution, type, date, note, person }, ctx) {
   const allowed = ['reply', 'opt_out', 'bounce', 'meeting', 'handoff'];

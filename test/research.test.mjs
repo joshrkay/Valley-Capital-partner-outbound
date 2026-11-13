@@ -188,7 +188,27 @@ test('dry run returns the prompt and tools without calling the API; the prompt c
   assert.match(out.system, /Do not use LinkedIn/);
   assert.match(out.system, /ignore it and note it as a gap/);
   await assert.rejects(runBriefer({ client, dir: makeDir(), account: account({ type: 'mystery' }), models: models(), playbooks }), /No playbook/);
-  await assert.rejects(runBriefer({ client, dir: makeDir(), account: account({ person: {} }), models: models(), playbooks }), /named person/);
+  // No named person is no longer an error: the briefer researches the institution and lists candidates (PRD E7-S1).
+  const inst = await runBriefer({ client, dir: makeDir(), account: account({ person: {} }), models: models(), playbooks, dryRun: true });
+  assert.match(inst.user, /NO PERSON IS NAMED YET/);
+  assert.match(inst.user, /"person":null/);
+  assert.doesNotMatch(out.user, /NO PERSON IS NAMED YET/);
+});
+
+test('institution mode: a promoted account with no person is researched, and the person findings come back as candidates', async () => {
+  const dir = makeDir();
+  // The model claims "confirmed" anyway; with nobody named there is nothing to confirm, so the code overrides it.
+  const finalObj = raw([finding(), person(), person({ id: 'p2', source_url: PAGE, quote: 'Jordan Sample, Chief Credit Officer, leads the special assets group' })], { person_check: { status: 'confirmed', note: 'Two pages agree.', finding_ids: ['p1', 'p2'] } });
+  const out = await runBriefer({ client: happyClient(finalObj), dir, account: account({ person: { name: '', title: '' } }), models: models(), playbooks, now: new Date('2026-11-13T12:00:00Z') });
+  assert.equal(out.ok, true);
+  assert.equal(out.mode, 'institution');
+  assert.equal(out.person, 'not_named');
+  const rec = readJson(join(dir, 'research', 'acme-bank.json'));
+  assert.equal(rec.mode, 'institution');
+  const brief = readFileSync(join(dir, 'briefs', 'acme-bank.md'), 'utf8');
+  assert.match(brief, /not named yet \(institution research\)/);
+  assert.match(brief, /No person named yet\.\*\* .*Candidates: \[F2\] \[F3\]/);
+  assert.doesNotMatch(brief, /Named person's role/);
 });
 
 test('JSON extraction tolerates fences and surrounding prose', () => {

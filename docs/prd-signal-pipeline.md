@@ -145,7 +145,7 @@ Rules that apply everywhere:
 
 | Entity | Key | Holds | Source | Written by |
 |---|---|---|---|---|
-| `institution` | FDIC `CERT` for banks; an internal id for servicers, funds and counsel | Name, aliases, headquarters state, total assets, community-bank flag, active flag, website | FDIC `/institutions` | E3, E6 |
+| `institution` | FDIC `CERT` for banks; an internal id for servicers, funds and counsel | Name, aliases, headquarters state, total assets, community-bank flag, active flag, website, and verified email `domains`, each with its source (for reply matching, E9-S3) | FDIC `/institutions`; domains from the website address and a principal's confirmation | E3, E6, E9 |
 | `financial_quarter` | `CERT` + `REPDTE` | The Appendix A fields as reported (in thousands of dollars), plus fetch date and run | FDIC `/financials` | E3 |
 | `footprint` | `CERT` + year | Branches per metro; deposits per metro and their share of the bank's total | FDIC `/locations`, `/sod` | E3 |
 | `cmbs_loan` | Trust + loan id | Property type, location, balance, rate, maturity, payment status, special-servicing transfer, servicers (pending the spike) | SEC ABS-EE | E4 |
@@ -200,7 +200,7 @@ Rules that apply everywhere:
   | 29820 | Las Vegas-Henderson-Paradise, NV |
   | 41740 | San Diego-Chula Vista-Carlsbad, CA |
 
-- [ ] Each metro lists its county FIPS codes, for county records and the CMBS location filter **[verify the county list against the Census delineation file]**.
+- [ ] Each metro lists its county FIPS codes, for county records and the CMBS location filter. They come from the Census Bureau's July 2023 delineation file, checked November 13, 2026. A first version taken from FDIC branch records missed Gilpin County, CO, which has no bank branch. Each metro also keeps FDIC's older name (`fdicName`).
 - [ ] Given a source returns a different name for a known code, then the run logs a warning and still matches on the code.
 
 **E0-S3. Readiness in `status`.** *As a principal, I want `outbound status` to show every prerequisite for Release 2 sending so that nothing reaches a mailbox before the setup is right.* P1, R2.
@@ -242,9 +242,9 @@ Every adapter (E3–E5) is built on this shared framework.
 - [ ] Run logs contain counts and ids only. A test fails if a log line contains an email address or a phone number.
 
 **E2-S2. Field check.** *As an operator, I want a run to fail loudly when a requested field doesn't come back so that a renamed or misspelled field can't silently erase a signal.* P0, R1.
-- [ ] Given FDIC drops unknown field names silently (verified), when a requested field is missing from every row returned, then the run fails, names the field, and writes nothing.
-- [ ] A field that is present but empty on some rows is allowed and counted.
-- [ ] A test with a fake response missing one field fails the run.
+- [ ] FDIC drops unknown field names silently, and returns a missing value as an explicit `null` with the key still present. Both were verified live on November 13, 2026. So: **every returned row must contain every requested field as a key.** Given a key is absent from any row, then the run fails, names the field and how many rows lacked it, and writes nothing.
+- [ ] A key that is present with a `null` value is allowed and counted per field.
+- [ ] Tests: a fake response with one row missing one key fails the run; nulls pass and are counted.
 
 **E2-S3. Sources on every record.** *As a principal, I want every stored value to say where it came from so that I can check any number I'm shown.* P0, R1.
 - [ ] Every record carries: source, endpoint and query, the source's own record id, the period it covers, when it was fetched, and the run id.
@@ -360,8 +360,10 @@ Every adapter (E3–E5) is built on this shared framework.
 - [ ] Tiers: **A**, outreach candidate, needs meaningful distress **and** fit (a distressed bank whose paper we don't buy is not a candidate). **B**, watch. Placeholder thresholds per axis.
 
 **E6-S3. A "why now" card.** *As a principal, I want a three-to-five-line summary for each candidate so that I can decide in under a minute.* P0, R1.
-- [ ] Written by a model from the candidate's fact sheet only, with the source text fenced as data.
-- [ ] Code checks that every number and every name in the card appears in the fact sheet. A card that fails is regenerated once. A second failure shows the components with no card.
+- [ ] Built **in code**, with no model. Each sentence comes from one fixed template per signal type or profile fact, filled only with computed values.
+  - Why: a model's card checked only for names and numbers can still invent a judgement ("deterioration accelerated") out of allowed words.
+- [ ] Every sentence carries the ids of the signals or records it states. The same input always gives the same card.
+- [ ] No template can emit the name of a property, borrower or filing.
 - [ ] The card leads with the fit: which category of the bank's paper matches what we buy, and where. It states its period ("as of June 30, 2026") and names no property, borrower or filing.
 
 **E6-S4. Promote, dismiss, snooze.** *As a principal, I want to act on each candidate in one step so that the list reflects my judgment and doesn't keep nagging.* P0, R1.
@@ -404,8 +406,11 @@ Every adapter (E3–E5) is built on this shared framework.
 
 ### E7. Contact finding
 
-**E7-S1. The named person comes from research.** *As a principal, I want the decision-maker at each promoted bank named from sourced research so that the first message reaches the right person.* P0, R3.
-- [ ] Promoted accounts go to the briefer (after the E1 gate). The `bank.people` question names the person, confirmed by two sources, and a principal confirms the role (existing `account confirm-role`).
+**E7-S1. Institution-first research names the candidates.** *As a principal, I want the briefer to research a promoted bank before anyone is named, and to bring back who most likely decides, so that the first message reaches the right person.* P0, **R1** (built).
+- [ ] An account with no named person is researched in **institution mode**. The prompt says no one is named. For `bank.people` it asks for up to three people who most likely decide on loan sales, each a sourced person finding, and forbids guessing a name.
+- [ ] In institution mode the person check reads `not_named` whatever the model says. The brief lists the candidate findings and says a principal chooses.
+- [ ] `outbound account set-person --account ID --name N [--title T] --by NAME` records the choice, with an audit line. It resets the role to unconfirmed. Confirming the role is still a separate step for a principal (`account confirm-role`).
+- [ ] The guard still refuses any touch until a person is named, their role confirmed, and their address verified (existing rules).
 
 **E7-S2. Vendor test before paying.** *As a principal, I want any contact-data vendor tested on 50 people we already know so that we pay for accuracy, not claims.* P1, R3.
 - [ ] A test harness compares each vendor's results against the known list. It reports correct, wrong and missing emails, and whether titles are current.
@@ -422,7 +427,7 @@ Every adapter (E3–E5) is built on this shared framework.
 **E8-S1. A private database.** *As a principal, I want the data in one private database with access control so that it can run on a schedule and be reviewed in a browser, and never touches the repository.* P0, R2.
 - [ ] A private Postgres database (Supabase), with row-level security on every table. Access is limited to named principals, plus a service role for scheduled jobs.
 - [ ] Moving from files is one command and can be re-run safely. Files stay readable until a principal confirms the switch.
-- [ ] Keys live in environment variables or a secret store, never in the repository. The data-rule test also catches SQL dumps and CSV exports.
+- [ ] Keys live in environment variables or a secret store, never in the repository. The data-rule test (`test/repo.test.mjs`) fails on any tracked file under `pilot/`, `candidates/` or a root `sources/`, on run logs, and on any `.sql`, `.csv`, `.tsv`, `.xlsx` or `.dump` file outside `test/fixtures/` (built).
 - [ ] Each entity gets its own schema by design, but only one is built (P2).
 
 **E8-S2. Candidate screen.** *As a principal, I want to filter candidates by metro, sector, tier and signal and open a bank's 8-quarter trend so that I can clear the list in under 30 minutes.* P0, R2.
@@ -448,11 +453,18 @@ Every adapter (E3–E5) is built on this shared framework.
 - [ ] The guard runs again at draft creation (caps, suppression, kill switch). If it refuses, no draft is created.
 
 **E9-S2. Noticing a send.** *As a principal, I want the system to notice when I've sent a draft so that the touch log and cadence are right without me typing a command.* P0, R2.
-- [ ] A sync reads the draft's thread. When it sees the message sent, it records the touch with the actual send date (existing `recordTouch`).
+- [ ] A sync reads the draft's thread. When it sees the message sent, it **always** records the touch with the actual send date, using `recordObservedSend` (built).
+  - The pre-send `recordTouch` refuses a touch the guard rejects. For a send that has already happened, refusing to log it would leave the caps and cadence counting from a false history.
+  - Any rule the send broke (a cap filled, or a suppression added after approval) is kept on the record, audited, and shown to the principal.
+  - `outbound guard record` uses the same function.
 - [ ] Given the principal edited the text in Gmail before sending, then the sent text is linted, and any failure is flagged for review and noted in the audit log. Message text is not stored in the touch log.
 
 **E9-S3. Any reply stops outreach.** *As a principal, I want any reply from anyone at a bank to stop outreach to everyone there immediately so that we never send a next step after someone has answered.* P0, R2.
-- [ ] Inbound mail is matched to accounts by thread, and by sender domain against institution aliases.
+- [ ] Inbound mail is matched to accounts by thread first. Otherwise by sender domain, against the institution's **verified `domains`** list, not its name aliases. Names and DNS domains are different things.
+  - Each domain carries its source.
+  - Personal domains (`config.personalDomains`) never match.
+  - A domain shared by several institutions (a holding company, an affiliate, a shared service provider) goes to a principal for review rather than stopping or missing one institution.
+  - Given a reply from an unknown domain on no known thread, then it is flagged for review and never silently dropped.
 - [ ] Any reply records a `reply` event, which stops outreach across the bank (existing rule).
 - [ ] An opt-out, or anything that reads like one, suppresses the person and the address at once.
 - [ ] Ambiguous mail is treated as a reply and flagged. A bounce records a `bounce` event.
@@ -551,7 +563,7 @@ There are no hard external deadlines. If the principals want the **December 10, 
 
 | Release | Contents | Gate to start the next one |
 |---|---|---|
-| **R1 Know the banks** | E0-S1, E0-S2, E1, E2, E3, E6-S1 to S4, S6, S8, and the FDIC part of S7. Command line only, FDIC data only. | E1 passes (zero fabrications on 10+ accounts); a principal has worked the candidate list for 2 weeks |
+| **R1 Know the banks** | E0-S1, E0-S2, E1, E2, E3, E6-S1 to S4, S6, S8, the FDIC part of S7, and E7-S1 (institution-first research). Command line only, FDIC data only. | E1 passes (zero fabrications on 10+ accounts); a principal has worked the candidate list for 2 weeks |
 | **R2 Review and send from my mailbox** | E4 spike (then build if approved), E5-S1 spike, E6-S5, E8, E9-S1 to S3, E11, E0-S3 | Sending domain authenticated and warmed; a principal named on the site; counsel's answers on G1 |
 | **R3 More signals, more people** | E5-S2 and S3, E7, E9-S4, E10, the remaining P1 stories | Plan section 12, step 4: a clean audit before anything moves past a person approving each touch |
 

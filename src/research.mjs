@@ -31,7 +31,8 @@ export const schemaFor = (kinds) => ({
 
 export function buildPrompt({ account, playbook, playbooks, models, today }) {
   const cfg = models.research;
-  const system = `You are a research analyst preparing a briefing for a principal at Valley Capital Partners, a firm that invests in hospitality, multifamily and retail real estate and buys the properties and the loans secured by them, including non-performing notes. The briefing is about one account and one named person. Nothing you write is sent to anyone. A person reads it, then decides whether and how to make contact.
+  const named = researchMode(account) === 'person';
+  const system = `You are a research analyst preparing a briefing for a principal at Valley Capital Partners, a firm that invests in hospitality, multifamily and retail real estate and buys the properties and the loans secured by them, including non-performing notes. The briefing is about one account and, when one is named, one person. Nothing you write is sent to anyone. A person reads it, then decides whether and how to make contact.
 
 HOW TO RESEARCH
 1. Plan: read the questions you are given and note what the dossier already tells you.
@@ -59,13 +60,16 @@ ${JSON.stringify(schemaFor(playbooks.kinds))}`;
 
   const user = `Today is ${today}.
 
-<dossier>${neutralize({ id: account.id, name: account.name, aliases: account.aliases ?? [], type: account.type, sectors: account.sectors, person: { name: account.person?.name, title: account.person?.title }, notesFromThePrincipals: account.notes ?? '', alreadyKnown: account.knownFacts ?? [] })}</dossier>
+<dossier>${neutralize({ id: account.id, name: account.name, aliases: account.aliases ?? [], type: account.type, sectors: account.sectors, person: named ? { name: account.person.name, title: account.person?.title } : null, notesFromThePrincipals: account.notes ?? '', alreadyKnown: account.knownFacts ?? [] })}</dossier>
 ${pipelineSection(account.pipeline)}
 <questions account_type="${playbook.label}">${neutralize(playbook.questions)}</questions>
-
-Research this account and the named person now. Use the question ids as question_id on each finding.`;
+${named ? '\nResearch this account and the named person now.' : `
+NO PERSON IS NAMED YET. Research the institution. For the people question, find the people who most likely hold the decision on selling loans of the kind this institution holds (at most three), each recorded as a person finding, with two independent sources where you can find them. Do not choose between them and do not guess a name; a principal will choose. Set person_check.status to "unconfirmed" with the note "no person named".`} Use the question ids as question_id on each finding.`;
   return { system, user };
 }
+
+// An account the pipeline promoted has an institution but, usually, no person yet (PRD E7-S1).
+export const researchMode = (account) => (account.person?.name ? 'person' : 'institution');
 
 // PRD E6-S8: what the signal pipeline already found travels with an account it created, so research goes deeper on the right paper.
 // It is context for focus only. Pipeline figures are not findings: a finding still needs a page the agent retrieved.
@@ -90,7 +94,7 @@ const ageDays = (published, now) => {
 };
 const str = (v) => (typeof v === 'string' ? v : '');
 
-export function processFindings({ raw, ledger, playbooks, now = Date.now() }) {
+export function processFindings({ raw, ledger, playbooks, now = Date.now(), mode = 'person' }) {
   const dropped = [];
   const idMap = new Map();
   const findings = [];
@@ -119,6 +123,10 @@ export function processFindings({ raw, ledger, playbooks, now = Date.now() }) {
   let personStatus = ['confirmed', 'unconfirmed', 'conflicting'].includes(pc.status) ? pc.status : 'unconfirmed';
   let personNote = str(pc.note);
   if (personStatus === 'confirmed' && distinctUrls(pcIds) < 2) { personStatus = 'unconfirmed'; personNote = `Downgraded: a role needs two independent verified sources and this run has ${distinctUrls(pcIds)}. ${personNote}`.trim(); }
+  if (mode === 'institution') {   // nobody to confirm: the person findings are candidates for a principal to choose from
+    personStatus = 'not_named';
+    personNote = 'No person was named for this account. The person findings are candidates; a principal chooses one (outbound account set-person), then confirms the role after reading the sources.';
+  }
 
   const rs = raw?.risk_screen ?? {};
   let approach = ['ok', 'wait', 'do_not_approach'].includes(rs.approach) ? rs.approach : 'wait';
@@ -165,10 +173,15 @@ export function renderBrief({ account, today, result, run }) {
   const { findings, gaps, contradictions, riskScreen, personCheck, angle, dropped } = result;
   const L = [];
   const line = (f) => `- **[${f.id}]** ${f.claim} — ${f.publisher || f.source_title || 'source'}${f.published ? `, ${f.published}` : ''} · ${f.evidence_tier} · [link](${f.source_url}) · ${f.status}${f.stale ? ' · STALE' : ''}${f.corroborations > 1 ? ` · ${f.corroborations} sources` : ''}`;
-  L.push(`# Brief: ${account.name}`, '', `**Person:** ${account.person?.name ?? ''}${account.person?.title ? `, ${account.person.title}` : ''} · **Type:** ${account.type} · **Date:** ${today} · **Status:** research only, not for sending`, '');
+  L.push(`# Brief: ${account.name}`, '', `**Person:** ${account.person?.name ? `${account.person.name}${account.person.title ? `, ${account.person.title}` : ''}` : 'not named yet (institution research)'} · **Type:** ${account.type} · **Date:** ${today} · **Status:** research only, not for sending`, '');
   L.push('## Read this first', '');
   L.push(`- **Risk screen: ${riskScreen.approach.toUpperCase().replace(/_/g, ' ')}.** ${riskScreen.reasons.join(' ') || 'No reason to wait was found.'}${riskScreen.finding_ids.length ? ` (${riskScreen.finding_ids.map((i) => `[${i}]`).join(' ')})` : ''}`);
-  L.push(`- **Named person's role: ${personCheck.status}.** ${personCheck.note}${personCheck.finding_ids.length ? ` (${personCheck.finding_ids.map((i) => `[${i}]`).join(' ')})` : ''} A principal confirms the role before any touch (\`outbound account confirm-role\`).`);
+  if (personCheck.status === 'not_named') {
+    const cands = findings.filter((f) => f.kind === 'person');
+    L.push(`- **No person named yet.** ${personCheck.note}${cands.length ? ` Candidates: ${cands.map((f) => `[${f.id}]`).join(' ')}.` : ' The research found no candidate; see Gaps.'}`);
+  } else {
+    L.push(`- **Named person's role: ${personCheck.status}.** ${personCheck.note}${personCheck.finding_ids.length ? ` (${personCheck.finding_ids.map((i) => `[${i}]`).join(' ')})` : ''} A principal confirms the role before any touch (\`outbound account confirm-role\`).`);
+  }
   L.push(`- **Support check:** ${run.auditRan ? 'ran' : 'DID NOT RUN, so no finding is cleared for use in a message'}. **Findings kept:** ${findings.length}. **Dropped for failing verification:** ${dropped.length}.`, '');
   const ctxOnly = (f) => f.use !== 'draft';
   const groups = new Map();
@@ -194,7 +207,7 @@ export async function runBriefer({ client, dir, account, models, playbooks, now 
   safeId(account.id);
   const playbook = playbooks.types[account.type];
   if (!playbook) throw new Error(`No playbook for account type "${account.type}". Types: ${Object.keys(playbooks.types).join(', ')}.`);
-  if (!account.person?.name) throw new Error('The account needs a named person (person.name).');
+  const mode = researchMode(account);
   const today = now.toISOString().slice(0, 10);
   const { system, user } = buildPrompt({ account, playbook, playbooks, models, today });
   if (dryRun) return { dryRun: true, system, user, cfg: models.research };
@@ -214,7 +227,7 @@ export async function runBriefer({ client, dir, account, models, playbooks, now 
     raw = s.data;
   }
 
-  const result = processFindings({ raw, ledger, playbooks, now: now.getTime() });
+  const result = processFindings({ raw, ledger, playbooks, now: now.getTime(), mode });
   const au = await auditSupport({ client, cfg: models.audit, findings: result.findings });
   usage = addUsage(usage, au.usage); costUsd += costOf(au.usage, models.audit.model);
   for (const f of result.findings) {
@@ -227,10 +240,10 @@ export async function runBriefer({ client, dir, account, models, playbooks, now 
   result.findings = result.findings.filter((f) => !f.dropReason);
 
   const run = { queries: ledger.queries, fetches: ledger.fetches, sources: ledger.sources.size, turns: res.turns, usage, costUsd, errors: ledger.errors, auditRan: au.ok };
-  const record = { account: account.id, date: today, model: res.model, personCheck: result.personCheck, riskScreen: result.riskScreen, angle: result.angle, gaps: result.gaps, contradictions: result.contradictions, findings: result.findings, dropped: result.dropped, run: { ...run, sourceList: [...ledger.sources.values()].map((s) => ({ url: s.url, title: s.title, retrievedAt: s.retrievedAt, hadText: s.texts.length > 0 })) } };
+  const record = { account: account.id, date: today, mode, model: res.model, personCheck: result.personCheck, riskScreen: result.riskScreen, angle: result.angle, gaps: result.gaps, contradictions: result.contradictions, findings: result.findings, dropped: result.dropped, run: { ...run, sourceList: [...ledger.sources.values()].map((s) => ({ url: s.url, title: s.title, retrievedAt: s.retrievedAt, hadText: s.texts.length > 0 })) } };
   writeJson(join(dir, 'research', `${account.id}.json`), record);
   writeJson(join(dir, 'facts', `${account.id}.json`), result.findings.map((f) => ({ id: `${account.id}:${f.id}`, kind: f.kind, claim: f.claim, quote: f.quote, url: f.source_url, publisher: f.publisher, published: f.published, tier: f.evidence_tier, use: f.use, asset_specific: f.asset_specific })));
   writeText(join(dir, 'briefs', `${account.id}.md`), renderBrief({ account, today, result, run }));
   audit(dir, { type: 'research_done', accountId: account.id, findings: result.findings.length, dropped: result.dropped.length, draftReady: result.findings.filter((f) => f.use === 'draft').length, costUsd: Math.round(costUsd * 100) / 100 });
-  return { ok: true, findings: result.findings.length, draftReady: result.findings.filter((f) => f.use === 'draft').length, dropped: result.dropped.length, risk: result.riskScreen.approach, person: result.personCheck.status, queries: ledger.queries.length, sources: ledger.sources.size, turns: res.turns, costUsd, auditRan: au.ok };
+  return { ok: true, mode, findings: result.findings.length, draftReady: result.findings.filter((f) => f.use === 'draft').length, dropped: result.dropped.length, risk: result.riskScreen.approach, person: result.personCheck.status, queries: ledger.queries.length, sources: ledger.sources.size, turns: res.turns, costUsd, auditRan: au.ok };
 }

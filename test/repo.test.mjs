@@ -65,6 +65,8 @@ test('DATA RULE: no prospect data file is tracked in git in this repository', ()
   try { files = execFileSync('git', ['ls-files'], { cwd: REPO, encoding: 'utf8' }).split('\n').filter(Boolean); } catch { return; }   // no git: skip
   // `sources/` is anchored to the root because src/sources/ is code; the data folder's sources/ would sit at the root of a misplaced data dir.
   const bad = files.filter((f) => /(^|\/)(suppression\.json|touches\.jsonl|audit\.jsonl|senders\.json|runs\.jsonl|changes\.jsonl|KILL|\.env)$|(^|\/)(accounts|research|briefs|drafts|facts|data|candidates|pilot)\/|^sources\//.test(f));
+  // Database dumps and spreadsheet exports are how prospect data most often leaks. Invented test fixtures may use them under test/fixtures/.
+  bad.push(...files.filter((f) => /\.(sql|csv|tsv|xlsx|dump)$/i.test(f) && !f.startsWith('test/fixtures/')));
   assert.deepEqual(bad, [], 'prospect data must never be committed; it lives in OUTBOUND_DATA_DIR outside the repo');
 });
 
