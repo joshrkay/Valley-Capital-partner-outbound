@@ -1,0 +1,21 @@
+{
+  "name": "valley-outbound-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The principals' web app for the outbound platform (PRD E12-S5). Private. Nothing here can send a message.",
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@supabase/ssr": "0.12.7",
+    "@supabase/supabase-js": "2.118.0",
+    "next": "16.4.3",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  }
+}
