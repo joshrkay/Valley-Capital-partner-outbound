@@ -114,3 +114,20 @@ test('the job queue: principals queue, only the worker claims and finishes, and 
   must(as('service_role', SERVICE, `select finish_job(${id}, true, '{"banks": 268}')`));
   assert.equal(must(as('authenticated', PAT, `select status || ' ' || (result->>'banks') from jobs where id = ${id}`)), 'done 268');
 });
+
+test('no caller can run an internal function directly, even with Supabase\'s default grants on new functions', { skip }, () => {
+  const item = { key: 'fdic:9', name: 'Sneaky', tier: 'A', score: 99, axes: {}, metros: [], sectors: [], filtersFailed: [] };
+  for (const [role, who] of [['authenticated', PAT], ['authenticated', STRANGER], ['anon', {}]]) {
+    const r = as(role, who, `select project_candidates(${lit(JSON.stringify({ runId: 'x', items: [item] }))})`);
+    assert.equal(r.ok, false, `${role} ${who.email ?? ''} ran project_candidates`);
+    assert.match(r.err, /permission denied/);
+  }
+  assert.equal(must(as('authenticated', PAT, `select count(*) from candidates where key = 'fdic:9'`)), '0');
+  assert.equal(as('anon', {}, 'select * from claim_job()').ok, false);
+});
+
+test('only the reading grants Supabase gives by default survive: no API role can write a table directly', { skip }, () => {
+  const out = must(psql(`select string_agg(grantee || ':' || privilege_type, ',' order by grantee, privilege_type) from information_schema.role_table_grants
+    where table_schema = 'public' and table_name = 'documents' and grantee in ('anon', 'authenticated')`));
+  assert.equal(out, 'authenticated:SELECT');
+});

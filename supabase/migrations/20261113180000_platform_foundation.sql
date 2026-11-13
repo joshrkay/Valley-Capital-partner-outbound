@@ -198,10 +198,12 @@ revoke all on public.principals, public.documents, public.log_lines, public.cand
 grant select on public.principals, public.documents, public.log_lines, public.candidates, public.jobs to authenticated;
 revoke all on sequence public.log_lines_id_seq, public.jobs_id_seq from anon, authenticated;
 
--- Functions are executable by PUBLIC by default in Postgres; take that away, then grant only what each caller needs.
+-- Functions are executable by PUBLIC by default in Postgres, and Supabase also grants every new function to anon, authenticated and
+-- service_role by default. Take all of that away, then grant back only what each caller needs. project_candidates gets no grant at
+-- all: it runs only inside flush_uow, so no caller can rewrite the candidate table directly.
 revoke execute on function public.jwt_claims(), public.is_service(), public.caller_email(), public.is_principal(),
   public.project_candidates(jsonb), public.flush_uow(jsonb), public.enqueue_job(text, jsonb), public.claim_job(),
-  public.finish_job(bigint, boolean, jsonb) from public, anon;
+  public.finish_job(bigint, boolean, jsonb) from public, anon, authenticated, service_role;
 grant execute on function public.jwt_claims(), public.is_service(), public.caller_email(), public.is_principal() to authenticated, service_role;
 grant execute on function public.flush_uow(jsonb), public.enqueue_job(text, jsonb) to authenticated, service_role;
 grant execute on function public.claim_job(), public.finish_job(bigint, boolean, jsonb) to service_role;
