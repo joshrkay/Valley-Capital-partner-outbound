@@ -60,11 +60,26 @@ ${JSON.stringify(schemaFor(playbooks.kinds))}`;
   const user = `Today is ${today}.
 
 <dossier>${neutralize({ id: account.id, name: account.name, aliases: account.aliases ?? [], type: account.type, sectors: account.sectors, person: { name: account.person?.name, title: account.person?.title }, notesFromThePrincipals: account.notes ?? '', alreadyKnown: account.knownFacts ?? [] })}</dossier>
-
+${pipelineSection(account.pipeline)}
 <questions account_type="${playbook.label}">${neutralize(playbook.questions)}</questions>
 
 Research this account and the named person now. Use the question ids as question_id on each finding.`;
   return { system, user };
+}
+
+// PRD E6-S8: what the signal pipeline already found travels with an account it created, so research goes deeper on the right paper.
+// It is context for focus only. Pipeline figures are not findings: a finding still needs a page the agent retrieved.
+export function pipelineSection(pipeline) {
+  if (!pipeline) return '';
+  const ctx = {
+    period: pipeline.period, tier: pipeline.tier, leadSector: pipeline.leadSector ?? null, leadSectorOptions: pipeline.leadSectorOptions ?? [],
+    signals: (pipeline.signals ?? []).map((s) => ({ type: s.type, label: s.label, period: s.period })), profile: pipeline.profile ?? null,
+  };
+  return `
+<pipeline_context source="FDIC Call Report data, computed and checked in code" period="${neutralize(String(pipeline.period ?? ''))}">${neutralize(ctx)}</pipeline_context>
+
+The pipeline context is what public Call Report data says about this institution's commercial real estate book: which categories it holds and how distressed each is. Use it to focus. For bank.exposure, look first for the institution's own disclosures about the categories flagged there (credit-quality tables in filings, earnings remarks, investor presentations), including any breakout of hotel or retail loans, which the Call Report does not separate. For bank.intent, look for stated plans to sell, reduce or exit loans in those categories. Do not copy pipeline figures into findings; a finding needs a page you retrieved.
+`;
 }
 
 // ---- Turning the model's answer into verified findings (pure: no network) ----------------------------------------------------------

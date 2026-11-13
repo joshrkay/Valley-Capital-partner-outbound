@@ -4,6 +4,38 @@
 
 **Readers:** the principals, who decide, and whoever builds it, including Claude Code sessions.
 
+## 0. The end goal
+
+**Purposeful outreach to the right person, at the right time, backed by research into what paper the institution holds, what those loans look like, and where the firm has an advantage.** Everything in this PRD serves that one goal. Each part either moves outreach closer to it or protects it. A part that does neither is out of scope.
+
+The goal is a chain. A weak link breaks it:
+
+| Link | The question | What answers it | Epics |
+|---|---|---|---|
+| 1. **The paper** | What loans does this institution likely hold, how distressed are they, and in which categories and metros? | The **paper profile**: FDIC category balances and distress stages over 8 quarters, deposit footprint, and, for servicers, loan-level CMBS data | E3, E4, E6-S6 |
+| 2. **The advantage** | Is that paper what we buy, where we buy it, from a seller we can deal with directly? | **Fit**: the buy box matched against the profile, plus the advantage signals in E6-S7 | E0, E6-S2, E6-S7 |
+| 3. **The time** | Why now and not last quarter? | **Timing** signals: a new quarter, early delinquencies turning into noncurrent loans, first charge-offs, the quarter-end review windows | E3-S4, E10 |
+| 4. **The institution** | Which institutions rank highest on paper, advantage and timing together? | The candidate list, with a principal deciding | E6 |
+| 5. **The person** | Who decides whether that paper is sold? | The briefer, sourced, confirmed by a principal | E1, E7 |
+| 6. **The message** | What does a short, accurate first touch say? | The drafter: approved claims only, matched to the paper's sector, checked in code | Existing agent 3, E6-S8 |
+| 7. **The send** | How does it reach them without burning the name? | A principal's own mailbox, caps, stop on reply | E9 |
+| 8. **Learning** | Which signals led to conversations and loan tapes? | Outcomes linked back to signals | Goal 5, E11 |
+
+**What public data can and cannot say about the paper.** It should be read honestly, so no one over-trusts it:
+
+- **Bank Call Reports** give balances and distress stages by **category**: construction, multifamily, and nonfarm nonresidential, split into owner-occupied and other. They do not show individual loans, hotel or retail separately, loan sizes, or maturities. A bank's paper profile is an informed inference, not a loan tape.
+- **Public banks' 10-K and 10-Q filings** sometimes break out hotels, retail and loan sizes. The briefer reads these (`bank.exposure`).
+- **CMBS loan-level data** (E4) is the one free public source that shows individual loans: property type, location, balance, maturity and special-servicing status. It describes servicers' paper, not banks'.
+- **County filings** (E5) show individual distressed assets and the lender behind each. They are context for a principal only.
+- The actual loan tape comes from the conversation the outreach opens, after a confidentiality agreement. That conversation is the point of all of this.
+
+**Where the research goes, and where it does not.** The paper profile, the fit and the signals go to the principal and the briefer. They choose who to approach, when, and which of the firm's sectors to lead with. **They never appear in the message.** A message says "we buy multifamily loans from banks in Phoenix". It never says "your multifamily non-accruals rose". Two reasons:
+
+- Telling a bank what we see in its numbers reads as a pitch by a predator, which the voice guide forbids.
+- Every bank figure is a risk fact that the drafter is already barred from using.
+
+The research makes the message well aimed. It does not make it about the recipient's problems.
+
 ## 1. Problem
 
 Valley Capital buys commercial real estate loans, and sometimes the properties behind them, from banks, special servicers and funds. The people who decide whether a loan is sold are few, they know each other, and they hear from buyers constantly. The agents in this repository can research an institution and draft a first message once a principal has chosen it. Choosing, though, is done from memory: nothing tells the firm which institutions in its six metros are under pressure right now. Without that layer, outreach either stays inside the principals' existing contacts or becomes a broadcast. A broadcast costs the firm its name with exactly the people it needs.
@@ -319,12 +351,18 @@ Every adapter (E3–E5) is built on this shared framework.
 - [ ] Each candidate shows its components, each with its field, report date and value.
 - [ ] The same inputs always give the same score. A test covers it.
 - [ ] Hard filters from the buy box and size apply before scoring. By default, total assets under $10 billion, matching the direct-sale route; `ASSET` is in thousands. Banks that fail a filter get no tier.
-- [ ] Tiers: **A**, outreach candidate, and **B**, watch, by placeholder thresholds.
+- [ ] Every component belongs to one **axis**:
+  - **distress**: is the institution under pressure?
+  - **fit**: is its likely paper what we buy, where we buy it?
+  - **timing**: why now?
+
+  Each candidate shows a subtotal per axis.
+- [ ] Tiers: **A**, outreach candidate, needs meaningful distress **and** fit (a distressed bank whose paper we don't buy is not a candidate). **B**, watch. Placeholder thresholds per axis.
 
 **E6-S3. A "why now" card.** *As a principal, I want a three-to-five-line summary for each candidate so that I can decide in under a minute.* P0, R1.
 - [ ] Written by a model from the candidate's fact sheet only, with the source text fenced as data.
 - [ ] Code checks that every number and every name in the card appears in the fact sheet. A card that fails is regenerated once. A second failure shows the components with no card.
-- [ ] The card states its period ("as of June 30, 2026") and names no property, borrower or filing.
+- [ ] The card leads with the fit: which category of the bank's paper matches what we buy, and where. It states its period ("as of June 30, 2026") and names no property, borrower or filing.
 
 **E6-S4. Promote, dismiss, snooze.** *As a principal, I want to act on each candidate in one step so that the list reflects my judgment and doesn't keep nagging.* P0, R1.
 - [ ] Command line first: `outbound candidates list|show|promote|dismiss|snooze`.
@@ -336,6 +374,31 @@ Every adapter (E3–E5) is built on this shared framework.
 **E6-S5. Weekly digest.** *As a principal, I want one weekly summary so that I don't have to remember to look.* P1, R2.
 - [ ] It lists new candidates, tier changes, a newly published FDIC quarter, and runs that failed or look suspect.
 - [ ] It is written to the data folder. How it is delivered to the principal is an open question (Q13). It goes only to the firm's own people, never to a prospect.
+
+**E6-S6. The paper profile.** *As a principal, I want to see what paper an institution likely holds, how distressed each part of it is, and where it lends, so that I approach it knowing what it probably has to sell.* P0, R1.
+- [ ] Each candidate carries a profile, computed in code. For each CRE category (construction, multifamily, nonfarm nonresidential, with owner-occupied and other shown separately where the fields allow), it shows:
+  - balance and share of the CRE book;
+  - each stage of distress: 30–89 days, 90+ days, nonaccrual, noncurrent, OREO, quarterly charge-offs;
+  - the direction over 4 quarters;
+  - whether the buy box buys that category in the bank's metros.
+- [ ] The profile also shows the metro footprint: branches and share of deposits by metro.
+- [ ] Every number carries its field and report date.
+- [ ] The profile says plainly what the data cannot show: hotel and retail are inside nonfarm nonresidential, and there are no loan sizes, maturities or individual loans.
+
+**E6-S7. Advantage signals.** *As a principal, I want to see where we have an edge with an institution so that we spend outreach where we can win, not just where there is distress.* P1, R1 for FDIC-derived signals, R2 for the rest.
+- [ ] Signals that suggest a direct, less contested sale, each shown with its evidence:
+  - assets under the direct-sale threshold, so the bank is more likely to sell without an advisor (FDIC; R1);
+  - a CRE book concentrated in the categories and metros we buy (FDIC; R1);
+  - a regulatory order that pushes the bank to reduce problem assets (the briefer's `bank.regulatory`);
+  - no loan sale advisor found (`bank.access`);
+  - the bank has sold loans before (`bank.intent`).
+- [ ] An advantage signal never overrides the risk screen. An active sale run by an advisor, or a failing bank, still means wait or do not approach.
+
+**E6-S8. The research travels with the account.** *As a principal, I want the briefer and the drafter to start from what the pipeline already found so that research goes deeper on the right paper and the message leads with the right sector.* P0, R1.
+- [ ] Promoting a candidate copies its profile, fit, signals and period into the account file (`pipeline` block).
+- [ ] The briefer's prompt includes that block as data. It focuses `bank.exposure` and `bank.intent` on the matching categories, for example: "look for multifamily credit-quality disclosures and any stated plan to sell multifamily loans".
+- [ ] The drafter receives only which **sector** to lead with and which approved site page to link. A test confirms the drafter's input contains no FDIC figure, no ratio and no signal text.
+- [ ] Given a draft that mentions the bank's own figures, distress or trend, then the existing linter blocks it.
 
 ---
 
@@ -488,7 +551,7 @@ There are no hard external deadlines. If the principals want the **December 10, 
 
 | Release | Contents | Gate to start the next one |
 |---|---|---|
-| **R1 Know the banks** | E0-S1, E0-S2, E1, E2, E3, E6-S1 to S4. Command line only, FDIC data only. | E1 passes (zero fabrications on 10+ accounts); a principal has worked the candidate list for 2 weeks |
+| **R1 Know the banks** | E0-S1, E0-S2, E1, E2, E3, E6-S1 to S4, S6, S8, and the FDIC part of S7. Command line only, FDIC data only. | E1 passes (zero fabrications on 10+ accounts); a principal has worked the candidate list for 2 weeks |
 | **R2 Review and send from my mailbox** | E4 spike (then build if approved), E5-S1 spike, E6-S5, E8, E9-S1 to S3, E11, E0-S3 | Sending domain authenticated and warmed; a principal named on the site; counsel's answers on G1 |
 | **R3 More signals, more people** | E5-S2 and S3, E7, E9-S4, E10, the remaining P1 stories | Plan section 12, step 4: a clean audit before anything moves past a person approving each touch |
 
@@ -577,10 +640,17 @@ Record shapes:
 - **Candidate** =
   ```
   { key: "fdic:<CERT>", cert, name, metros: ["<cbsa>"], assets, tier: "A"|"B"|null, score, filtersFailed: [string],
-    components: [{ id, label, value, weight, points, inputs: [{ field, repdte, value }] }],
+    axes: { distress, fit, timing },
+    profile: { categories: [...], footprint: {...}, limits: [string] },   // E6-S6, the paper profile
+    components: [{ id, axis, label, value, weight, points, inputs: [{ field, repdte, value }] }],
     signals: [{ id, type, label, period, evidence: ["fdic:<CERT>:<REPDTE>"] }],
     card: { text, checked } | null, latestRepdte }
   ```
+- **Account `pipeline` block** (E6-S8), written on promotion:
+  ```
+  { key, period, tier, axes, profile, signals, leadSector }
+  ```
+  The briefer reads all of it as data. The drafter reads only `leadSector`.
 
 ## Appendix B. Sources
 
