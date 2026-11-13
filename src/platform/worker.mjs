@@ -39,7 +39,10 @@ export async function runJob({ client, job, rules, deps = {} }) {
     }
     case 'sources.filings': {   // the SEC filings listener (PRD E13-S1); refused while config.sec.userAgent is a placeholder
       const { result } = await client.unitOfWork(LOADS.sources, (dir) => runFilings({ dir, sec: rules.config.sec, rules: rules.filings ?? loadFilingRules(), since: p.since, fetchImpl: deps.fetchImpl ?? globalThis.fetch, now: deps.now?.() ?? new Date(), ...(deps.sleep ? { sleep: deps.sleep } : {}) }), { retries: 0 });
-      return { ok: result.outcome !== 'failed', summary: { outcome: result.outcome, filers: result.filers, requests: result.requests, hitsRead: result.hitsRead, filings: result.filings, filingsNew: result.filingsNew, proxies: result.proxies, discovered: result.discovered, changed: result.changed, notes: result.notes, missingFields: result.missingFields } };
+      // Done only on `ok`, unlike the FDIC and CMBS jobs above. Their records are state that the next run reads again, so a suspect
+      // run there is mended by the next one. The listener records events and its window moves past a suspect run, which no later
+      // run searches again; so a suspect run fails the job and turns the scheduled workflow red (PRD E11-S2).
+      return { ok: result.outcome === 'ok', summary: { outcome: result.outcome, filers: result.filers, requests: result.requests, hitsRead: result.hitsRead, filings: result.filings, filingsNew: result.filingsNew, proxies: result.proxies, discovered: result.discovered, changed: result.changed, notes: result.notes, missingFields: result.missingFields } };
     }
     case 'score.run': {
       const { result } = await client.unitOfWork(LOADS.score, (dir) => runScoring({ dir, buybox: rules.buybox, scoring: rules.scoring, metros: rules.metros, allowPlaceholders: !!p.draftBuybox, now: deps.now?.() ?? new Date() }));

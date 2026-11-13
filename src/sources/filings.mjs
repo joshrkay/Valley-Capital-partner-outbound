@@ -71,17 +71,20 @@ const chunks = (a, n) => { const out = []; for (let i = 0; i < a.length; i += n)
 const uniq = (a) => [...new Set(a)].sort();
 
 // ---- The run -------------------------------------------------------------------------------------------------------------------
-// `since` (YYYY-MM-DD) searches every confirmed filer from that date. Without it, a run starts `overlapDays` before the last run
-// ended (the index can lag a filing by a day or more), or `lookbackDays` back on a first run; a filer never searched before is
-// searched `backfillDays` back, so a new mapping brings its recent history. Any failed search fails the whole run, writes nothing
-// but the run-log line, and leaves the window where it was, so the next run covers it again.
+// `since` (YYYY-MM-DD) searches every confirmed filer from that date. Without it, each filer starts `overlapDays` before the day it
+// was last searched to (the index can lag a filing by a day or more). That day is the filer's own, so a filer left unconfirmed
+// while other runs moved on is searched over the gap when it is confirmed again. A filer never searched before is searched
+// `backfillDays` back, so a new mapping brings its recent history. The discovery search starts `overlapDays` before the last run
+// ended, or `lookbackDays` back on a first run. Any failed search, or any response the run cannot trust (efts.mjs refuses one with
+// no echo or a mismatched one; here, a short read or a hit that does not match its request), fails the whole run, writes nothing
+// but the run-log line, and leaves every window where it was, so the next run covers it again.
 export async function runFilings({ dir, sec, rules = loadFilingRules(), fetchImpl = globalThis.fetch, now = new Date(), clock = () => new Date(), sleep = realSleep, since }) {
   const client = eftsClient({ sec, fetchImpl, sleep });   // refuses a placeholder User-Agent, as the CMBS run does
   const ruleErrors = validateFilingRules(rules);
   if (ruleErrors.length) throw new Error(`filings.json: ${ruleErrors.join('; ')}`);
   const today = ymd(now);
-  if (since !== undefined && since !== null && since !== true) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(since)) || Number.isNaN(Date.parse(`${since}T00:00:00Z`))) throw new Error('--since must be a date: YYYY-MM-DD.');
+  if (since !== undefined && since !== null) {   // a bare --since arrives as true: refused, never run as the normal window
+    if (since === true || !/^\d{4}-\d{2}-\d{2}$/.test(String(since)) || Number.isNaN(Date.parse(`${since}T00:00:00Z`))) throw new Error('--since must be a date: YYYY-MM-DD.');
     if (since > today) throw new Error(`--since ${since} is after today (${today}).`);
   } else since = null;
 
@@ -91,18 +94,23 @@ export async function runFilings({ dir, sec, rules = loadFilingRules(), fetchImp
   const ciks = [...byCik.keys()].sort();
   const start = since ?? (state.window?.end ? addDays(state.window.end, -rules.overlapDays) : addDays(today, -rules.lookbackDays));
   const searchedFrom = { ...(state.searchedFrom ?? {}) };
+  // The day each filer was last searched to, moved only when it is searched. State written before this was kept falls back to
+  // the window's end for a filer searched before.
+  const searchedTo = { ...(state.searchedTo ?? {}) };
+  const lastTo = (c) => searchedTo[c] ?? (searchedFrom[c] ? state.window?.end : undefined);
   const backfill = addDays(today, -rules.backfillDays);
-  const groups = (since
-    ? [{ startdt: since, ciks }]
-    : [{ startdt: start, ciks: ciks.filter((c) => searchedFrom[c]) }, { startdt: backfill < start ? backfill : start, ciks: ciks.filter((c) => !searchedFrom[c]), backfill: true }]
-  ).filter((g) => g.ciks.length);
+  const newStart = backfill < start ? backfill : start;
+  const startOf = (c) => since ?? (lastTo(c) ? addDays(lastTo(c), -rules.overlapDays) : newStart);
+  const groups = [...Map.groupBy(ciks, startOf)].map(([startdt, cs]) => ({ startdt, ciks: cs })).sort((a, b) => (a.startdt < b.startdt ? 1 : -1));
+  const newFilers = since ? [] : ciks.filter((c) => !lastTo(c));
+  const resumed = since ? [] : ciks.filter((c) => lastTo(c) && startOf(c) < start);
   const searchById = Object.fromEntries(rules.searches.map((s) => [s.id, s]));
   const run = startRun({ source: 'filings', query: { searches: Object.keys(searchById).sort(), discovery: { states: rules.discovery.states, sics: rules.discovery.sics, searches: rules.discovery.searches }, proxies: rules.proxies.forms }, now });
   const fetchedAt = now.toISOString();
   const notes = [`window ${start} to ${today}`];
-  const counts = { filers: ciks.length, newFilers: groups.find((g) => g.backfill)?.ciks.length ?? 0, requests: 0, searches: 0, hitsRead: 0, retried: 0, dropped: 0, filings: 0, filingsNew: 0, proxies: 0, proxiesNew: 0, discovered: 0, discoveredNew: 0 };
+  const counts = { filers: ciks.length, newFilers: newFilers.length, requests: 0, searches: 0, hitsRead: 0, retried: 0, dropped: 0, filings: 0, filingsNew: 0, proxies: 0, proxiesNew: 0, discovered: 0, discoveredNew: 0 };
   const missing = {}, nullCounts = {};
-  let suspect = false, echoMissing = 0, short = 0;
+  let suspect = false, short = 0;
   const log = [];
 
   // Identical requests (the two 8-K item searches send the same one) are fetched once.
@@ -111,7 +119,7 @@ export async function runFilings({ dir, sec, rules = loadFilingRules(), fetchImp
     const k = JSON.stringify(asked);
     if (!memo.has(k)) {
       const res = await search({ client, cacheWaitMs: rules.cacheWaitMs, ...asked });
-      counts.searches++; counts.hitsRead += res.read; counts.retried += res.retried; counts.dropped += res.dropped; echoMissing += res.echoMissing; if (res.short) short++;
+      counts.searches++; counts.hitsRead += res.read; counts.retried += res.retried; counts.dropped += res.dropped; if (res.short) short++;
       for (const [f, n] of Object.entries(res.missing)) missing[f] = (missing[f] ?? 0) + n;
       for (const [f, n] of Object.entries(res.nulls)) nullCounts[f] = (nullCounts[f] ?? 0) + n;
       memo.set(k, res);
@@ -168,7 +176,18 @@ export async function runFilings({ dir, sec, rules = loadFilingRules(), fetchImp
       return { runId: run.runId, outcome: line.outcome, ...counts, missingFields: names, errors: line.errors };
     }
 
-    // 5. Records, merged into what is stored. Events are kept: a search that matched before stays on the record.
+    // 5. Every response must be the whole answer to its own request, before anything is written. A short read or a hit that does
+    // not match its request could hide a filing, and the window would then move past it for good. So the run fails instead.
+    const untrusted = [
+      ...(short ? [`${short} search(es) returned fewer hits than the total they reported`] : []),
+      ...(counts.dropped ? [`${counts.dropped} hit(s) did not match their own request (a cached answer to another query?)`] : []),
+    ];
+    if (untrusted.length) {
+      const line = finishRun(dir, run, { rowsRead: counts.hitsRead, outcome: 'failed', errors: [`${untrusted.join('; ')}. Nothing was written, and the window stays where it was.`], notes, nullCounts, now: clock() });
+      return { runId: run.runId, outcome: line.outcome, ...counts, errors: line.errors };
+    }
+
+    // 6. Records, merged into what is stored. Events are kept: a search that matched before stays on the record.
     const main = (hits) => hits.find((h) => h.sequence === '1') ?? hits[0];
     const docs = (hits) => uniq(hits.filter((h) => h.document).map((h) => `${h.document}|${h.fileType ?? ''}`)).map((x) => { const [name, type] = x.split('|'); return { name, type: type || null }; });
     const src = (acc, m, query) => sourceBlock({ source: 'filings', endpoint: EFTS, query, recordId: acc, period: m.fileDate, fetchedAt, runId: run.runId });
@@ -211,18 +230,16 @@ export async function runFilings({ dir, sec, rules = loadFilingRules(), fetchImp
         kind: 'for_review', contextOnly: true, _source: src(acc, m, { ...x.query, states: rules.discovery.states, sics: rules.discovery.sics }) }];
     }), 'discovered');
 
-    // 6. Write, then the state the next run starts from.
-    for (const g of groups) for (const c of g.ciks) if (!searchedFrom[c] || g.startdt < searchedFrom[c]) searchedFrom[c] = g.startdt;
+    // 7. Write, then the state the next run starts from. Only the filers searched now move on; one unconfirmed keeps its dates.
+    for (const c of ciks) { if (!searchedFrom[c] || startOf(c) < searchedFrom[c]) searchedFrom[c] = startOf(c); searchedTo[c] = today; }
     writeJson(p.filings, filings);
     writeJson(p.proxies, proxies);
     writeJson(p.discovery, discovery);
-    writeJson(p.state, { lastRun: run.runId, ranAt: fetchedAt, window: { start, end: today }, searchedFrom, counts, searches: log });
+    writeJson(p.state, { lastRun: run.runId, ranAt: fetchedAt, window: { start, end: today }, searchedFrom, searchedTo, counts, searches: log });
     if (!ciks.length) { suspect = true; notes.push('no confirmed filers: the saved searches covered no bank. Run: outbound filers suggest, then confirm'); }
-    if (echoMissing) { suspect = true; notes.push(`${echoMissing} response(s) carried no query echo, so they could not be matched to their request`); }
-    if (short) { suspect = true; notes.push(`${short} search(es) returned fewer hits than the total they reported`); }
-    if (counts.dropped) { suspect = true; notes.push(`${counts.dropped} hit(s) did not match their own request and were dropped (a cached answer to another query?)`); }
     if (counts.retried) notes.push(`${counts.retried} response(s) did not match the request at first and were fetched again after the cache expired`);
-    if (counts.newFilers) notes.push(`${counts.newFilers} filer(s) searched for the first time, back to ${groups.find((g) => g.backfill).startdt}`);
+    if (newFilers.length) notes.push(`${newFilers.length} filer(s) searched for the first time, back to ${newStart}`);
+    if (resumed.length) notes.push(`${resumed.length} filer(s) not searched by the last run resumed from their own last search, back to ${resumed.map(startOf).sort()[0]}`);
     const written = counts.filingsNew + counts.proxiesNew + counts.discoveredNew;
     const line = finishRun(dir, run, { rowsRead: counts.hitsRead, rowsWritten: written, rowsChanged: changed, outcome: 'ok', suspect, notes, nullCounts, now: clock() });
     return { runId: run.runId, outcome: line.outcome, window: { start, end: today }, ...counts, changed, notes: notes.length };
@@ -347,8 +364,9 @@ export async function verifyFilings({ dir, sec, rules = loadFilingRules(), fetch
     const lost = results.filter((r) => !r.ok);
     checks.push(check('filings.recall', !lost.length, !results.length ? 'Nothing stored yet to search for again.' : lost.length ? `${lost.length} of ${results.length} stored filings did not come back when searched for again.` : `${results.length} stored filing(s) searched for again on their filer and date: every one came back.`, { filings: results }));
 
+    // Every confirmed CIK, one lookup each, paced by the client like every other request: the check speaks for all of them.
     const gone = [], renamed = [];
-    for (const cik of [...byCik.keys()].sort().slice(0, 100)) {
+    for (const cik of [...byCik.keys()].sort()) {
       try {
         const e = (await lookupEntities({ client, text: String(Number(cik)) })).find((x) => x.cik === cik);
         if (!e) { gone.push(cik); continue; }

@@ -696,7 +696,8 @@ Some sources report a dated change rather than a state: a filing, a notice, an o
   - Every body is checked.
   - Every response's echo is compared with its request, and every hit is filtered again on its own fields.
   - 8-K items are matched on the hits, never sent to the server.
-  - A mismatched response is fetched again after the cache expires. A window of over 10,000 hits is split.
+  - A response with no echo counts as mismatched: the hits carry no text, so only the echo confirms the phrases.
+  - A mismatched response is fetched again after the cache expires, then fails the run. A window of over 10,000 hits is split.
 - [x] **Saved searches** live in `filings.json`. Each has an id, a label, forms, and phrases or 8-K items:
   - 8-K Items 2.01 and 2.06;
   - "transferred to held for sale", "loans held for sale", "loan sale" and "note sale", each with "commercial real estate";
@@ -712,7 +713,7 @@ Some sources report a dated change rather than a state: a filing, a notice, an o
   - It is stored once per filing, de-duplicated on the accession number. It is kept when a later run no longer sees it.
   - Each carries the search ids, form, 8-K items, file date, accession number, a link to the filing index, and the bank key.
   - `filingSignals({ dir })` returns them by bank key. A filing belongs to a bank only while its filer is confirmed.
-- [x] A new filer is searched back a year, once. Later runs start three days before the last one ended. `--since` searches every filer from a date.
+- [x] A new filer is searched back a year, once. Later runs start each filer three days before the day it was last searched to. So a filer left unconfirmed while other runs moved on is searched over the gap once it is confirmed again. `--since DATE` searches every filer from a date; a bare `--since` is refused.
 - [x] Proxy statements (DEF 14A) of confirmed filers are recorded by form, date and link, for the briefer. No names are extracted (E7).
 - [x] **A discovery search** finds bank filers not in the list. It searches by business-address state (our five) and bank SIC code. Its hits go to a for-review list (`outbound filers discovered`) and never become signals.
 - [x] **Into scoring:** each filing becomes an event signal on its bank's candidate (`detectFilingSignals` in `src/score.mjs`). It is shown while its file date is within `scoring.json` `filings.windowDays` (placeholder: 180), and stated on the card from a fixed template. It adds no points until a principal decides how filings should count.
@@ -720,10 +721,11 @@ Some sources report a dated change rather than a state: a filing, a notice, an o
   - a fake shaped like the real responses (`test/edgar-search-fake.mjs`);
   - the run log;
   - a field check on every field used: a missing one fails the run and writes nothing;
+  - a short read (fewer hits than the reported total), or a hit that does not match its request, fails the run too. Nothing is written and the window stays where it was, because the listener's window never comes back to a day it has passed;
   - the change log;
-  - `outbound sources verify filings`: fresh, mapped, sourced, stored filings found again, confirmed filers still SEC entities.
+  - `outbound sources verify filings`: fresh, mapped, sourced, stored filings found again, every confirmed filer still an SEC entity.
 - [x] Filings are context for a principal only. The search returns no filing text, and none is stored. A test proves no filing, link, CIK, label or person reaches the drafter.
-- [x] Worker job `sources.filings` (migration `20261113213000_jobs_filings.sql`). The workflow queues it on weekdays at 23:37 UTC, then verifies it.
+- [x] Worker job `sources.filings` (migration `20261113213000_jobs_filings.sql`). The workflow queues it on weekdays at 23:37 UTC, then verifies it. A `suspect` run fails the job, unlike the FDIC and CMBS jobs: their next run reads the same state again, but the listener's window has moved past a suspect run.
 - [x] **First live run (2026-11-13).** It used a scratch folder, a neutral User-Agent and throwaway mappings:
   - Suggestions for 30 banks: 41 candidates for 15 banks, from 30 lookups.
   - 18 of the 22 exact-name candidates had filed no 10-K or 10-Q in over a year: same-named entities that do not report. So filing evidence outranks the name.
