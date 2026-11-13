@@ -178,6 +178,7 @@ Rules that apply everywhere:
 | E10 Quarterly follow-up and nurture | R3 | P1 | E9 |
 | E11 Scheduling, monitoring and cost | R2 | P0 | E8 |
 | E12 Platform foundation | R2 | P0 | E1–E6 (built) |
+| E13 Event listeners | R2 | P1 | E2, E3, E12 |
 
 ---
 

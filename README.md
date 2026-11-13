@@ -136,7 +136,7 @@ What was checked live on 2026-11-13 is written at the top of `src/sources/efts.m
 
 So every response is matched to its request before it is used.
 
-On the platform, the job is `sources.filings`. The worker workflow queues it on weekdays at 23:37 UTC, then verifies it.
+On the platform, the job is `sources.filings`. The worker workflow queues it on weekdays at 23:37 UTC, then verifies it. That schedule stays off until a principal has filled `config.sec.userAgent`, confirmed at least one filer, and set the repository variable `FILINGS_ENABLED` to `true`. Until then the run would fail its own checks every day and hide real failures.
 
 ### Checking the scrapers
 

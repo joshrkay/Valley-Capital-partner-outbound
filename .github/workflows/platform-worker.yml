@@ -9,7 +9,9 @@ on:
     - cron: '17 12-23 * * 1-5'   # hourly on weekdays, 12:17 to 23:17 UTC: run whatever is queued
     - cron: '41 13 * * 1'        # Mondays 13:41 UTC: queue the weekly check for a new FDIC quarter, then verify the FDIC data
     - cron: '23 14 20 * *'       # the 20th, 14:23 UTC: queue the monthly CMBS pull (most trusts have filed by then), then verify it
-    - cron: '37 23 * * 1-5'      # weekdays 23:37 UTC, after EDGAR's filing day: queue the SEC filings listener, then verify it
+    - cron: '37 23 * * 1-5'      # weekdays 23:37 UTC, after EDGAR's filing day: queue the SEC filings listener, then verify it.
+                                 # Only once a principal sets the repository variable FILINGS_ENABLED to "true" (after filling the SEC contact
+                                 # and confirming filers), so an unconfigured listener does not turn every run red.
   workflow_dispatch:
 
 permissions:
@@ -42,7 +44,7 @@ jobs:
         if: ${{ github.event.schedule == '23 14 20 * *' }}
         run: node cli.mjs enqueue sources.edgar
       - name: Queue the daily SEC filings listener
-        if: ${{ github.event.schedule == '37 23 * * 1-5' }}
+        if: ${{ github.event.schedule == '37 23 * * 1-5' && vars.FILINGS_ENABLED == 'true' }}
         run: node cli.mjs enqueue sources.filings
       - name: Run queued jobs
         run: node cli.mjs worker --max 20
@@ -55,5 +57,5 @@ jobs:
         if: ${{ github.event.schedule == '23 14 20 * *' }}
         run: node cli.mjs platform verify edgar
       - name: Verify the SEC filings
-        if: ${{ github.event.schedule == '37 23 * * 1-5' }}
+        if: ${{ github.event.schedule == '37 23 * * 1-5' && vars.FILINGS_ENABLED == 'true' }}
         run: node cli.mjs platform verify filings
