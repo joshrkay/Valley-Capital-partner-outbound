@@ -112,7 +112,7 @@ Valley Capital buys commercial real estate loans, and sometimes the properties b
 | A3 | Sellers first | Banks first (FDIC, Release 1), servicers next (CMBS, Release 2) | The order of releases |
 | A4 | What "approve" does | Creates a Gmail draft; the principal sends | E9 |
 | A5 | Volume | The existing caps in `config.json` | Guard configuration |
-| A6 | Review surface | Command line in Release 1; a private screen on Supabase in Release 2 | E8 |
+| A6 | Review surface | **Decided November 13, 2026:** a private web app for the firm's principals only, on Supabase (Postgres with row-level security) and Next.js on Vercel. The command line stays for operators. | E8, E11 |
 | A7 | Paid data | None until tested and budgeted | E5, E7 |
 | A8 | Firm claims | Only the approved claims in `claims.json` | The drafter |
 | A9 | Entities | One firm; separation designed in, not built | E8-S1 |
@@ -300,14 +300,39 @@ Every adapter (E3–E5) is built on this shared framework.
 
 ### E4. CMBS loan signals and rate context
 
-**E4-S1. Field coverage spike.** *As a principal, I want to know exactly what the SEC's loan-level CMBS data says about each loan before we build on it.* P0, R2. Time-boxed to 2 days.
-- [ ] A written field map from at least 3 recent trusts' ABS-EE filings: property type, property city, state and ZIP, current balance, interest rate, maturity date, payment status, special-servicing transfer date, master and special servicer names. Each with sample values (public data), how often it updates, and file size.
-- [ ] How loans map to properties when one loan has several.
-- [ ] A recorded decision to build, narrow or drop E4-S2 and E4-S3, with the reason.
+**E4-S1. Field coverage spike.** *As a principal, I want to know exactly what the SEC's loan-level CMBS data says about each loan before we build on it.* P0, R2. **Done November 13, 2026. Decision: build.**
+- [x] Read the EX-102 asset files of 6 trusts' October 2026 ABS-EE filings (vintages 2019–2024; 315 loans, 735 properties). The code meanings come from the SEC's ABS XML Technical Specification v3.1 (`eis_ABS_CMBSAssetData.xsd`).
+- [x] **Finding filings.** EDGAR's quarterly form index (`full-index/YYYY/QTRn/form.idx`) lists every ABS-EE filing; Q4 2026 had 964 by November 13. A filing's EX-102 is CMBS when its XML namespace is `http://www.sec.gov/edgar/document/absee/cmbs/assetdata`, which is more reliable than the trust's name. Filings arrive monthly, one per trust. EX-102 files run 0.27–0.82 MB, so about 300 trusts is roughly 150–250 MB a month. Only loans in the metros are kept.
+- [x] **The field map.** Each `<assets>` element is one loan. Each `<property>` inside it is one property, and a loan can have many (the sample had a 180-property portfolio).
 
-**E4-S2. Loans in our metros.** *As a principal, I want CMBS loans on properties in our metros and sectors so that I can see which servicers hold stressed loans where we buy.* P1, R2, if the spike says build.
-- [ ] Filter by location (ZIP or county mapped to metro) and by property types in the buy box.
-- [ ] Monthly. Keyed by trust and loan id. Status changes logged (E2-S4).
+  | Need | Field | Notes |
+  |---|---|---|
+  | Location | `property/propertyState`, `propertyCounty`, `propertyCity`, `propertyZip` | County was on 544 of 735 properties. ZIPs lose their leading zeros (`02141` arrives as `2141`). Match on state plus county name; a ZIP crosswalk can fill in a missing county (P1). |
+  | Property type | `property/propertyTypeCode` | LO Lodging, MF Multifamily, RT Retail, MU Mixed use, OF Office, IN Industrial, SS Self storage, WH Warehouse, HC Health care, MH Mobile home park, CH Cooperative housing, SE Securities (defeased), ZZ Missing, 98 Other |
+  | Balance | `reportPeriodEndActualBalanceAmount` | Dollars. `originalLoanAmount` too. |
+  | Rate | `reportPeriodInterestRatePercentage`, `originalInterestRatePercentage` | Fractions (0.02792 is 2.792%) |
+  | Maturity | `maturityDate` | MM-DD-YYYY. Also `postModificationMaturityDate` and `hyperAmortizingDate`. |
+  | Payment status | `paymentStatusLoanCode` | 0 Current, A in grace or not yet due, B under 30 days late, 1 30–59 days, 2 60–89 days, 3 90+ days, 4 performing matured balloon, 5 non-performing matured balloon |
+  | Special servicing | `mostRecentSpecialServicerTransferDate`, `mostRecentMasterServicerReturnDate` | On 21 of 315 loans |
+  | **Workout strategy** | `workoutStrategyCode` | 1 Modification, 2 Foreclosure, 3 Bankruptcy, 4 Extension, **5 Note sale**, 6 DPO, 7 REO, 8 Resolved, 9 Pending return to master servicer, 10 Deed in lieu, 11 Full payoff, 12 Reps and warranties, 13 TBD, 98 Other. **Code 5 means the special servicer plans to sell the note, the most direct signal there is.** |
+  | Property status | `property/propertyStatusCode` | 1 In foreclosure, 2 REO, 3 Defeased, 4 Partial release, 5 Substituted, 6 Same as at securitization |
+  | Performance | `property/mostRecentDebtServiceCoverageNetCashFlowpercentage`, `mostRecentPhysicalOccupancyPercentage`, `mostRecentNetOperatingIncomeAmount`, `mostRecentValuationAmount` | Most loans have them |
+  | Modification | `modificationCode`, `lastModificationDate` | 1 Maturity extension, 2 Amortization change, 3 Principal write-off, 5 Temporary rate cut, 6–7 Capitalization, 8 Combination, 10 Forbearance, 98 Other |
+  | Primary servicer | `primaryServicerName` | In EX-102 |
+  | **Special servicer** | **not in EX-102** | It is on the cover of the trust's monthly distribution report (10-D, exhibit 99.1), next to a named contact. Its format varies by certificate administrator. |
+
+- [x] **Sample result.** 33 of 315 loans (10%) have a property in a buy-box metro: Los Angeles 17, Las Vegas 5, Phoenix 4, San Diego 4, Austin 2, Denver 1. Their types were mixed use 9, self storage 6, multifamily 5, retail 5, office 4, lodging 2 and others. One was distressed: an office loan in foreclosure, 90+ days late. Across all six trusts the workout codes were: resolved 7, REO 4, foreclosure 3, TBD 3, other 3, full payoff 1.
+- [x] **Rules carried into the build:**
+  - Property names, addresses and tenant names are asset-level, so they are context for a principal only and never reach the drafter.
+  - Only the special servicer's **firm** name is extracted from the distribution report. A named person there falls under the contact rules (E7): sourced, verified, business addresses only.
+  - The report's free-text servicer commentary is not ingested in Release 2.
+**E4-S2. Loans in our metros.** *As a principal, I want CMBS loans on properties in our metros and sectors so that I can see which servicers hold stressed loans where we buy.* P1, R2.
+- [ ] Discovery: the quarterly form index gives the latest ABS-EE filing per trust; the EX-102 namespace classifies it as CMBS.
+- [ ] Parsing uses a small, tested parser for this flat schema, with no new dependency.
+- [ ] A loan is kept when any of its properties is in a buy-box metro (state plus county name, per `metros.json`) and its property type maps to a buy-box sector: LO to hospitality, MF to multifamily, RT to retail. MU (mixed use) is shown, marked as possibly in the buy box.
+- [ ] Stored per trust and loan, keyed `cmbs:<CIK>:<assetNumber>`, with the reporting period and the E2 run log, field check and change log. Status changes are logged (E2-S4).
+- [ ] The special servicer's firm name is read from the 10-D exhibit 99.1 cover. Names are matched against a list a principal has reviewed; an unrecognized name is flagged, never guessed.
+- [ ] Requests send a declared User-Agent whose contact comes from config (Q11) and stay under the SEC's request-rate guidance. The run refuses while that contact is a placeholder.
 
 **E4-S3. Special-servicing and maturity signals.** *As a principal, I want to know when a loan in our metros moves to special servicing or nears maturity so that its servicer becomes a candidate.* P1, R2.
 - [ ] The signal attaches to the **servicer**, a candidate institution. The loan is context for a principal only (the asset rule), and a test confirms it never reaches the drafter.
@@ -547,11 +572,11 @@ Every adapter (E3–E5) is built on this shared framework.
 | Q3 | Sellers first: banks, servicers, or both? | Principals | Release order | Banks in R1, servicers in R2 |
 | Q4 | Approve creates a Gmail draft, or sends directly? | Principals | E9 | Gmail draft |
 | Q5 | Who sends, and how many hours a week do they have for replies and calls? | Principals | Caps | Existing caps |
-| Q6 | Is there a CRM to sync to? | Principals | E8 scope | No CRM; Supabase |
+| Q6 | Is there a CRM to sync to? | Principals | E8 scope | **Decided:** the platform is the system of record (Supabase); no CRM for now |
 | Q7 | Is there an Anthropic API key for the pilot, a sending domain, and a principal named on the site? | Principals | E1, E9 | E1 waits for the key |
 | Q8 | Budget for county and contact data | Principals | E5, E7 | Free sources only |
 | Q9 | Can the firm stand behind "15-day close" or "all-cash"? | Principals, then counsel | New claims | Blocked |
-| Q10 | More than one entity using this? | Principals | E8-S1 | One entity |
+| Q10 | More than one entity using this? | Principals | E8-S1 | **Decided:** principals of one firm only; no partner workspaces or outside customers |
 | Q11 | Which contact name and email go in the SEC User-Agent? | Principals | E4 | E4 waits |
 | Q12 | Is the buy box confidential (data folder) or a rule file (committed)? | Principals | none | Committed |
 | Q13 | How is the weekly digest delivered to the principal? | Principals | E6-S5 | A file in the data folder |
