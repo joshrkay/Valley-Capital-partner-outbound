@@ -9,6 +9,7 @@ import { loadContext, checkTouch, recordTouch, recordEvent, addSuppression, dueL
 import { runBriefer } from './src/research.mjs';
 import { runDrafter, approveDraft } from './src/draft.mjs';
 import { makeClient } from './src/model.mjs';
+import { writeTruthTemplate, reviewList, markFinding, scorecard, passPilot, researchGate } from './src/pilot.mjs';
 
 const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE this repository first.
 
@@ -29,6 +30,13 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound guard event  --account ID --type reply|opt_out|bounce|meeting|handoff [--date D] [--note TEXT]
   outbound suppress add --type email|domain|person|institution|asset --value V --reason R [--alias A]...
   outbound suppress list
+
+  Pilot (PRD E1): check the briefer on accounts you already know before it researches any account the pipeline found.
+  outbound pilot template --account ID            write a "what is true" sheet to fill in (pilot/ID.truth.json)
+  outbound pilot review   --account ID            list the brief's findings and the verdicts recorded so far
+  outbound pilot mark     --account ID --finding F --verdict true|false|unknown --by NAME [--note TEXT]
+  outbound pilot scorecard                        precision, recall, fabrications and cost across the pilot
+  outbound pilot pass     --by NAME               record a pass (needs enough fully reviewed accounts and zero fabrications)
 `;
 
 function parse(argv) {
@@ -76,6 +84,7 @@ async function main() {
     const id = need(flags, 'account');
     if (sub === 'show') { const p = join(dir, 'briefs', `${id}.md`); return out(existsSync(p) ? readFileSync(p, 'utf8') : `No brief yet for ${id}.`); }
     const account = loadAccount(dir, id);
+    if (!flags['dry-run']) { const g = researchGate({ dir, account, config: rules.config }); if (!g.allowed) throw new Error(g.reason); }
     const client = flags['dry-run'] ? null : await makeClient({ timeout: rules.models.research.timeoutMs });
     const r = await runBriefer({ client, dir, account, models: rules.models, playbooks: rules.playbooks, dryRun: !!flags['dry-run'] });
     if (r.dryRun) return out(`--- SYSTEM ---\n${r.system}\n\n--- USER ---\n${r.user}\n\n--- TOOLS ---\nweb_search (max ${r.cfg.maxSearches}), web_fetch (max ${r.cfg.maxFetches}), model ${r.cfg.model}, effort ${r.cfg.effort}`);
@@ -119,6 +128,18 @@ async function main() {
     const t = touchFromAccount(account, { channel: need(flags, 'channel'), step: Number(flags.step ?? sentCount + 1), date: flags.date ?? today(), sender: flags.sender ?? c.senders[0]?.id });
     if (sub === 'check') return out(checkTouch(t, c));
     if (sub === 'record') return out(recordTouch(dir, t, c));
+  }
+
+  if (cmd === 'pilot') {
+    if (sub === 'template') { const id = need(flags, 'account'); return out(`Truth sheet written: ${writeTruthTemplate({ dir, account: loadAccount(dir, id), playbooks: rules.playbooks })}\nFill it in, then run the briefer on ${id} and review its findings.`); }
+    if (sub === 'review') {
+      const r = reviewList({ dir, accountId: need(flags, 'account') });
+      const lines = r.findings.map((f) => `[${f.id}] ${f.verdict ?? 'UNREVIEWED'} · ${f.use === 'draft' ? 'cleared for a message' : 'context only'}${f.assetSpecific ? ' · asset' : ''} · ${f.kind}\n    ${f.claim}\n    "${f.quote}"\n    ${f.url}`);
+      return out(`Research of ${r.researchDate}${r.staleReview ? ' (re-run since the last review: verdicts start over)' : ''}\n\n${lines.join('\n\n') || 'No findings.'}`);
+    }
+    if (sub === 'mark') return out(markFinding({ dir, accountId: need(flags, 'account'), findingId: need(flags, 'finding'), verdict: need(flags, 'verdict'), by: need(flags, 'by'), note: flags.note }));
+    if (sub === 'scorecard') return out(scorecard({ dir }));
+    if (sub === 'pass') { const r = passPilot({ dir, by: need(flags, 'by'), minAccounts: rules.config.pilot.minAccounts }); if (!r.ok) process.exitCode = 1; return out(r.ok ? { passed: r.status } : { refused: r.reasons, totals: r.totals }); }
   }
 
   if (cmd === 'suppress') {

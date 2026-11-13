@@ -2,6 +2,7 @@
   "_note": "Rules for the guard and the drafter. NO prospect data lives here. Every number below is a PLACEHOLDER, not a researched figure (see docs/research-agenda.md, G7 and G8). Tune them from the pilot, not from a guess.",
   "siteUrl": "https://valleycapitalpartner.com",
   "killSwitch": false,
+  "pilot": { "_note": "PRD E1. Accounts the pipeline created cannot be researched until a principal records a pilot pass: at least minAccounts fully reviewed accounts and zero fabrications. 10 is the PRD's floor, not a researched number.", "minAccounts": 10, "requiredForPipelineAccounts": true },
   "channels": {
     "allowed": ["email", "letter", "call", "linkedin_note"],
     "banned": {

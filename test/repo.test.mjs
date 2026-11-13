@@ -63,7 +63,8 @@ test('every configured model has a price, so cost is always reported', () => {
 test('DATA RULE: no prospect data file is tracked in git in this repository', () => {
   let files;
   try { files = execFileSync('git', ['ls-files'], { cwd: REPO, encoding: 'utf8' }).split('\n').filter(Boolean); } catch { return; }   // no git: skip
-  const bad = files.filter((f) => /(^|\/)(suppression\.json|touches\.jsonl|audit\.jsonl|senders\.json|KILL|\.env)$|(^|\/)(accounts|research|briefs|drafts|facts|data)\//.test(f));
+  // `sources/` is anchored to the root because src/sources/ is code; the data folder's sources/ would sit at the root of a misplaced data dir.
+  const bad = files.filter((f) => /(^|\/)(suppression\.json|touches\.jsonl|audit\.jsonl|senders\.json|runs\.jsonl|changes\.jsonl|KILL|\.env)$|(^|\/)(accounts|research|briefs|drafts|facts|data|candidates|pilot)\/|^sources\//.test(f));
   assert.deepEqual(bad, [], 'prospect data must never be committed; it lives in OUTBOUND_DATA_DIR outside the repo');
 });
 
