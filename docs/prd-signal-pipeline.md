@@ -102,6 +102,7 @@ Valley Capital buys commercial real estate loans, and sometimes the properties b
   - What each county offers, at what cost and on what terms. The E5 spike settles it. A first look: the Travis County Clerk posts foreclosure notices, but no searchable database turned up. Denver's Public Trustee moved to new software in May 2026, and a data export is unconfirmed. Vendors sell some county feeds.
   - The SEC's current requirements for automated clients **[verify]**.
   - Gmail permission scopes **[verify]**.
+- **Desk research of November 13, 2026** covers the six counties, bank and regulator data beyond FDIC, court and event sources, and people sources. It is in `docs/data-sources.md`, with a confidence mark on every fact about an outside source, the signals we listen for, and a build order. It is the starting point for the E5-S1 spike and for the new source stories.
 
 ## 5. Assumptions (defaults until a principal decides)
 
