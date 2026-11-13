@@ -1,6 +1,6 @@
 # Data sources: what we pull, what we listen for, and in what order
 
-Desk research of November 13, 2026, for the getting-data side of the PRD (`docs/prd-signal-pipeline.md`). Every fact has a mark:
+Desk research of November 13, 2026, for the getting-data side of the PRD (`docs/prd-signal-pipeline.md`). Every fact about an outside source in section 2 has one of these marks. The two built sources were checked live in the PRD (E3, E4-S1). Sections 3 to 7 are this plan's judgments, built on section 2.
 
 - **Checked**: fetched or tested live.
 - **Seen**: the official page's own text, read through search results. The page itself could not be fetched, because this development environment's network blocks most of these hosts.
@@ -19,20 +19,33 @@ Before any adapter is built, a short spike moves its facts to Checked, as the CM
 | 3. **The assets.** Which specific loans are in trouble right now, and which lender holds each? | County foreclosure notices, receiverships, bankruptcies, CMBS special servicing, loan-sale listings | CMBS **built** |
 | 4. **The person.** Who decides whether the loans are sold? | Proxy statements, bank leadership pages, industry forum rosters, contact databases | Planned (E7) |
 
-**Listening means comparing.** Each source is pulled on its own schedule: every few hours, daily, weekly, monthly or quarterly. Each pull is compared with the last one, and only a **change** becomes a signal. Examples:
+**Listening means comparing.** Each source is pulled on its own schedule: every few hours, daily, weekly, monthly or quarterly. Each pull is compared with the last one, and that comparison produces two kinds of signal. Every signal type declares which kind it is:
 
-- a loan newly marked for note sale;
-- a second quarter of rising noncurrent CRE loans;
-- a new notice of trustee's sale on an office building in Maricopa County.
+- **State signals** hold while a condition holds, and are recomputed from each pull. They drop away when the condition ends. Examples:
+  - a loan in special servicing;
+  - a bank's noncurrent CRE above a threshold in the latest quarter.
 
-FDIC and EDGAR already work this way. Every new adapter keeps the same contract:
+  Most of the built FDIC and CMBS signals are of this kind (`src/metrics.mjs`, `src/sources/edgar.mjs`).
+- **Event signals** record a change once, with its date, and keep it. Examples:
+  - a loan newly marked for note sale;
+  - a new notice of trustee's sale;
+  - a merger approved;
+  - a bankruptcy petition.
+
+  The change log (E2-S4) already records transitions. Filings and notices are events by nature.
+
+Scoring and cards read both kinds. An adapter that turned a lasting condition into a one-time event would lose that condition after the first pull. So the kind is part of each signal's definition, and of its tests.
+
+FDIC and EDGAR already keep the rest of the contract, and every new adapter keeps the same:
 
 - a recorded fake for tests;
 - the run log, field checks and change log (E2);
 - a `sources verify` check against the live source;
 - a worker job kind and a line in the schedule.
 
-**Where it runs.** The worker runs on GitHub Actions, whose network is open, so adapters run there. This development environment blocks most of the hosts in section 7. Adapters are built and tested against fakes, and checked live from the worker, or from here once a principal allows the hosts.
+**Where it runs.** The worker runs on GitHub Actions, whose network is open, so adapters run there **once the platform is switched on** (E12-S7: the GitHub secrets set and `PLATFORM_ENABLED` true). Until then, nothing runs on a schedule, and no live check runs by itself.
+
+This development environment blocks most of the hosts in section 7, so adapters are built and tested against fakes. Until the worker is on, a person runs `outbound sources run <source>` and `outbound sources verify <source>` by hand, from a machine with an open network. An adapter is not done until that live check has passed once.
 
 **Rules carried over:**
 
@@ -48,9 +61,10 @@ Priority is for this firm: **High** feeds scoring or candidates directly, **Med*
 
 | Source | What it adds | Access | Key and terms | Cadence | Priority |
 |---|---|---|---|---|---|
-| FDIC BankFind | Banks, branch deposits, 8 quarters of CRE by category and stage | api.fdic.gov | None | Quarterly | **Built** |
-| SEC ABS-EE EX-102 and 10-D | CMBS loans in our metros, special servicing, workout codes, servicers | sec.gov | Declared User-Agent | Monthly | **Built** |
-| **UBPR bulk** (FFIEC CDR) | Page 7B: non-owner-occupied CRE as a percentage of capital (line 29), and its 3-year growth (line 30). These are the regulators' 300% and 50% screens. Seen. Note: UBPR divides by tier 1 capital plus allowance, while the 2006 guidance divides by total risk-based capital, so it will not match the 300% test exactly. | cdr.ffiec.gov/public/PWS/DownloadBulkData.aspx: ZIP, tab-delimited or XBRL. Seen. | None for bulk. Seen. | Quarterly | **High** |
+| FDIC BankFind | Banks, branch deposits, 8 quarters of CRE by category and stage. Checked (PRD E3, Appendix A). | api.fdic.gov | None | Quarterly | **Built** |
+| SEC ABS-EE EX-102 and 10-D | CMBS loans in our metros, special servicing, workout codes, servicers. Checked (PRD E4-S1). | sec.gov | Declared User-Agent | Monthly | **Built** |
+| **Concentration screen** (FFIEC CDR bulk Call Reports) | The 2006 interagency guidance's screen. Unconfirmed, from memory; the spike confirms it against the guidance. Either test is enough: (a) construction and land loans at or above 100% of total risk-based capital; or (b) CRE at or above 300% of total risk-based capital **and** CRE grown 50% or more over 36 months. Computed from Call Report items (RC-C loans, RC-R capital), using the guidance's own definitions. | cdr.ffiec.gov/public/PWS/DownloadBulkData.aspx: ZIP, tab-delimited or XBRL. Seen. | None for bulk. Seen. | Quarterly | **High** |
+| UBPR bulk (same page) | Page 7B: non-owner-occupied CRE as a percentage of capital (line 29), and its 3-year growth (line 30). Seen. **A cross-check, not the screen.** UBPR divides by tier 1 capital plus allowance, while the guidance divides by total risk-based capital (Seen). So a UBPR value of 300% is not the regulatory test. | Same page | None for bulk. Seen. | Quarterly | Med |
 | FFIEC CDR bulk Call Reports | Every Call Report item. The main gain over BankFind is Schedule RI-C: allowance for credit losses on construction and other CRE, at banks with $1B+ in assets. Seen. BankFind already carries most of the CRE detail. Checked against the FDIC field list. | Same bulk page | None for bulk. The web service needs an account. Seen. | Quarterly | Med |
 | NCUA 5300 | Credit unions' CRE by type (non-owner-occupied, construction and development) with delinquency buckets. Seen. **A seller class we do not cover yet.** | ncua.gov quarterly data: ZIP of CSVs. Seen. | None | About 70–76 days after quarter end. Seen. | Med–High, if in scope (D2) |
 | SEC Financial Statement and Notes data sets | Public banks' CRE splits. The companyfacts and frames APIs drop them, because they keep only whole-entity facts (Checked). Banks tag CRE with their own custom members, which this data set keeps in its DIM table. Checked. | sec.gov/data-research/sec-markets-data/financial-statement-notes-data-sets | Declared User-Agent, 10 requests a second. Checked. | Monthly | Med (later) |
@@ -97,7 +111,7 @@ Priority is for this firm: **High** feeds scoring or candidates directly, **Med*
 
 | Source | Event | Access | Key and terms | Priority |
 |---|---|---|---|---|
-| **Bankruptcy courts' public RSS feeds** (Arizona, Colorado, Nevada, Central and Southern California, Western Texas) | Every public docket entry, including new chapter 11 petitions | "Entries made in the last 24 hours" feed on each court's CM/ECF site. Seen. No filter for single-asset real estate. Seen. | Free, no account. **The window is 12–24 hours, so a missed poll loses filings.** | **High** |
+| **Bankruptcy courts' public RSS feeds** (Arizona, Colorado, Nevada, Central and Southern California, Western Texas) | Every public docket entry, including new chapter 11 petitions | "Entries made in the last 24 hours" feed on each court's CM/ECF site. Seen. No filter for single-asset real estate. Seen. | Free, no account. **The window is 12–24 hours, so a missed poll loses filings.** Electronic filing runs every day of the week, so polling must too: see section 5, step 9. | **High** |
 | PACER Case Locator | The petition itself: single-asset real estate box, the secured lender | Official API. Seen. | PACER account. $0.10 a page, $3 a document at most, waived under $30 a quarter. Seen. | Med: confirms an RSS hit |
 | CourtListener / RECAP | Docket search and alerts | Free token | **Internal business tools count as commercial use**, so a commercial agreement is needed. The free tier allows 125 requests a day. Seen. | Only under an agreement |
 | State court dockets | Receiverships and judicial foreclosure (California, Arizona, Nevada) | Travis and Maricopa searches free (Seen, Unconfirmed); LA free by case number only (Seen); Colorado $5 a name (Seen) | Varies | Med; Trellis is a vendor option |
@@ -156,7 +170,7 @@ The Fed is closing its own data download tool by July 1, 2027, and points users 
 | CMBS loan marked for note sale (workout code 5) | SEC CMBS | Monthly | Special servicer | The sale is planned: act now |
 | CMBS loan moved to special servicing, or maturing within the window | SEC CMBS | Monthly | Special servicer | Months |
 | Noncurrent or past-due CRE rising, first charge-offs | FDIC | Quarterly | Bank | Quarters (**built**) |
-| CRE concentration at or above 300% of capital, or 3-year growth at or above 50% | UBPR | Quarterly | Bank | Quarters: pressure from examiners |
+| Bank meets the concentration screen (construction 100%, or CRE 300% with 50% growth, of total risk-based capital) | Call Reports (UBPR as a cross-check) | Quarterly | Bank | Quarters: pressure from examiners |
 | Enforcement order | OCC, FDIC, Fed, state lists | Monthly | Bank | Months |
 | Merger application or approval | Fed RSS, H.2, OCC bulletin, FDIC history | Weekly | Acquirer, after close | 1–2 quarters after close |
 | Bank failure | FDIC failed-bank CSV, loan-sale page | Daily | The FDIC as seller | Weeks: sealed bids |
@@ -191,9 +205,11 @@ A source registry (`sources.json`) lists every source: cadence, hosts, key neede
 **Phase 1: free, no account, terms allow automation.** These can start now:
 
 1. **Fix failure detection.** Do not rely on `/failures` alone. Cross-check `/institutions` (inactive date) and the FDIC's failed-bank CSV, and add a verify check that flags a gap. Small.
-2. **EDGAR full-text listener.** Daily saved searches for 8-K Items 2.01 and 2.06, held-for-sale and loan-sale phrases, and DEF 14A officer names, limited to banks in our candidate list and to filers in our five states. It reuses the SEC client and pacing. **It waits for the User-Agent contact (Q11).**
+2. **EDGAR full-text listener.** Daily saved searches for 8-K Items 2.01 and 2.06, held-for-sale and loan-sale phrases, and DEF 14A officer names. It reuses the SEC client and pacing. **It waits for the User-Agent contact (Q11).**
+   - **Production searches** cover the SEC filer IDs (CIKs) of every bank in our candidate universe, **wherever it files from**. That universe includes banks headquartered outside our five states that have branches in our metros (PRD 4.1, A2). Mapping each bank to its filer, usually the holding company, is part of this story: through NIC's RSSD ID and the filer's name, confirmed by a principal when unsure.
+   - **A separate discovery search** by filer state (our five states) finds banks not yet in the universe. Its hits go to a principal for review and never score directly.
 3. **FDIC structure and failures.** `/history` mergers involving our banks, the failed-bank CSV, and the FDIC loan-sale page.
-4. **UBPR concentration ratios.** Quarterly bulk file; a pressure signal for scoring.
+4. **Concentration screen.** Computed quarterly from bulk Call Report items with the guidance's definitions and denominator, and cross-checked against UBPR Page 7B. A pressure signal for scoring.
 5. **Colorado public trustees.** Adams weekly PDFs first, then Denver, Jefferson, Douglas and Broomfield.
 6. **Maricopa.** Recorder search for notices of trustee's sale, joined to the assessor's commercial file.
 
@@ -201,7 +217,10 @@ A source registry (`sources.json`) lists every source: cadence, hosts, key neede
 
 7. FRED, after the terms check: rate context (E4-S4) and the series in 2.5.
 8. Enforcement orders: the OCC API with a key, plus the FDIC, Fed, Texas and California lists.
-9. The six bankruptcy courts' RSS feeds, polled every few hours, with PACER lookups to confirm.
+9. The six bankruptcy courts' RSS feeds, with PACER lookups to confirm. Requirements:
+   - Polled **seven days a week**, with a gap between polls well under the shortest feed window (every 6 hours at most). This needs its own schedule: today's worker runs only on weekday afternoons (`.github/workflows/platform-worker.yml`), which would leave a gap of over 60 hours each weekend.
+   - Entry IDs are stored, so overlapping polls never double-count an entry.
+   - An alert fires when the last successful poll is older than the feed's window, because entries in that gap are lost.
 10. NCUA credit unions, if in scope.
 11. Maricopa assessor API token, if the downloads fall short.
 
