@@ -84,6 +84,8 @@ Priority is for this firm: **High** feeds scoring or candidates directly, **Med*
 
 ### 2.3 The assets
 
+The county-by-county plan, starting with Maricopa, is in `docs/county-playbook.md`. It also covers the Phoenix city layer and the Los Angeles vendor comparison.
+
 **The foreclosure trail differs by state.** The warning time decides how useful a county source is:
 
 | State | What is recorded or posted, and where | Warning before sale | Receiverships |
