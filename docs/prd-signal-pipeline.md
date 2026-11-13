@@ -327,7 +327,7 @@ Every adapter (E3–E5) is built on this shared framework.
   - Property names, addresses and tenant names are asset-level, so they are context for a principal only and never reach the drafter.
   - Only the special servicer's **firm** name is extracted from the distribution report. A named person there falls under the contact rules (E7): sourced, verified, business addresses only.
   - The report's free-text servicer commentary is not ingested in Release 2.
-**E4-S2. Loans in our metros.** *As a principal, I want CMBS loans on properties in our metros and sectors so that I can see which servicers hold stressed loans where we buy.* P1, R2.
+**E4-S2. Loans in our metros.** *As a principal, I want CMBS loans on properties in our metros and sectors so that I can see which servicers hold stressed loans where we buy.* P1, R2. **Built** (`src/sources/edgar.mjs`, `outbound sources run edgar`, worker job `sources.edgar`). A live run on 40 trusts (2026-11-13) found 17 CMBS trusts and 1,205 loans, and kept 51: 13 in special servicing, 21 maturing within 18 months. Seven special servicers were named, with no unknowns.
 - [ ] Discovery: the quarterly form index gives the latest ABS-EE filing per trust; the EX-102 namespace classifies it as CMBS.
 - [ ] Parsing uses a small, tested parser for this flat schema, with no new dependency.
 - [ ] A loan is kept when any of its properties is in a buy-box metro (state plus county name, per `metros.json`) and its property type maps to a buy-box sector: LO to hospitality, MF to multifamily, RT to retail. MU (mixed use) is shown, marked as possibly in the buy box.
@@ -335,7 +335,7 @@ Every adapter (E3–E5) is built on this shared framework.
 - [ ] The special servicer's firm name is read from the 10-D exhibit 99.1 cover. Names are matched against a list a principal has reviewed; an unrecognized name is flagged, never guessed.
 - [ ] Requests send a declared User-Agent whose contact comes from config (Q11) and stay under the SEC's request-rate guidance. The run refuses while that contact is a placeholder.
 
-**E4-S3. Special-servicing and maturity signals.** *As a principal, I want to know when a loan in our metros moves to special servicing or nears maturity so that its servicer becomes a candidate.* P1, R2.
+**E4-S3. Special-servicing and maturity signals.** *As a principal, I want to know when a loan in our metros moves to special servicing or nears maturity so that its servicer becomes a candidate.* P1, R2. **Built in part:** per-loan signals (special servicing, note sale, DPO, REO, foreclosure, delinquency, maturity, modification) and a per-servicer summary (`sources/edgar/servicers.json`), shown on the platform's Servicers screen. Not built yet: servicers as candidates in the scored list.
 - [ ] The signal attaches to the **servicer**, a candidate institution. The loan is context for a principal only (the asset rule), and a test confirms it never reaches the drafter.
 - [ ] The maturity window is set in `scoring.json` (placeholder: within 18 months).
 
@@ -579,7 +579,7 @@ Every adapter (E3–E5) is built on this shared framework.
 - [ ] **Known limit:** a job queued from the web waits up to an hour for the next run. A "run now" trigger from the app needs a GitHub token on the server (P1).
 - [ ] The kill switch, a `KILL` document or the config flag, stops every job that could create a draft or touch a mailbox.
 
-**E12-S5. The web app.** *As a principal, I want to work the candidate list, read briefs, run the pilot and approve drafts from a browser so that the system fits a working day.* P0, R2.
+**E12-S5. The web app.** *As a principal, I want to work the candidate list, read briefs, run the pilot and approve drafts from a browser so that the system fits a working day.* P0, R2. **Built** (`web/`). Tested against a fake Supabase seeded with live FDIC data; not yet run against a real project (E12-S7).
 - [ ] Next.js in `web/`, sign-in through Supabase Auth email links, allowed only for active principals.
 - [ ] Screens: Candidates (E8-S2), Bank detail with the paper profile and 8-quarter trend, Accounts, Account and brief, the approval queue (E8-S3), Pilot, Status (runs, jobs, kill switch).
 - [ ] Quick actions call the engine through a unit of work on the server: promote, dismiss, snooze, set person, confirm role, pilot verdicts, approve. Long ones are queued (E12-S4).

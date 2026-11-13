@@ -8,6 +8,8 @@ The agents in `docs/outbound-plan.md` that exist so far:
   - a paper profile and a distress, fit and timing score for each bank;
   - a candidate list a principal works through;
   - a pilot that the briefer must pass before it researches anything the pipeline found.
+- **CMBS loan data** from SEC EDGAR: loans in the six metros and buy-box sectors, with workout codes (including "note sale") and each trust's special servicer.
+- **The platform** (PRD E12), a private web app for the firm's principals: Supabase (Postgres with row-level security) and Next.js in `web/`, with a worker for long jobs. The same engine runs underneath the command line and the web.
 
 **The goal** (PRD section 0): purposeful outreach to the right person at the right time, backed by research into what paper the institution holds, what those loans look like, and where the firm has an advantage. **Nothing in this folder can send a message.** A principal sends; the guard then records it.
 
@@ -20,10 +22,12 @@ Start with `docs/prd-signal-pipeline.md` for the pipeline, and `docs/research-ag
 - **Every number in `config.json` is a placeholder** (caps, sequence timing, call hours). They are not researched.
 - **Counsel has not reviewed any of it,** including the claims and the channel rules.
 - **The FDIC adapter has run live** (2026-11-13): 268 banks, 8 quarters to June 30, 2026, about 7 seconds, public data with no key. The scoring weights, thresholds and tier cuts in `scoring.json` are **placeholders**. The buy box (`buybox.json`) has `[CONFIRM]` fields a principal must fill. Until then `score run` refuses, or with `--draft-buybox` it labels its list PROVISIONAL.
+- **The CMBS adapter has run live** on 40 trusts (2026-11-13) with a generic User-Agent. `config.sec.userAgent` stays a `[CONFIRM]` placeholder, and the adapter refuses to run until a principal fills it with the firm's name and contact (PRD Q11).
+- **The platform is built but not deployed.** The migration and its access rules pass 10 tests on Postgres 16 (`npm run test:db`). The client, worker and web app are tested against a fake of Supabase's REST API; the first run against a real project is E12-S7, which needs a Supabase project and a Vercel team (PRD Q17, Q18).
 - **Not built yet:**
-  - CMBS loan-level data from SEC EDGAR, and county records (PRD E4, E5; spikes first);
-  - contact details;
-  - the review screen and database (E8);
+  - county records (PRD E5; the spike first);
+  - servicers as scored candidates (E4-S3), and contact details (E7);
+  - deploying the platform (E12-S7);
   - Gmail drafts and reply detection (E9);
   - quarterly nurture (E10);
   - the referral mapper, meeting prep and the reporter.
@@ -85,7 +89,34 @@ npm run outbound -- pilot scorecard                      # precision, recall, fa
 npm run outbound -- pilot pass --by "Pat Example"        # needs 10 fully reviewed accounts and zero fabrications
 ```
 
+**CMBS loans** (needs `config.sec.userAgent` filled in):
+
+```bash
+npm run outbound -- sources run edgar                    # each CMBS trust's latest SEC filing: loans in the metros, workout codes, servicer
+```
+
+It writes `sources/edgar/loans.json`, `trusts.json` and `servicers.json`. Every loan and property detail is **context for a principal, never for a message**.
+
 **What the research does and does not do.** The paper profile, the fit and the signals decide who a principal approaches, when, and which sector to lead with. They never appear in a message. The drafter sees only the sector, and a test proves no FDIC figure reaches it.
+
+## The platform (PRD E12)
+
+**How it fits together.** The command line works on a data folder. The platform works on Postgres, through the same engine: every action loads the documents it needs, runs the engine in memory, and writes the changes back in one transaction with version checks (`src/uow.mjs`). The web app (`web/`) runs quick actions this way as the signed-in principal. Long jobs (FDIC pull, CMBS pull, scoring, research, drafting) are queued for the worker. Row-level security lets only active principals read. Nobody writes to a table directly. There is no send button anywhere.
+
+```bash
+# The database: apply supabase/migrations/ to the project (Supabase CLI or the SQL editor), then add principals with the service role.
+OUTBOUND_TEST_PG="host=/tmp/pg port=5432 user=postgres" npm run test:db    # the migration's tests, against a DISPOSABLE Postgres only
+
+# Operators and the worker use the service key (never in the web app):
+export SUPABASE_URL=https://<project>.supabase.co SUPABASE_SERVICE_ROLE_KEY=...
+npm run outbound -- platform push --from ~/valley-outbound-data           # copy a data folder in (safe to re-run)
+npm run outbound -- enqueue sources.fdic                                  # or sources.edgar, score.run --draft-buybox, research.run --account ID
+npm run outbound -- worker --max 20                                       # run queued jobs; prints ids and outcomes only
+npm run outbound -- platform pull --to ~/valley-outbound-backup           # a full copy back out, to a new folder
+```
+
+- **Worker schedule:** `.github/workflows/platform-worker.yml` runs the worker hourly on weekdays and queues the weekly FDIC check. It is off until the repository variable `PLATFORM_ENABLED` is `true`. It needs the Actions secrets `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` and `ANTHROPIC_API_KEY`.
+- **The web app:** see `web/README.md` for local development, the Supabase Auth settings (sign-ups off, invite principals) and Vercel.
 
 ## What each agent does, and how
 
@@ -143,12 +174,15 @@ It stores no message text, and writes an audit line for every decision.
 | `playbooks.json` | The briefer's questions by account type |
 | `metros.json` | The six target metros by CBSA code, with counties from the Census 2023 delineation |
 | `buybox.json` | What the firm buys. `[CONFIRM]` fields block scoring until a principal fills them |
-| `scoring.json` | Score components (distress, fit, timing), signal rules and tier cuts; every number a placeholder |
-| `src/` | `guard`, `research`, `draft`, `lint`, `model` (the only file that calls the Anthropic API), `rules`, `store`, `paths`, plus the pipeline: `sources/` (`http`, `runlog`, `fdic`), `metrics`, `score`, `candidates`, `pilot` |
+| `scoring.json` | Score components (distress, fit, timing), signal rules, tier cuts and the CMBS maturity window; every number a placeholder |
+| `supabase/migrations/` | The platform's tables, access rules and functions. Structure only, no data |
+| `web/` | The principals' web app (Next.js) |
+| `.github/workflows/` | The platform worker's schedule (off until enabled) |
+| `src/` | `guard`, `research`, `draft`, `lint`, `model` (the only file that calls the Anthropic API), `rules`, `store`, `paths`, plus the pipeline: `sources/` (`http`, `runlog`, `fdic`, `edgar`), `metrics`, `score`, `candidates`, `pilot`, and the platform: `uow`, `platform/` (`client`, `worker`, `move`) |
 | `scripts/sync-site.mjs` | Refreshes `site-snapshot/` from the website repository (see below) |
 | `site-snapshot/` | A copy of the 7 website files the rules depend on, a list of the site's pages, and a record of the commit it came from. Committed. Refresh it; do not edit it. |
 | `docs/` | The plan, the research agenda, and the PRD for the signal pipeline |
-| `test/` | 145 tests, no network, invented data only. `npm test` |
+| `test/` | 190 tests, no network, invented data only. `npm test`; `npm run test:db` against a disposable Postgres |
 
 In `$OUTBOUND_DATA_DIR`:
 
