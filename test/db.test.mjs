@@ -108,6 +108,9 @@ test('the job queue: principals queue, only the worker claims and finishes, and 
   const edgar = must(as('authenticated', PAT, `select enqueue_job('sources.edgar')`));
   assert.match(edgar, /^\d+$/, 'the second migration adds the CMBS pull');
   must(as('service_role', SERVICE, `update jobs set status = 'done' where id = ${edgar}`));
+  const filings = must(as('authenticated', PAT, `select enqueue_job('sources.filings')`));
+  assert.match(filings, /^\d+$/, 'the third migration adds the SEC filings listener');
+  must(as('service_role', SERVICE, `update jobs set status = 'done' where id = ${filings}`));
   const claimed = must(as('service_role', SERVICE, 'select id || \' \' || kind || \' \' || status || \' \' || requested_by from claim_job()'));
   assert.equal(claimed, `${id} score.run running pat@example.test`);
   assert.equal(must(as('service_role', SERVICE, 'select count(*) from claim_job()')), '0', 'nothing else is queued');

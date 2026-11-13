@@ -616,6 +616,65 @@ Every adapter (E3–E5) is built on this shared framework.
 - [ ] The principals' emails in `principals`.
 - [ ] Preview deployments protected or off.
 
+---
+
+### E13. Event listeners
+
+Some sources report a dated change rather than a state: a filing, a notice, an order. A listener records each new event once, with its date, and keeps it (`docs/data-sources.md`, section 1). Every listener keeps the E2 contract:
+- a recorded fake;
+- the run log, field checks and the change log;
+- a verify check;
+- a worker job kind and a line in the schedule.
+
+**E13-S1. The SEC filings listener.** *As a principal, I want banks' SEC filings watched every day for signs that they are selling CRE loans so that I hear of a held-for-sale transfer, a loan sale or an impairment when it is filed, not a quarter later.* P1, R2. **Built** (`src/sources/efts.mjs`, `src/sources/filers.mjs`, `src/sources/filings.mjs`, `filings.json`, `outbound sources run filings`, worker job `sources.filings`). Live runs wait for the SEC User-Agent contact (Q11).
+- [x] **The endpoint, checked live on 2026-11-13.** It is EDGAR full-text search (`efts.sec.gov/LATEST/search-index`), which is undocumented. The findings are written in `src/sources/efts.mjs`:
+  - Phrases separated by spaces must all appear in one document. `OR` makes alternatives. There is no proximity operator, so "near" means "in the same document".
+  - `ciks` filters by filer, but only with 10-digit, zero-padded CIKs. An unpadded one silently matches nothing.
+  - Each hit is one document of a filing, so a filing can come back several times. Every hit carries the 8-K item numbers.
+  - The response echoes the query the server ran.
+  - Errors come back as HTTP 200 with an error body. Seen: paging past 10,000, and once a failure inside the server.
+  - A cache serves answers keyed without 8-K items or SIC codes. Seen: a request got another request's answer.
+  - An entity lookup (`keysTyped`) finds SEC filers by name or CIK.
+- [x] **The client** reuses the SEC pacing, retries and declared User-Agent. It refuses while `config.sec.userAgent` is a placeholder.
+  - Every body is checked.
+  - Every response's echo is compared with its request, and every hit is filtered again on its own fields.
+  - 8-K items are matched on the hits, never sent to the server.
+  - A mismatched response is fetched again after the cache expires. A window of over 10,000 hits is split.
+- [x] **Saved searches** live in `filings.json`. Each has an id, a label, forms, and phrases or 8-K items:
+  - 8-K Items 2.01 and 2.06;
+  - "transferred to held for sale", "loans held for sale", "loan sale" and "note sale", each with "commercial real estate";
+  - "balance sheet repositioning".
+
+  Every search is a placeholder.
+- [x] **The bank-to-filer map** is `sources/edgar/filers.json`, keyed `fdic:CERT`.
+  - `outbound filers suggest` proposes filers. It uses FDIC's holding-company name and RSSD ID (`NAMEHCR`, `RSSDHCR`), the SEC's entity lookup, and each candidate's latest 10-K or 10-Q with its SIC code.
+  - A filer confirmed for one bank is proposed for the other banks of its holding company.
+  - `filers confirm` and `filers reject` record a principal's decision, audited with their name.
+  - **Only confirmed mappings are searched.**
+- [x] **Signals.** Every hit on a confirmed filer is an **event** signal.
+  - It is stored once per filing, de-duplicated on the accession number. It is kept when a later run no longer sees it.
+  - Each carries the search ids, form, 8-K items, file date, accession number, a link to the filing index, and the bank key.
+  - `filingSignals({ dir })` returns them by bank key. A filing belongs to a bank only while its filer is confirmed.
+- [x] A new filer is searched back a year, once. Later runs start three days before the last one ended. `--since` searches every filer from a date.
+- [x] Proxy statements (DEF 14A) of confirmed filers are recorded by form, date and link, for the briefer. No names are extracted (E7).
+- [x] **A discovery search** finds bank filers not in the list. It searches by business-address state (our five) and bank SIC code. Its hits go to a for-review list (`outbound filers discovered`) and never become signals.
+- [x] **E2:**
+  - a fake shaped like the real responses (`test/edgar-search-fake.mjs`);
+  - the run log;
+  - a field check on every field used: a missing one fails the run and writes nothing;
+  - the change log;
+  - `outbound sources verify filings`: fresh, mapped, sourced, stored filings found again, confirmed filers still SEC entities.
+- [x] Filings are context for a principal only. The search returns no filing text, and none is stored. A test proves no filing, link, CIK, label or person reaches the drafter.
+- [x] Worker job `sources.filings` (migration `20261113213000_jobs_filings.sql`). The workflow queues it on weekdays at 23:37 UTC, then verifies it.
+- [x] **First live run (2026-11-13).** It used a scratch folder, a neutral User-Agent and throwaway mappings:
+  - Suggestions for 30 banks: 41 candidates for 15 banks, from 30 lookups.
+  - 18 of the 22 exact-name candidates had filed no 10-K or 10-Q in over a year: same-named entities that do not report. So filing evidence outranks the name.
+  - With 4 mappings, a 30-day run made 12 requests and read 116 hits. It found 3 filings and 4 proxy statements, plus 21 filings from 16 bank filers for review.
+  - Every verify check passed.
+  - The first try met an error body from inside the server. Such errors are now retried twice.
+- [ ] The signals are wired into scoring (`scoring.json`, `src/score.mjs`), after merge.
+- [ ] A principal confirms the filer map, and reviews the searches, windows and bank SIC codes.
+
 ## 9. Definition of done (every story)
 
 - Node 22 with ES modules, in this repository. Any new dependency comes with a stated reason in the PR.

@@ -1,0 +1,39 @@
+{
+  "_note": "Saved searches for the SEC filings listener (PRD E13-S1). NO prospect data lives here. Each search runs on EDGAR full-text search against the SEC filer IDs (CIKs) of every bank whose filer a principal has confirmed (outbound filers confirm). A search's phrases must ALL appear in one document. The endpoint has no proximity operator, so \"near\" can only mean \"in the same document\" (checked live 2026-11-13). Searches are AND-only on purpose: an \"or\" is written as two searches with their own ids, so each id is one exact query. 8-K item numbers are matched on each hit, never sent to the server, because its cache ignores them. Every search, window and code list here is a PLACEHOLDER for a principal to review.",
+  "lookbackDays": 7,
+  "overlapDays": 3,
+  "backfillDays": 365,
+  "maxCiksPerRequest": 50,
+  "cacheWaitMs": 65000,
+  "searches": [
+    { "id": "8k-acquisition", "label": "8-K Item 2.01: an acquisition or disposition of assets completed", "forms": ["8-K"], "items": ["2.01"] },
+    { "id": "8k-impairment", "label": "8-K Item 2.06: material impairments", "forms": ["8-K"], "items": ["2.06"] },
+    { "id": "transferred-held-for-sale-cre", "label": "Loans transferred to held for sale, in a filing that mentions commercial real estate", "forms": ["8-K", "10-Q", "10-K"], "phrases": ["transferred to held for sale", "commercial real estate"] },
+    { "id": "loans-held-for-sale-cre", "label": "Loans held for sale, in a filing that mentions commercial real estate (broad: a common balance-sheet line)", "forms": ["8-K"], "phrases": ["loans held for sale", "commercial real estate"] },
+    { "id": "loan-sale-cre", "label": "A loan sale, in a filing that mentions commercial real estate", "forms": ["8-K", "10-Q", "10-K"], "phrases": ["loan sale", "commercial real estate"] },
+    { "id": "note-sale-cre", "label": "A note sale, in a filing that mentions commercial real estate", "forms": ["8-K", "10-Q", "10-K"], "phrases": ["note sale", "commercial real estate"] },
+    { "id": "balance-sheet-repositioning", "label": "A balance sheet repositioning", "forms": ["8-K", "10-Q", "10-K"], "phrases": ["balance sheet repositioning"] }
+  ],
+  "proxies": {
+    "_note": "Proxy statements of confirmed filers, recorded (form, date, link) for the briefer to read. No names are extracted: people fall under the contact rules (PRD E7). Each run looks back this far, so a newly confirmed filer gets its last proxy.",
+    "forms": ["DEF 14A"],
+    "lookbackDays": 400
+  },
+  "discovery": {
+    "_note": "Finds bank filers NOT yet in the bank list: the searches below, by the filer's business-address state, kept only when the filer's SIC code is a bank code. Hits go to a for-review list (outbound filers discovered) and never become scored signals. The SIC codes are the SEC's depository-institution codes [verify the list with a principal].",
+    "states": ["TX", "CO", "CA", "AZ", "NV"],
+    "sics": ["6021", "6022", "6029", "6035", "6036"],
+    "searches": ["8k-acquisition", "8k-impairment", "transferred-held-for-sale-cre", "loan-sale-cre", "note-sale-cre", "balance-sheet-repositioning"]
+  },
+  "suggest": {
+    "_note": "outbound filers suggest: up to maxCandidates SEC entities per unmapped bank, each with its latest periodic filing (evidenceForms, within evidenceDays) as evidence of what it is. A principal confirms or rejects every one.",
+    "evidenceForms": ["10-K", "10-Q"],
+    "evidenceDays": 400,
+    "maxCandidates": 5
+  },
+  "verify": {
+    "_note": "outbound sources verify filings: the last run must have ended within freshDays (weekends included), and this many stored filings are searched for again.",
+    "freshDays": 4,
+    "recheck": 5
+  }
+}
