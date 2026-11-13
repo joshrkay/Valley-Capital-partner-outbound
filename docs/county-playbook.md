@@ -95,6 +95,27 @@ The sanctioned route is the **Recorder's bulk account**:
    - Live requests at most 3 a minute.
 10. **The estimate to test:** about 10–35 commercial notices a month, from 5.2% of 1.71 million parcels being commercial or apartment. The four-week measure replaces it with a real count.
 
+### Opening the account
+Decided November 13, 2026: open the metered bulk account (D7). The packet, from the Recorder's application and the statute:
+- the **Account Application**, with Bulk Name Data and Bulk Image Data ticked;
+- a **certified commercial-purpose statement and its Addendum**, which must be on file before approval (A.R.S. 39-121.03). Both are published on the Recorder's site (recorder.maricopa.gov, "Customer Account Information"). That site blocks automated readers, so download them in a browser. Seen;
+- the **Digital Recording MOU** (pages 1–5). Ask whether it applies to a data-only account;
+- a **$300 check**, and a $50 balance kept on the account.
+
+Send it to the Recorder's Accounting Team at **301 W. Jefferson St., Phoenix, AZ 85003**. The current application (new logo) says 7th Floor, Suite 705, while the office's main listing and FAQ give Suite 200 (Seen). **Confirm the suite by phone before mailing the check.** The older application on the legacy site, which gives 111 S. 3rd Avenue #103, is out of date: do not use it.
+
+**The wording of the statement matters.** The statute counts as commercial "the obtaining of names and addresses from public records for the purpose of solicitation" and any use for expected monetary gain, which covers contacting lenders. Using a record for a different commercial purpose than the one stated triggers triple damages. So the statement must name every use:
+- finding commercial filings;
+- identifying lenders and servicers;
+- our own loan-buying decisions and contacting lenders;
+- internal storage;
+- no resale;
+- no soliciting individual borrowers.
+
+Counsel reviews it before signing (D8).
+
+The adapter is built against the bulk feed's real file layout once the Recorder sends it. Until then, the legacy search is used only with the Recorder's written permission.
+
 ### Pinal County (Phoenix metro)
 - **Recorder:** Acclaim, searchable by document type. Images are watermarked unofficial copies; $1 a page for copies. Seen.
 - **Assessor:** no official free bulk file. A public parcel map service exists. Seen.
@@ -144,7 +165,7 @@ Questions for ATTOM:
 
 | # | Decision | Default meanwhile |
 |---|---|---|
-| D7 | Maricopa route:<br>• ask the Recorder for written permission to use the legacy search;<br>• open the metered bulk account (the $300 deposit, then about $375 a month);<br>• buy the full daily feed (about $62,000 a year); or<br>• use a vendor. | **Recommended:** open the metered account, and ask for permission while it is set up |
+| D7 | Maricopa route | **Decided 2026-11-13: the metered bulk account.** See section 3, "Opening the account". |
 | D8 | Counsel on A.R.S. 39-121.03:<br>• which commercial-purpose statements to file;<br>• whether viewing free online counts as obtaining a record;<br>• whether vendor data exposes the firm under subsection (C).<br>California and Nevada need the same review before a vendor feed is used there. | Nothing is used commercially before counsel answers |
 | D9 | What counts as commercial: which legal classes, how many units, and what floor on original principal | Class 1.x, or 4.2 with 5 or more units; no floor |
 | D10 | Reading notice images: OCR, or Claude reading the PDF with every field checked | Decided when the adapter is built |
