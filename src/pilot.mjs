@@ -4,8 +4,7 @@
 // The gate: accounts created from a candidate (they carry originSignals) cannot be researched until a principal records
 // a pass, which this module allows only with enough fully reviewed accounts and zero fabrications.
 import { join } from 'node:path';
-import { existsSync } from 'node:fs';
-import { readJson, writeJson, listFiles, safeId, audit } from './store.mjs';
+import { readJson, writeJson, listFiles, exists, safeId, audit } from './store.mjs';
 
 const VERDICTS = ['true', 'false', 'unknown'];
 const truthPath = (dir, id) => join(dir, 'pilot', `${safeId(id)}.truth.json`);
@@ -27,7 +26,7 @@ export function truthTemplate({ account, playbooks }) {
 
 export function writeTruthTemplate({ dir, account, playbooks }) {
   const p = truthPath(dir, account.id);
-  if (existsSync(p)) throw new Error(`A truth sheet already exists: ${p}. Edit it; it is not overwritten.`);
+  if (exists(p)) throw new Error(`A truth sheet already exists: ${p}. Edit it; it is not overwritten.`);
   writeJson(p, truthTemplate({ account, playbooks }));
   audit(dir, { type: 'pilot_truth_template', accountId: account.id });
   return p;

@@ -3,8 +3,7 @@
 // values, with no model: each sentence carries the ids of the records and signals it states, so a card cannot claim anything the data
 // does not show. No code path here creates an account without a principal's name, and a suppressed institution is never listed or promoted.
 import { join } from 'node:path';
-import { existsSync } from 'node:fs';
-import { readJson, writeJson, listFiles, audit, safeId } from './store.mjs';
+import { readJson, writeJson, listFiles, exists, audit, safeId } from './store.mjs';
 import { norm } from './guard.mjs';
 import { METRICS, periodLabel } from './metrics.mjs';
 
@@ -185,7 +184,7 @@ const slug = (s) => norm(s).replace(/ /g, '-').slice(0, 64).replace(/-+$/, '');
 
 function newAccountId(dir, item) {
   const base = slug(item.name) || `bank-${item.cert}`;
-  const free = (id) => !existsSync(join(dir, 'accounts', `${id}.json`));
+  const free = (id) => !exists(join(dir, 'accounts', `${id}.json`));
   if (free(base)) return safeId(base);
   const alt = `${base.slice(0, 63 - item.cert.length).replace(/-+$/, '')}-${item.cert}`;
   if (free(alt)) return safeId(alt);

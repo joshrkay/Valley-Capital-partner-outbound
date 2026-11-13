@@ -1,8 +1,7 @@
 // Agent 1: the suppression and cadence guard. Code only, no model. It decides whether a touch may happen, enforces the sequence and the caps,
 // stops everything on a reply or an opt-out, and logs every decision. It has no way to send anything: a person sends, then records it here.
-import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { readJson, readJsonl, writeJson, appendJsonl, audit } from './store.mjs';
+import { readJson, readJsonl, writeJson, appendJsonl, exists, audit } from './store.mjs';
 
 const DAY = 86400000;
 export const norm = (s) => String(s ?? '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim();
@@ -20,7 +19,7 @@ export function loadContext({ dir, config, env = process.env }) {
     suppression: readJson(join(dir, 'suppression.json'), { entries: [] }).entries ?? [],
     touches: readJsonl(join(dir, 'touches.jsonl')),
     senders: readJson(join(dir, 'senders.json'), { senders: [] }).senders ?? [],
-    kill: existsSync(join(dir, 'KILL')) || env.OUTBOUND_KILL === '1',
+    kill: exists(join(dir, 'KILL')) || env.OUTBOUND_KILL === '1',
   };
 }
 

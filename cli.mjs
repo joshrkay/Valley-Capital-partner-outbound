@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 // Command line for the three outbound agents. Prospect data lives in $OUTBOUND_DATA_DIR (outside the repo); nothing here can send a message.
 import { join } from 'node:path';
-import { existsSync, readFileSync } from 'node:fs';
 import { dataDir } from './src/paths.mjs';
 import { loadRules } from './src/rules.mjs';
-import { readJson, readJsonl, writeJson, listFiles, safeId, audit } from './src/store.mjs';
+import { readJson, readJsonl, writeJson, readText, listFiles, exists, safeId, audit } from './src/store.mjs';
 import { runFdic } from './src/sources/fdic.mjs';
 import { runScoring } from './src/score.mjs';
 import { listCandidates, getCandidate, promote, dismiss, snooze } from './src/candidates.mjs';
@@ -82,9 +81,9 @@ async function main() {
   const ctx = () => loadContext({ dir, config: rules.config });
 
   if (cmd === 'init') {
-    if (!existsSync(join(dir, 'senders.json'))) writeJson(join(dir, 'senders.json'), { _note: 'Fill every field. A sender with a [CONFIRM] placeholder blocks all sending.', senders: [{ id: 'principal-1', name: '[CONFIRM: name]', title: '[CONFIRM: title]', phone: '[CONFIRM: phone]', address: '[CONFIRM: street address]', mailbox: '[CONFIRM: mailbox]' }] });
-    if (!existsSync(join(dir, 'suppression.json'))) writeJson(join(dir, 'suppression.json'), { entries: [] });
-    if (!existsSync(join(dir, 'accounts', 'example-bank.json'))) writeJson(join(dir, 'accounts', 'example-bank.json'), { id: 'example-bank', name: 'Example Community Bank', aliases: [], type: 'bank', sectors: ['hospitality'], tier: 'A', person: { name: 'Jordan Sample', title: 'Chief Credit Officer', email: '', phone: '', phoneType: '', timezone: 'America/Chicago', mailingAddress: '' }, contact: { emailStatus: 'unverified', roleConfirmed: false, provenance: [] }, notes: 'INVENTED EXAMPLE. Replace with a real account chosen by a principal.', knownFacts: [] });
+    if (!exists(join(dir, 'senders.json'))) writeJson(join(dir, 'senders.json'), { _note: 'Fill every field. A sender with a [CONFIRM] placeholder blocks all sending.', senders: [{ id: 'principal-1', name: '[CONFIRM: name]', title: '[CONFIRM: title]', phone: '[CONFIRM: phone]', address: '[CONFIRM: street address]', mailbox: '[CONFIRM: mailbox]' }] });
+    if (!exists(join(dir, 'suppression.json'))) writeJson(join(dir, 'suppression.json'), { entries: [] });
+    if (!exists(join(dir, 'accounts', 'example-bank.json'))) writeJson(join(dir, 'accounts', 'example-bank.json'), { id: 'example-bank', name: 'Example Community Bank', aliases: [], type: 'bank', sectors: ['hospitality'], tier: 'A', person: { name: 'Jordan Sample', title: 'Chief Credit Officer', email: '', phone: '', phoneType: '', timezone: 'America/Chicago', mailingAddress: '' }, contact: { emailStatus: 'unverified', roleConfirmed: false, provenance: [] }, notes: 'INVENTED EXAMPLE. Replace with a real account chosen by a principal.', knownFacts: [] });
     return out(`Data folder ready: ${dir}\nNext: fill senders.json, add accounts/<id>.json for the accounts a principal chose, then: outbound status`);
   }
 
@@ -93,13 +92,13 @@ async function main() {
     const accts = listFiles(join(dir, 'accounts'), '.json').map((f) => f.replace(/\.json$/, ''));
     const incomplete = c.senders.filter((s) => Object.values(s).some((v) => /\[confirm/i.test(String(v))));
     return out({ dataDir: dir, killSwitch: !!(rules.config.killSwitch || c.kill), senders: c.senders.length, sendersIncomplete: incomplete.map((s) => s.id), accounts: accts.length,
-      researched: accts.filter((a) => existsSync(join(dir, 'research', `${a}.json`))), touchesLogged: c.touches.filter((t) => t.type === 'touch').length, suppressionEntries: c.suppression.length,
+      researched: accts.filter((a) => exists(join(dir, 'research', `${a}.json`))), touchesLogged: c.touches.filter((t) => t.type === 'touch').length, suppressionEntries: c.suppression.length,
       readyToSend: !incomplete.length && c.senders.length > 0 && !rules.config.killSwitch && !c.kill });
   }
 
   if (cmd === 'research' && (sub === 'run' || sub === 'show')) {
     const id = need(flags, 'account');
-    if (sub === 'show') { const p = join(dir, 'briefs', `${id}.md`); return out(existsSync(p) ? readFileSync(p, 'utf8') : `No brief yet for ${id}.`); }
+    if (sub === 'show') { const p = join(dir, 'briefs', `${id}.md`); return out(readText(p) ?? `No brief yet for ${id}.`); }
     const account = loadAccount(dir, id);
     if (!flags['dry-run']) { const g = researchGate({ dir, account, config: rules.config }); if (!g.allowed) throw new Error(g.reason); }
     const client = flags['dry-run'] ? null : await makeClient({ timeout: rules.models.research.timeoutMs });
@@ -133,7 +132,7 @@ async function main() {
     const c = ctx();
     const sentCount = c.touches.filter((t) => t.accountId === id && t.type === 'touch').length;
     const step = Number(flags.step ?? sentCount + 1);
-    if (sub === 'show') { const p = join(dir, 'drafts', id, `${step}-${channel}.md`); return out(existsSync(p) ? readFileSync(p, 'utf8') : 'No such draft.'); }
+    if (sub === 'show') { const p = join(dir, 'drafts', id, `${step}-${channel}.md`); return out(readText(p) ?? 'No such draft.'); }
     if (sub === 'approve') { const r = approveDraft({ dir, account, channel, step, by: need(flags, 'by'), ctx: c, rules }); return out(r.ok ? `Approved. A person may now send it.\n\n${r.text}` : { refused: r.errors }); }
     if (sub === 'run') {
       const client = flags['dry-run'] ? null : await makeClient();
