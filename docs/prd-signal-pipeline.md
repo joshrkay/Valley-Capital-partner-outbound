@@ -547,13 +547,13 @@ Every adapter (E3–E5) is built on this shared framework.
 
 **The design, in one paragraph.** The engine (guard, briefer, drafter, pilot, scoring, sources) stays exactly as it is: synchronous, tested, and reading and writing through the helpers in `src/store.mjs`. Those helpers gain a second backend, a **unit of work**. An action loads only the documents it needs from Postgres into memory, runs the same engine code against them, then writes back every changed document and new log line in **one transaction**, with a version check on each document. The web app reads small per-candidate rows kept in step with each write, never the whole candidate file (7.6 MB on live data). Long jobs (pulls, scoring, research, drafting) go on a queue that a worker runs, never inside a web request. Measured on the live data folder: 12 MB in 279 files.
 
-**E12-S1. One engine, two storage backends.** *As an operator, I want the platform to run the same tested code as the command line so that nothing behaves differently on the web.* P0, R2.
+**E12-S1. One engine, two storage backends.** *As an operator, I want the platform to run the same tested code as the command line so that nothing behaves differently on the web.* P0, R2. **Built** (`src/store.mjs`, `src/uow.mjs`, `test/uow.test.mjs`).
 - [ ] `src/store.mjs` routes every read, write, append, list and existence check by root: files for a normal data folder, memory for a unit of work. The ten or so direct `existsSync` and `readFileSync` calls in `src/` and `cli.mjs` move behind the helpers.
 - [ ] The whole existing test suite passes unchanged on files.
 - [ ] A new test runs these flows on both backends and gets identical stored results: promote, dismiss, set person, confirm role, the guard's check and record, pilot verdicts, approving a draft.
 - [ ] Given an action reads a path its unit of work did not load, then it fails loudly with the path. It never silently reads empty.
 
-**E12-S2. The database.** *As a principal, I want our data in one private database that only named principals can open so that the platform is safe to use from a browser.* P0, R2.
+**E12-S2. The database.** *As a principal, I want our data in one private database that only named principals can open so that the platform is safe to use from a browser.* P0, R2. **Built and tested on Postgres 16** (`supabase/migrations/`, `npm run test:db`).
 - [ ] Migrations live in `supabase/migrations/`.
 - [ ] Tables:
   - `documents` (path, body, version, updated_at, updated_by);
@@ -568,14 +568,15 @@ Every adapter (E3–E5) is built on this shared framework.
 - [ ] One Postgres function applies a unit of work atomically. Given any document's version changed since it was loaded, then nothing is written and the action is retried once, or reported.
 - [ ] No prospect data in migrations or seed files. The data-rule test also rejects `supabase/seed*.sql` with data rows.
 
-**E12-S3. A client with no new dependency.** *As an operator, I want the engine to reach Postgres through Supabase's REST API with plain `fetch` so that the engine gains no new dependency.* P0, R2.
+**E12-S3. A client with no new dependency.** **Built** (`src/platform/client.mjs`). It is tested against an in-memory fake of the REST API. The real REST layer is first exercised when a Supabase project exists, at E12-S7. *As an operator, I want the engine to reach Postgres through Supabase's REST API with plain `fetch` so that the engine gains no new dependency.* P0, R2.
 - [ ] Loading and flushing a unit of work, claiming and finishing jobs, and the candidate projection all go through PostgREST and RPC calls.
 - [ ] Tested against a fake server, like the FDIC adapter.
 
-**E12-S4. The worker.** *As a principal, I want to start research, drafting, data pulls and scoring from the web and have them run in the background so that a ten-minute research run never times out a page.* P0, R2.
+**E12-S4. The worker.** *As a principal, I want to start research, drafting, data pulls and scoring from the web and have them run in the background so that a ten-minute research run never times out a page.* P0, R2. **Built** (`src/platform/worker.mjs`, `.github/workflows/platform-worker.yml`).
 - [ ] `outbound worker --once` claims the oldest queued job (skip-locked) and runs the same function the command line runs, in a unit of work. It records the result and frees the job.
 - [ ] Job kinds: `sources.fdic`, `score.run`, `research.run`, `draft.run`.
-- [ ] A scheduled GitHub Actions workflow runs the worker and queues the weekly FDIC check (E11-S1). Logs carry job ids and counts only, checked as in E2-S1. Keys live in Actions secrets.
+- [x] A scheduled GitHub Actions workflow runs the worker hourly on weekdays (12:17 to 23:17 UTC) and queues the weekly FDIC check on Mondays (E11-S1). Logs carry job ids, kinds and outcomes only. Keys live in Actions secrets. It is off until the repository variable `PLATFORM_ENABLED` is `true`.
+- [ ] **Known limit:** a job queued from the web waits up to an hour for the next run. A "run now" trigger from the app needs a GitHub token on the server (P1).
 - [ ] The kill switch, a `KILL` document or the config flag, stops every job that could create a draft or touch a mailbox.
 
 **E12-S5. The web app.** *As a principal, I want to work the candidate list, read briefs, run the pilot and approve drafts from a browser so that the system fits a working day.* P0, R2.
@@ -585,7 +586,7 @@ Every adapter (E3–E5) is built on this shared framework.
 - [ ] There is no send button anywhere, matching the plan.
 - [ ] The site sends a no-index header, loads no third-party scripts or analytics, and logs no prospect data on the client.
 
-**E12-S6. Moving data in and out.** *As an operator, I want to load an existing data folder into the platform and export it back so that nothing is lost, and the firm always holds a copy it can read.* P0 for push, P1 for pull. R2.
+**E12-S6. Moving data in and out.** **Built** (`src/platform/move.mjs`). *As an operator, I want to load an existing data folder into the platform and export it back so that nothing is lost, and the firm always holds a copy it can read.* P0 for push, P1 for pull. R2.
 - [ ] `outbound platform push` copies a data folder into Postgres and can be re-run safely.
 - [ ] `outbound platform pull --to DIR` writes the platform's data back to a folder, which must be outside the repository.
 
