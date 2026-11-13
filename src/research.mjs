@@ -80,7 +80,7 @@ export function pipelineSection(pipeline) {
     signals: (pipeline.signals ?? []).map((s) => ({ type: s.type, label: s.label, period: s.period })), profile: pipeline.profile ?? null,
   };
   return `
-<pipeline_context source="FDIC Call Report data, computed and checked in code" period="${neutralize(String(pipeline.period ?? ''))}">${neutralize(ctx)}</pipeline_context>
+<pipeline_context source="FDIC Call Report data, computed and checked in code" period="${String(pipeline.period ?? '').replace(/[^0-9-]/g, '')}">${neutralize(ctx)}</pipeline_context>
 
 The pipeline context is what public Call Report data says about this institution's commercial real estate book: which categories it holds and how distressed each is. Use it to focus. For bank.exposure, look first for the institution's own disclosures about the categories flagged there (credit-quality tables in filings, earnings remarks, investor presentations), including any breakout of hotel or retail loans, which the Call Report does not separate. For bank.intent, look for stated plans to sell, reduce or exit loans in those categories. Do not copy pipeline figures into findings; a finding needs a page you retrieved.
 `;

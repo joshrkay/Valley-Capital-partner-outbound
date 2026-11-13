@@ -139,7 +139,7 @@ Rules that apply everywhere:
 - **Facts about a particular asset are for a principal only.** A named property, a filing or a CMBS loan is context and never reaches the drafter. This is the existing `kind: asset` rule, and it applies to every new source.
 - **Bank credit figures are for a principal only.** FDIC metrics are risk facts. The existing `decideUse` rule already keeps risk facts out of drafts, and no message tells a bank its own noncurrent ratio.
 - **Every number a person sees shows its source:** the field, the report date, the date it was fetched, and the run that fetched it.
-- **Models:** code first. Haiku at low effort suggests name matches. Sonnet at high effort writes briefs and drafts, as today. The "why now" card can use Haiku or Sonnet. Nothing here needs the top-tier model.
+- **Models:** code first. Haiku at low effort suggests name matches. Sonnet at high effort writes briefs and drafts, as today. The "why now" card uses no model; it is built from templates in code (E6-S3). Nothing here needs the top-tier model.
 
 ## 7. Data model
 

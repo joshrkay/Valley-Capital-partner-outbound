@@ -17,7 +17,11 @@ function matches(row, clause) {
   const [, field, expr] = m;
   const v = row[field];
   if (v === undefined) return false;
-  if (expr.startsWith('[')) { const [lo, hi] = expr.slice(1, -1).split(' TO '); return String(v) >= lo && String(v) <= hi; }
+  if (expr.startsWith('[')) {   // ranges compare as numbers when both sides are numeric; `*` is an open bound, as in the real API
+    const [lo, hi] = expr.slice(1, -1).split(' TO ');
+    const cmp = (a, b) => (Number.isFinite(Number(a)) && Number.isFinite(Number(b)) ? Number(a) - Number(b) : String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0);
+    return (lo === '*' || cmp(v, lo) >= 0) && (hi === '*' || cmp(v, hi) <= 0);
+  }
   if (expr.startsWith('(')) {
     if (expr.includes(',')) return false;   // the real API returns nothing for the comma form
     return expr.slice(1, -1).split(' OR ').map(unq).some((x) => String(v) === x || Number(v) === Number(x));
@@ -81,11 +85,15 @@ const TABLES = () => ({
     { CERT: 102, NAME: 'EXAMPLE NATIONAL BANK', FAILDATE: '1/16/2009', RESTYPE: 'ASSISTANCE' },
     { CERT: 999, NAME: 'EXAMPLE FAILED BANK', FAILDATE: '7/17/2026', RESTYPE: 'FAILURE' },
   ],
+  // As in the real data: DEPSUM (the bank's total) is carried only on the main-office row (BRNUM 0); every other row has DEPSUM 0.
+  // Bank 101's main office is in a metro county; bank 102's is in SD, outside every metro, which is the case that used to give a total of 0.
   sod: [
-    { CERT: 101, YEAR: 2026, STCNTYBR: 48453, MSABR: 12420, DEPSUMBR: 300, DEPSUM: 1000, CNTYNAMB: 'Travis', STALPBR: 'TX' },
-    { CERT: 101, YEAR: 2026, STCNTYBR: 8031, MSABR: 0, DEPSUMBR: 200, DEPSUM: 1000, CNTYNAMB: 'Denver', STALPBR: 'CO' },
-    { CERT: 102, YEAR: 2026, STCNTYBR: 6037, MSABR: 31080, DEPSUMBR: 5000, DEPSUM: 40000000, CNTYNAMB: 'Los Angeles', STALPBR: 'CA' },
-    { CERT: 101, YEAR: 2025, STCNTYBR: 48453, MSABR: 12420, DEPSUMBR: 1, DEPSUM: 1, CNTYNAMB: 'Travis', STALPBR: 'TX' },
+    { CERT: 101, YEAR: 2026, BRNUM: 0, STCNTYBR: 48453, MSABR: 12420, DEPSUMBR: 300, DEPSUM: 1000, CNTYNAMB: 'Travis', STALPBR: 'TX' },
+    { CERT: 101, YEAR: 2026, BRNUM: 1, STCNTYBR: 8031, MSABR: 0, DEPSUMBR: 200, DEPSUM: 0, CNTYNAMB: 'Denver', STALPBR: 'CO' },
+    { CERT: 101, YEAR: 2026, BRNUM: 2, STCNTYBR: 48001, MSABR: 0, DEPSUMBR: 500, DEPSUM: 0, CNTYNAMB: 'Anderson', STALPBR: 'TX' },
+    { CERT: 102, YEAR: 2026, BRNUM: 0, STCNTYBR: 46099, MSABR: 43620, DEPSUMBR: 39995000, DEPSUM: 40000000, CNTYNAMB: 'Minnehaha', STALPBR: 'SD' },
+    { CERT: 102, YEAR: 2026, BRNUM: 7, STCNTYBR: 6037, MSABR: 31080, DEPSUMBR: 5000, DEPSUM: 0, CNTYNAMB: 'Los Angeles', STALPBR: 'CA' },
+    { CERT: 101, YEAR: 2025, BRNUM: 0, STCNTYBR: 48453, MSABR: 12420, DEPSUMBR: 1, DEPSUM: 1, CNTYNAMB: 'Travis', STALPBR: 'TX' },
   ],
   financials: [fin('101', '20260331'), fin('101', '20260630'), fin('102', '20260331'), fin('102', '20260630'), fin('101', '20251231')],
 });
@@ -195,6 +203,9 @@ test('a full run writes the bank list, footprint, financials and state, every re
   assert.equal(fp['101'].sod.year, 2026);
   assert.deepEqual(fp['101'].sod.depositsByMetro, { 12420: 300, 19740: 200 }, 'Denver county 08031 arrives as the number 8031 and is still matched');
   assert.equal(fp['101'].sod.metroShare, 0.5);
+  // The total comes from the main-office row even when that row is outside every metro (it used to read 0 from the metro rows).
+  assert.equal(fp['102'].sod.totalDeposits, 40000000);
+  assert.equal(fp['102'].sod.metroShare, 0.000125);
   assert.ok(s.notes.some((n) => /MSA code different/.test(n)), 'an MSABR disagreement is noted');
 
   const f101 = readJson(p.financials('101'));

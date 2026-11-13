@@ -17,7 +17,7 @@ const PIPELINE = {
 test('the briefer receives the pipeline context as fenced data, with instructions to focus, not to copy', () => {
   const a = account({ originSignals: ['sig-1'], sectors: ['multifamily'], pipeline: PIPELINE });
   const { user } = buildPrompt({ account: a, playbook: rules.playbooks.types.bank, playbooks: rules.playbooks, models: models(), today: '2026-11-13' });
-  assert.match(user, /<pipeline_context source="FDIC Call Report data/);
+  assert.match(user, /<pipeline_context source="FDIC Call Report data[^"]*" period="20260630">/);
   assert.match(user, /Multifamily noncurrent ratio up 2 quarters running/);
   assert.match(user, /812345/);
   assert.match(user, /Do not copy pipeline figures into findings/);

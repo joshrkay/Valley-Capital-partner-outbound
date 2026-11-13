@@ -15,7 +15,7 @@ export const FDIC_FIELDS = Object.freeze({
   institutions: ['CERT', 'NAME', 'CITY', 'STALP', 'ASSET', 'WEBADDR', 'ACTIVE'],
   // Branch rows: STALP here is the BRANCH's state in live data (despite its definition), so it is not requested; HQ state comes from /institutions.
   locations: ['CERT', 'CBSA_NO', 'CBSA', 'COUNTY', 'STCNTY', 'MAINOFF'],
-  // DEPSUM is the institution's total deposits, repeated on every branch row; DEPSUMBR is the branch's own.
+  // DEPSUMBR is the branch's own deposits. DEPSUM, the bank's total, is carried only on the main-office row (see pullSod).
   sod: ['CERT', 'YEAR', 'DEPSUMBR', 'DEPSUM', 'STCNTYBR', 'MSABR', 'CNTYNAMB', 'STALPBR'],
   failures: ['CERT', 'NAME', 'FAILDATE', 'RESTYPE'],
   financials: [
@@ -148,7 +148,7 @@ export async function pullFailures({ certs, http, pageSize, chunkSize }) {
 
 // Summary of Deposits, latest year, joined to metros by branch COUNTY (STCNTYBR, which FDIC returns as a number, so it is zero-padded)
 // rather than by MSABR. MSABR disagreements are counted so a drift in FDIC's coding shows up in the run notes.
-export async function pullSod({ metros, http, pageSize }) {
+export async function pullSod({ metros, http, pageSize, chunkSize = 50 }) {
   const countyToMetro = new Map();
   for (const m of metroList(metros)) for (const c of Object.keys(m.counties ?? {})) countyToMetro.set(pad5(c), String(m.cbsa));
   if (!countyToMetro.size) return { rows: [], total: 0, mismatch: false, year: null, byCert: new Map(), msaMismatches: 0, rowsRead: 0 };
@@ -168,9 +168,21 @@ export async function pullSod({ metros, http, pageSize }) {
     if (!byCert.has(cert)) byCert.set(cert, { depositsByMetro: {}, totalDeposits: null });
     const s = byCert.get(cert);
     s.depositsByMetro[cbsa] = (s.depositsByMetro[cbsa] ?? 0) + (Number(row.DEPSUMBR) || 0);
-    if (row.DEPSUM !== undefined && row.DEPSUM !== null) s.totalDeposits = Math.max(s.totalDeposits ?? 0, Number(row.DEPSUM));
   }
-  return { ...r, year: Number(year), byCert, msaMismatches, filters, rowsRead: r.rows.length + latest.rows.length };
+  // DEPSUM is the bank's total deposits, but FDIC carries it ONLY on the main-office row (branch 0) and sends 0 on every other row.
+  // Verified 2026-11-13: one bank's DEPSUM of 55,417 equals its two branches' DEPSUMBR, 33,198 + 22,219. A main office outside the
+  // metros is not among the rows above, so reading DEPSUM from them gave 0 for most banks. The totals are fetched on their own:
+  // exactly one row per bank, the one with DEPSUM above zero.
+  const certs = [...byCert.keys()];
+  const totals = certs.length
+    ? await collect({ endpoint: 'sod', values: certs, filtersFor: (p) => `${orFilter('CERT', p)} AND YEAR:${Number(year)} AND DEPSUM:[1 TO *]`, chunkSize, fields: ['CERT', 'DEPSUM'], pageSize, http })
+    : { rows: [], total: 0, mismatch: false };
+  for (const row of totals.rows) { const s = byCert.get(String(row.CERT)); if (s) s.totalDeposits = Number(row.DEPSUM); }
+  const noTotal = certs.filter((c) => !byCert.get(c).totalDeposits).length;
+  // FDIC's branch figures can sum to $1,000 more than its own total (rounding; seen on 3 banks on 2026-11-13). Within 0.1% is rounding;
+  // beyond that, the county join is suspect.
+  const overOne = certs.filter((c) => { const s = byCert.get(c); const m = Object.values(s.depositsByMetro).reduce((a, b) => a + b, 0); return s.totalDeposits && m > s.totalDeposits * 1.001; }).length;
+  return { ...r, year: Number(year), byCert, msaMismatches, filters, totals, noTotal, overOne, rowsRead: r.rows.length + latest.rows.length };
 }
 
 // E3-S2: the last `quarters` published quarters for every bank, re-pulled each run because Call Reports get amended.
@@ -240,7 +252,10 @@ export async function runFdic({ dir, metros, includeHq = false, fetchImpl = glob
     const allCerts = [...new Set([...universe, ...known])].sort((a, b) => Number(a) - Number(b));
     const inst = take('institutions', await pullInstitutions({ certs: allCerts, http, pageSize, chunkSize }), FDIC_FIELDS.institutions);
     const fails = take('failures', await pullFailures({ certs: allCerts, http, pageSize, chunkSize }), FDIC_FIELDS.failures);
-    const sod = take('sod', await pullSod({ metros: list, http, pageSize }), FDIC_FIELDS.sod);
+    const sod = take('sod', await pullSod({ metros: list, http, pageSize, chunkSize }), FDIC_FIELDS.sod);
+    if (sod.totals) take('sod-totals', sod.totals, ['CERT', 'DEPSUM']);
+    if (sod.noTotal) notes.push(`sod: ${sod.noTotal} bank(s) with metro deposits but no main-office total in SOD ${sod.year}; their deposit share is unknown`);
+    if (sod.overOne) { suspect = true; notes.push(`sod: ${sod.overOne} bank(s) with more deposits in the metros than in total; check the county join`); }
     const fin = take('financials', await pullFinancials({ certs: universe, latestRepdte: quarter.latestRepdte, quarters, http, pageSize, chunkSize }), FDIC_FIELDS.financials);
     if (sod.msaMismatches) notes.push(`sod: ${sod.msaMismatches} branch rows had an MSA code different from their county's metro; county was used.`);
     if (missing.length) return fail([`FDIC did not return requested field(s): ${missing.map((m) => `${m.step}.${m.field} (absent from ${m.rowsLacking} of ${m.rows} rows)`).join(', ')}. A field name may have changed; nothing was written.`]);
@@ -284,7 +299,7 @@ export async function runFdic({ dir, metros, includeHq = false, fetchImpl = glob
         branchesByMetro: branches.byCert.get(cert) ?? {},
         sod: s ? {
           year: sod.year, depositsByMetro: s.depositsByMetro, totalDeposits: s.totalDeposits,
-          metroShare: s.totalDeposits ? Math.round((metroDeposits / s.totalDeposits) * 1e6) / 1e6 : null,
+          metroShare: s.totalDeposits ? Math.min(1, Math.round((metroDeposits / s.totalDeposits) * 1e6) / 1e6) : null,   // capped: see pullSod on rounding
           _source: sourceBlock({ source: 'fdic', endpoint: '/sod', query: { filters: `YEAR:${sod.year} AND CERT:${cert}` }, recordId: `${sod.year}_${cert}`, period: String(sod.year), fetchedAt, runId: run.runId }),
         } : null,
         _source: sourceBlock({ source: 'fdic', endpoint: '/locations', query: { filters: branches.filters }, recordId: cert, period: asOf, fetchedAt, runId: run.runId }),

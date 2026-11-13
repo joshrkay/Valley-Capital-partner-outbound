@@ -6,6 +6,8 @@ import { dataDir } from './src/paths.mjs';
 import { loadRules } from './src/rules.mjs';
 import { readJson, readJsonl, writeJson, listFiles, safeId, audit } from './src/store.mjs';
 import { runFdic } from './src/sources/fdic.mjs';
+import { runScoring } from './src/score.mjs';
+import { listCandidates, getCandidate, promote, dismiss, snooze } from './src/candidates.mjs';
 import { loadContext, checkTouch, recordObservedSend, recordEvent, addSuppression, dueList, touchFromAccount } from './src/guard.mjs';
 import { runBriefer } from './src/research.mjs';
 import { runDrafter, approveDraft } from './src/draft.mjs';
@@ -36,6 +38,15 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   Signals (PRD E2, E3): public data only. Nothing here contacts anyone.
   outbound sources run fdic [--include-hq]       bank list for the six metros, deposit footprint, 8 quarters of CRE credit data (free, no key)
   outbound sources status                         the last run of each source, and the latest FDIC quarter seen
+
+  Candidates (PRD E6): which banks, why now, and what paper they likely hold. A principal decides; nothing is contacted.
+  outbound score run [--draft-buybox]             score every bank on distress, fit and timing (refuses while buybox.json has [CONFIRM]
+                                                  placeholders; --draft-buybox runs anyway and labels the list PROVISIONAL)
+  outbound candidates list [--tier A|B] [--all]   the list: tier, score by axis, metros, and the "why now" card
+  outbound candidates show --key fdic:CERT        one bank: paper profile, score components with their sources, signals
+  outbound candidates promote --key K --by NAME   create the account with the pipeline's research attached; then research it
+  outbound candidates dismiss --key K --by NAME --reason TEXT      it returns only if a new signal fires
+  outbound candidates snooze  --key K --by NAME --until YYYY-MM-DD
 
   Pilot (PRD E1): check the briefer on accounts you already know before it researches any account the pipeline found.
   outbound pilot template --account ID            write a "what is true" sheet to fill in (pilot/ID.truth.json)
@@ -161,6 +172,29 @@ async function main() {
       for (const r of readJsonl(join(dir, 'sources', 'runs.jsonl'))) last[r.source] = r;
       return out({ lastRuns: last, fdic: readJson(join(dir, 'sources', 'fdic', 'state.json'), null) });
     }
+  }
+
+  if (cmd === 'score' && sub === 'run') {
+    const r = runScoring({ dir, buybox: rules.buybox, scoring: rules.scoring, metros: rules.metros, allowPlaceholders: !!flags['draft-buybox'] });
+    const n = (t) => r.items.filter((i) => i.tier === t).length;
+    return out(`${r.provisional ? 'PROVISIONAL (the buy box still has placeholders; the ranking is not final)\n' : ''}Scored ${r.items.length} banks on data as of ${r.latestRepdte}: Tier A ${n('A')}, Tier B ${n('B')}, untiered ${n(null)}.\nNext: outbound candidates list`);
+  }
+
+  if (cmd === 'candidates') {
+    const sup = ctx().suppression;
+    if (sub === 'list') {
+      const tiers = flags.tier && flags.tier !== true ? [String(flags.tier).toUpperCase()] : ['A', 'B'];
+      const l = listCandidates({ dir, suppression: sup, tiers, all: !!flags.all });
+      const row = (i) => `${i.tier ?? '-'}  ${String(i.score).padStart(6)}  d${i.axes.distress} f${i.axes.fit} t${i.axes.timing}  ${i.key.padEnd(11)} ${i.name} (${i.metroLabels?.join(', ') ?? ''})${i.status !== 'new' ? ` [${i.status}]` : ''}\n     ${i.card?.text ?? (i.filtersFailed?.length ? `filtered: ${i.filtersFailed.join('; ')}` : '')}`;
+      return out(`${l.provisional ? 'PROVISIONAL: the buy box still has placeholders.\n' : ''}Data as of ${l.latestRepdte} (run ${l.runId}). ${l.items.length} candidate(s). Columns: tier, score, distress/fit/timing, key, bank.\n\n${l.items.map(row).join('\n\n')}`);
+    }
+    if (sub === 'show') return out(getCandidate({ dir, key: need(flags, 'key') }));
+    if (sub === 'promote') {
+      const a = promote({ dir, key: need(flags, 'key'), by: need(flags, 'by'), suppression: sup });
+      return out(`Promoted ${a.name} to account ${a.id}${a.pipeline.leadSector ? `, leading with ${a.pipeline.leadSector}` : ''}.\n${a.pipeline.leadSector ? '' : `${a.pipeline.leadSectorNote}\n`}Next: research the bank (no person needed yet): outbound research run --account ${a.id}`);
+    }
+    if (sub === 'dismiss') return out(dismiss({ dir, key: need(flags, 'key'), by: need(flags, 'by'), reason: need(flags, 'reason') }));
+    if (sub === 'snooze') return out(snooze({ dir, key: need(flags, 'key'), by: need(flags, 'by'), until: need(flags, 'until') }));
   }
 
   if (cmd === 'pilot') {

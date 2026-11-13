@@ -1,8 +1,17 @@
 # Outbound agents
 
-The first three of the nine agents in `docs/outbound-plan.md`: the **guard**, the **briefer** (deep research) and the **drafter**. They find out who to approach and why, prepare an exact message, and refuse anything unsafe. **Nothing in this folder can send a message.** A principal sends; the guard then records it.
+The agents in `docs/outbound-plan.md` that exist so far:
 
-Start with `docs/research-agenda.md`. The briefer's questions (`playbooks.json`) are that agenda turned into data.
+- **The guard**, **the briefer** (deep research) and **the drafter** (agents 1 to 3).
+- **Release 1 of the signal pipeline** (agents 4 and 5, from `docs/prd-signal-pipeline.md`):
+  - FDIC data for the banks in the six target metros;
+  - a paper profile and a distress, fit and timing score for each bank;
+  - a candidate list a principal works through;
+  - a pilot that the briefer must pass before it researches anything the pipeline found.
+
+**The goal** (PRD section 0): purposeful outreach to the right person at the right time, backed by research into what paper the institution holds, what those loans look like, and where the firm has an advantage. **Nothing in this folder can send a message.** A principal sends; the guard then records it.
+
+Start with `docs/prd-signal-pipeline.md` for the pipeline, and `docs/research-agenda.md` for the briefer. The briefer's questions (`playbooks.json`) are that agenda turned into data.
 
 ## Status: read this first
 
@@ -10,7 +19,16 @@ Start with `docs/research-agenda.md`. The briefer's questions (`playbooks.json`)
 - **Cost is unmeasured.** Deep research is the expensive step. `models.json` caps searches, fetches and turns per account; the brief reports tokens used and an estimate from token prices only. Search fees are not included. Run on a handful of accounts first.
 - **Every number in `config.json` is a placeholder** (caps, sequence timing, call hours). They are not researched.
 - **Counsel has not reviewed any of it,** including the claims and the channel rules.
-- **Not built yet:** the structured-data adapters (Call Reports, EDGAR loan-level data, dockets) and the contact finder (agents 4 and 5), reply triage, the referral mapper, meeting prep, the reporter. The briefer reads the open web; it cannot do what needs a data feed.
+- **The FDIC adapter has run live** (2026-11-13): 268 banks, 8 quarters to June 30, 2026, about 7 seconds, public data with no key. The scoring weights, thresholds and tier cuts in `scoring.json` are **placeholders**. The buy box (`buybox.json`) has `[CONFIRM]` fields a principal must fill. Until then `score run` refuses, or with `--draft-buybox` it labels its list PROVISIONAL.
+- **Not built yet:**
+  - CMBS loan-level data from SEC EDGAR, and county records (PRD E4, E5; spikes first);
+  - contact details;
+  - the review screen and database (E8);
+  - Gmail drafts and reply detection (E9);
+  - quarterly nurture (E10);
+  - the referral mapper, meeting prep and the reporter.
+
+  The briefer reads the open web; it cannot do what needs a data feed.
 
 ## The data rule
 
@@ -41,6 +59,33 @@ npm run outbound -- guard record --account acme-bank --channel letter --step 1 -
 ```
 
 `npm run outbound -- help` lists every command.
+
+### The signal pipeline: from public data to a researched account
+
+```bash
+npm run outbound -- sources run fdic                     # bank list, deposit footprint, 8 quarters of CRE credit data (free)
+npm run outbound -- score run                            # refuses until buybox.json is filled; add --draft-buybox for a PROVISIONAL list
+npm run outbound -- candidates list --tier A             # tier, score by axis, and the "why now" card for each bank
+npm run outbound -- candidates show --key fdic:12345     # the paper profile and every score component, each with its FDIC field and date
+npm run outbound -- candidates promote --key fdic:12345 --by "Pat Example"
+npm run outbound -- research run --account <id>          # institution research: brings back who decides (refused until the pilot passes)
+npm run outbound -- account set-person --account <id> --name "..." --title "..." --by "Pat Example"
+```
+
+Behind a proxy, Node's built-in `fetch` needs `NODE_USE_ENV_PROXY=1` (Node 22.21 or later).
+
+**Before the briefer researches any bank the pipeline found, it passes a pilot** on 10 accounts the principals already know (PRD E1):
+
+```bash
+npm run outbound -- pilot template --account acme-bank   # write what you know is true
+npm run outbound -- research run --account acme-bank
+npm run outbound -- pilot review --account acme-bank
+npm run outbound -- pilot mark --account acme-bank --finding F1 --verdict true --by "Pat Example"
+npm run outbound -- pilot scorecard                      # precision, recall, fabrications, cost per brief
+npm run outbound -- pilot pass --by "Pat Example"        # needs 10 fully reviewed accounts and zero fabrications
+```
+
+**What the research does and does not do.** The paper profile, the fit and the signals decide who a principal approaches, when, and which sector to lead with. They never appear in a message. The drafter sees only the sector, and a test proves no FDIC figure reaches it.
 
 ## What each agent does, and how
 
@@ -96,13 +141,19 @@ It stores no message text, and writes an audit line for every decision.
 | `claims.json` | The only statements about the firm a message may make |
 | `terminology.json` | Per-audience word rules, banned and cliché language, claim phrases |
 | `playbooks.json` | The briefer's questions by account type |
-| `src/` | `guard`, `research`, `draft`, `lint`, `model` (the only file that calls the API), `rules`, `store`, `paths` |
+| `metros.json` | The six target metros by CBSA code, with counties from the Census 2023 delineation |
+| `buybox.json` | What the firm buys. `[CONFIRM]` fields block scoring until a principal fills them |
+| `scoring.json` | Score components (distress, fit, timing), signal rules and tier cuts; every number a placeholder |
+| `src/` | `guard`, `research`, `draft`, `lint`, `model` (the only file that calls the Anthropic API), `rules`, `store`, `paths`, plus the pipeline: `sources/` (`http`, `runlog`, `fdic`), `metrics`, `score`, `candidates`, `pilot` |
 | `scripts/sync-site.mjs` | Refreshes `site-snapshot/` from the website repository (see below) |
 | `site-snapshot/` | A copy of the 7 website files the rules depend on, a list of the site's pages, and a record of the commit it came from. Committed. Refresh it; do not edit it. |
-| `docs/` | The plan and the research agenda |
-| `test/` | 65 tests, no network, invented data only. `npm test` |
+| `docs/` | The plan, the research agenda, and the PRD for the signal pipeline |
+| `test/` | 145 tests, no network, invented data only. `npm test` |
 
-In `$OUTBOUND_DATA_DIR`: `senders.json`, `suppression.json`, `accounts/`, `research/`, `facts/`, `briefs/`, `drafts/<account>/`, `touches.jsonl`, `audit.jsonl`.
+In `$OUTBOUND_DATA_DIR`:
+
+- `senders.json`, `suppression.json`, `accounts/`, `research/`, `facts/`, `briefs/`, `drafts/<account>/`, `touches.jsonl`, `audit.jsonl`;
+- for the pipeline: `sources/` (FDIC data, the run log and the change log), `candidates/` (the latest list and principals' decisions), and `pilot/` (truth sheets, verdicts, the pass).
 
 ## Changing it
 
