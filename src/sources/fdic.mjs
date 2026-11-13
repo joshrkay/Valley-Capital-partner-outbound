@@ -193,7 +193,7 @@ const parseFailDate = (s) => { const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(
 
 // Does the whole FDIC step: bank list, institution details, failures, footprint, financials. Writes the PRD Appendix C files and
 // one run-log line, and returns a summary. Never throws for a data problem: a failed run returns outcome "failed" with the reason.
-export async function runFdic({ dir, metros, includeHq = false, fetchImpl = globalThis.fetch, now = new Date(), quarters = 8, pageSize = 10000, chunkSize = 50, sleep = realSleep, minIntervalMs = 200, retries = 3, timeoutMs = 60000 }) {
+export async function runFdic({ dir, metros, includeHq = false, fetchImpl = globalThis.fetch, now = new Date(), quarters = 8, pageSize = 10000, chunkSize = 50, sleep = realSleep, minIntervalMs = 200, retries = 3, timeoutMs = 60000, clock = () => new Date() }) {
   const list = metroList(metros);
   if (!list.length) throw new Error('runFdic: no metros given (pass metros.json).');
   const hqStates = includeHq ? (metros?.hqStates ?? []) : [];
@@ -219,7 +219,7 @@ export async function runFdic({ dir, metros, includeHq = false, fetchImpl = glob
     return res;
   };
   const fail = (errors) => {
-    const line = finishRun(dir, run, { rowsRead, outcome: 'failed', missingFields: missingNames(), errors, notes, nullCounts, now });
+    const line = finishRun(dir, run, { rowsRead, outcome: 'failed', missingFields: missingNames(), errors, notes, nullCounts, now: clock() });
     return { runId: run.runId, outcome: line.outcome, banks: 0, latestRepdte: null, newQuarter: false, missingFields: missingNames(), missingDetail: missing, changed: 0, rowsRead, rowsWritten: 0, nullCounts, notes, errors: line.errors };
   };
 
@@ -232,7 +232,7 @@ export async function runFdic({ dir, metros, includeHq = false, fetchImpl = glob
     const universe = [...new Set([...branches.byCert.keys(), ...hq.certs])].sort((a, b) => Number(a) - Number(b));
     if (!universe.length) {
       notes.push('No banks matched the metro filter. The filter syntax or the metro codes may be wrong; nothing was written.');
-      const line = finishRun(dir, run, { rowsRead, outcome: 'ok', suspect: true, notes, now });
+      const line = finishRun(dir, run, { rowsRead, outcome: 'ok', suspect: true, notes, now: clock() });
       return { runId: run.runId, outcome: line.outcome, banks: 0, latestRepdte: quarter.latestRepdte, newQuarter: false, missingFields: [], changed: 0, rowsRead, rowsWritten: 0, notes };
     }
     const existingInst = readJson(paths.institutions, {});
@@ -320,7 +320,7 @@ export async function runFdic({ dir, metros, includeHq = false, fetchImpl = glob
     for (const [cert, data] of finFiles) writeJson(paths.financials(cert), data);
     writeJson(paths.state, { latestRepdte: quarter.latestRepdte, previousRepdte: quarter.previous, checkedAt: fetchedAt, sodYear: sod.year, runId: run.runId });
 
-    const line = finishRun(dir, run, { rowsRead, rowsWritten, rowsChanged: changed, outcome: 'ok', suspect, notes, nullCounts, now });
+    const line = finishRun(dir, run, { rowsRead, rowsWritten, rowsChanged: changed, outcome: 'ok', suspect, notes, nullCounts, now: clock() });
     return { runId: run.runId, outcome: line.outcome, banks: universe.length, latestRepdte: quarter.latestRepdte, newQuarter: quarter.newQuarter, quarters: fin.quarters, sodYear: sod.year, missingFields: [], changed, rowsRead, rowsWritten, nullCounts, flagged, notes };
   } catch (e) {
     return fail([e.message]);

@@ -148,6 +148,15 @@ test('institutions.WEBADDR absent on one bank (as FDIC really does) passes, is s
   assert.deepEqual(f.missingFields, ['institutions.WEBADDR']);
 });
 
+test('the run log records when the run finished, not only when it started', async () => {
+  const dir = makeDir();
+  const s = await runFdic({ ...opts(dir, fakeFdic(TABLES()).fetchImpl), now: new Date('2026-11-13T10:00:00Z'), clock: () => new Date('2026-11-13T10:00:07Z') });
+  assert.equal(s.outcome, 'ok');
+  const line = readJsonl(join(dir, 'sources', 'runs.jsonl')).at(-1);
+  assert.equal(line.startedAt, '2026-11-13T10:00:00.000Z');
+  assert.equal(line.finishedAt, '2026-11-13T10:00:07.000Z');
+});
+
 test('only quarterly charge-off fields are requested; year-to-date ones never are', async () => {
   for (const f of YTD_FLOW_FIELDS) assert.ok(!FDIC_FIELDS.financials.includes(f), f);
   for (const f of ['NTLNLSQ', 'NTRECONQ', 'NTRENRSQ', 'NTREMULQ']) assert.ok(FDIC_FIELDS.financials.includes(f), f);

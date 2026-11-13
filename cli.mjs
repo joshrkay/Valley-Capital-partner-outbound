@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
 import { dataDir } from './src/paths.mjs';
 import { loadRules } from './src/rules.mjs';
-import { readJson, writeJson, listFiles, safeId, audit } from './src/store.mjs';
+import { readJson, readJsonl, writeJson, listFiles, safeId, audit } from './src/store.mjs';
+import { runFdic } from './src/sources/fdic.mjs';
 import { loadContext, checkTouch, recordObservedSend, recordEvent, addSuppression, dueList, touchFromAccount } from './src/guard.mjs';
 import { runBriefer } from './src/research.mjs';
 import { runDrafter, approveDraft } from './src/draft.mjs';
@@ -31,6 +32,10 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound guard event  --account ID --type reply|opt_out|bounce|meeting|handoff [--date D] [--note TEXT]
   outbound suppress add --type email|domain|person|institution|asset --value V --reason R [--alias A]...
   outbound suppress list
+
+  Signals (PRD E2, E3): public data only. Nothing here contacts anyone.
+  outbound sources run fdic [--include-hq]       bank list for the six metros, deposit footprint, 8 quarters of CRE credit data (free, no key)
+  outbound sources status                         the last run of each source, and the latest FDIC quarter seen
 
   Pilot (PRD E1): check the briefer on accounts you already know before it researches any account the pipeline found.
   outbound pilot template --account ID            write a "what is true" sheet to fill in (pilot/ID.truth.json)
@@ -141,6 +146,20 @@ async function main() {
     if (sub === 'record') {   // the send already happened, so it is always logged; a rule it broke is shown, not used to drop the record
       const r = recordObservedSend(dir, t, c);
       return out(r.violations.length ? `RECORDED, but this send broke ${r.violations.length} rule(s). Review before the next touch:\n${r.violations.map((e) => `- ${e.code}: ${e.message}`).join('\n')}` : r.rec);
+    }
+  }
+
+  if (cmd === 'sources') {
+    if (sub === 'run') {
+      if (pos[2] !== 'fdic') throw new Error('Usage: outbound sources run fdic [--include-hq]. FDIC is the only source in Release 1.');
+      const r = await runFdic({ dir, metros: rules.metros, includeHq: !!flags['include-hq'] });
+      if (r.outcome === 'failed') process.exitCode = 1;
+      return out(r);
+    }
+    if (sub === 'status') {
+      const last = {};
+      for (const r of readJsonl(join(dir, 'sources', 'runs.jsonl'))) last[r.source] = r;
+      return out({ lastRuns: last, fdic: readJson(join(dir, 'sources', 'fdic', 'state.json'), null) });
     }
   }
 
