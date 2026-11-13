@@ -35,9 +35,10 @@
 //   and from. Parameter order does not matter. It does NOT key on items or sics. Seen: a request for SIC 6021 got the cached
 //   answer for 6022, and a request without items got another request's items-filtered answer. So:
 //   - items are never sent: 8-K items are matched on the hits;
-//   - every response's echoed query is compared with the request;
+//   - every response's echoed query is compared with the request. A response with no echo counts as one that does not match:
+//     the hits carry no text, so only the echo can confirm the phrases;
 //   - every hit is filtered again on the fields it carries;
-//   - a response that does not match is retried once, after the cache has had time to expire.
+//   - a response that does not match is retried once, after the cache has had time to expire, and then fails the search.
 //
 // The entity lookup: ?keysTyped=<text> returns up to 10 SEC entities whose name has every word typed, or whose CIK is the text
 //   (padded or not): hits [{ _id: "<unpadded CIK>", _source: { entity: "NAME (TICKER)", entity_words, tickers, rank } }].
@@ -189,17 +190,17 @@ export function eftsClient({ sec, fetchImpl = globalThis.fetch, sleep = realSlee
 }
 
 // One search, every page. A window with more hits than the server will page through is split in half, down to a single day.
-// Returns { hits (normalized, filtered), read, pages, short, echoMissing, retried, dropped, missing, nulls, windows }.
+// Returns { hits (normalized, filtered), read, pages, short, retried, dropped, missing, nulls, windows }.
 export async function search({ client, cacheWaitMs = 65000, phrases = [], forms, ciks = [], startdt, enddt, states = [], sics = [] }) {
   const base = { phrases, forms, ciks, states, sics };
-  const out = { hits: [], read: 0, pages: 0, short: false, echoMissing: 0, retried: 0, dropped: 0, missing: {}, nulls: {}, windows: [] };
+  const out = { hits: [], read: 0, pages: 0, short: false, retried: 0, dropped: 0, missing: {}, nulls: {}, windows: [] };
   const page = async (asked) => {
     for (let attempt = 0; ; attempt++) {
       const body = await client.getChecked(searchParams(asked));
       const echo = echoProblems(body, asked);
-      if (echo.missing) { out.echoMissing++; return body; }
-      if (!echo.problems.length) return body;
-      if (attempt >= 1) throw new EftsError(`The response does not match the request, even after waiting for the cache: ${echo.problems.join('; ')}.`, { kind: 'mismatch', detail: echo.problems });
+      const problems = echo.missing ? ['no query echo, so it cannot be matched to its request'] : echo.problems;
+      if (!problems.length) return body;
+      if (attempt >= 1) throw new EftsError(`The response does not match the request, even after waiting for the cache: ${problems.join('; ')}.`, { kind: 'mismatch', detail: problems });
       out.retried++;
       await client.sleep(cacheWaitMs);
     }

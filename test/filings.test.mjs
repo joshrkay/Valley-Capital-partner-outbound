@@ -10,8 +10,8 @@ import { readJson, readJsonl, writeJson } from '../src/store.mjs';
 import { runFdic } from '../src/sources/fdic.mjs';
 import { padCik, searchParams, checkBody, echoProblems, normalizeHit, search, eftsClient, lookupEntities } from '../src/sources/efts.mjs';
 import { loadFilingRules, validateFilingRules, runFilings, filingSignals, filingProxies, discoveredFilers, verifyFilings, filingsPaths, indexUrl } from '../src/sources/filings.mjs';
-import { confirmFiler } from '../src/sources/filers.mjs';
-import { fakeSearch, ACC, DOCS, SECRET_TEXT, PERSON, withHoldingCompanies, URL_EFTS } from './edgar-search-fake.mjs';
+import { confirmFiler, rejectFiler, filerPaths } from '../src/sources/filers.mjs';
+import { fakeSearch, ACC, DOCS, FILERS, SECRET_TEXT, PERSON, withHoldingCompanies, URL_EFTS } from './edgar-search-fake.mjs';
 import { fakeFdic, METROS, TABLES } from './fdic-fake.mjs';
 
 const rules = loadRules();
@@ -39,6 +39,13 @@ const run = (dir, fake = fakeSearch(), over = {}) => runFilings({ dir, sec: SEC,
 const client = (fake, over = {}) => eftsClient({ sec: SEC, fetchImpl: fake.fetchImpl, sleep: nosleep, ...over });
 const raw = async (fake, params) => (await fake.fetchImpl(`${URL_EFTS}?${new URLSearchParams(params)}`, { headers: {} })).json();
 const P = (dir) => filingsPaths(dir);
+// The fake, with each response's body edited on the way back: `edit(body, params)` changes it in place.
+const tampered = (edit, fake = fakeSearch()) => ({ ...fake, fetchImpl: async (url, init) => {
+  const res = await fake.fetchImpl(url, init);
+  const b = await res.json();
+  edit(b, Object.fromEntries(new URL(url).searchParams));
+  return new Response(JSON.stringify(b), { status: 200 });
+} });
 const allFiles = (dir) => { const out = []; const walk = (d) => { for (const n of readdirSync(d)) { const a = join(d, n); statSync(a).isDirectory() ? walk(a) : out.push(readFileSync(a, 'utf8')); } }; walk(dir); return out.join('\n'); };
 
 // ---- The client --------------------------------------------------------------------------------------------------------------
@@ -127,6 +134,21 @@ test('a hit that does not match its own request is dropped, even when the echo a
   const r = await search({ client: client(lying), forms: ['8-K'], ciks: ['0009900102'], startdt: '2026-11-01', enddt: '2026-11-13' });
   assert.ok(r.dropped > 0);
   assert.ok(r.hits.every((h) => h.ciks.includes('0009900102')));
+});
+
+test('a response with no query echo is never used: the hits carry no text, so nothing else can confirm the phrases', async () => {
+  const asked = { phrases: ['commercial real estate'], forms: ['8-K'], ciks: ['0009900101'], startdt: '2026-11-01', enddt: '2026-11-13' };
+  const waits = [];
+  const noEcho = tampered((b) => { delete b.query; });
+  await assert.rejects(search({ client: client(noEcho, { sleep: async (ms) => { waits.push(ms); } }), cacheWaitMs: 65000, ...asked }), (e) => e.kind === 'mismatch' && /no query echo/.test(e.message));
+  assert.deepEqual(waits, [65000], 'asked again once, after the cache wait');
+  assert.equal(noEcho.calls.length, 2);
+  // An echo missing once, then present: the second answer is used.
+  let n = 0;
+  const once = tampered((b) => { if (n++ === 0) delete b.query; });
+  const r = await search({ client: client(once), cacheWaitMs: 1, ...asked });
+  assert.equal(r.retried, 1);
+  assert.deepEqual(r.hits.map((h) => h.accession).sort(), [ACC.impairment, ACC.heldForSale].sort());
 });
 
 test('an error body is the server\'s own trouble at times (seen live): asked again twice after a pause, then the run fails', async () => {
@@ -256,6 +278,33 @@ test('a filer confirmed later is searched back a year once; --since searches eve
   await assert.rejects(run(dir, fakeSearch(), { since: '2026-12-01' }), /after today/);
 });
 
+test('a bare --since (no date after it) is refused, not run as the normal window', async () => {
+  const dir = await mapped();
+  const fake = fakeSearch();
+  await assert.rejects(run(dir, fake, { since: true }), /--since must be a date: YYYY-MM-DD/);
+  assert.equal(fake.calls.length, 0);
+  assert.equal(existsSync(P(dir).state), false);
+});
+
+test('a filer left unconfirmed while other runs move the window on resumes from its own last search, so the gap is searched', async () => {
+  // A filing made while the filer was unconfirmed: after the first run's end (2026-11-13), before the last run's overlap.
+  const gap = { adsh: '0009999999-26-000520', filer: 'natl', form: '8-K', root: '8-K', date: '2026-11-25', items: ['2.06'], seq: '1', name: 'exnh-8k-gap.htm', fileType: '8-K', text: 'material impairments' };
+  const net = () => fakeSearch({ docs: [...DOCS(), gap] });
+  const dir = await mapped();
+  assert.equal((await run(dir, net())).outcome, 'ok');
+  rejectFiler({ dir, bank: 'fdic:102', cik: '9900102', by: 'Pat Example', reason: 'checking the holding company' });
+  for (const n of [10, 20]) assert.equal((await run(dir, net(), { now: day(n) })).outcome, 'ok');
+  assert.equal(readJson(P(dir).state).searchedTo['0009900102'], '2026-11-13', 'not moved while unconfirmed');
+  confirmFiler({ dir, bank: 'fdic:102', cik: '9900102', by: 'Pat Example' });
+  const fake = net();
+  const r = await run(dir, fake, { now: day(30) });
+  assert.equal(r.outcome, 'ok', JSON.stringify(r));
+  const prod = fake.calls.filter((c) => c.params.ciks && c.params.forms !== 'DEF 14A');
+  assert.deepEqual([...new Set(prod.map((c) => `${c.params.ciks}@${c.params.startdt}`))].sort(), ['0009900101@2026-11-30', '0009900102@2026-11-10']);
+  assert.ok(readJson(P(dir).filings)[gap.adsh], 'the filing from the gap is found');
+  assert.deepEqual(readJson(P(dir).state).searchedTo, { '0009900101': '2026-12-13', '0009900102': '2026-12-13' });
+});
+
 test('only confirmed filers are searched: a rejected or merely suggested filer never is', async () => {
   const dir = await bankList();
   confirmFiler({ dir, bank: 'fdic:101', cik: '9900101', by: 'Pat Example' });
@@ -293,6 +342,28 @@ test('a failed search fails the whole run and leaves the window where it was', a
   assert.equal(existsSync(P(dir).filings), false);
   assert.equal(existsSync(P(dir).state), false);
   assert.equal(readJsonl(join(dir, 'sources', 'runs.jsonl')).at(-1).outcome, 'failed');
+});
+
+test('a response the run cannot trust fails the run before anything is written: no echo, a short read, or hits that do not match', async () => {
+  const dir = await mapped();
+  assert.equal((await run(dir)).outcome, 'ok');
+  const before = () => [readFileSync(P(dir).filings, 'utf8'), readFileSync(P(dir).proxies, 'utf8'), readFileSync(P(dir).discovery, 'utf8'), readFileSync(P(dir).state, 'utf8')];
+  const stored = before();
+  const cases = [
+    ['no echo', tampered((b) => { delete b.query; }), /no query echo/],
+    // The proxy search reports its one hit but sends none: the read is short.
+    ['short', tampered((b, s) => { if (s.forms === 'DEF 14A') b.hits.hits = []; }), /1 search\(es\) returned fewer hits than the total they reported/],
+    // The echo agrees, but a hit is for a filer the request did not name.
+    ['dropped', tampered((b, s) => { const h = b.hits?.hits?.[0]; if (h && s.ciks) b.hits.hits.push({ ...h, _source: { ...h._source, ciks: ['0009900999'] } }); }), /hit\(s\) did not match their own request/],
+  ];
+  for (const [name, fake, reason] of cases) {
+    const r = await run(dir, fake, { now: day(1) });
+    assert.equal(r.outcome, 'failed', `${name}: ${JSON.stringify(r)}`);
+    assert.match(r.errors[0], reason, name);
+    assert.deepEqual(before(), stored, `${name}: no record written, and the window is where it was`);
+    assert.equal(readJsonl(join(dir, 'sources', 'runs.jsonl')).at(-1).outcome, 'failed', name);
+  }
+  assert.equal(readJson(P(dir).state).window.end, '2026-11-13');
 });
 
 test('with no confirmed filer only discovery runs, the run is suspect, and a filer mapped later leaves the review list', async () => {
@@ -351,6 +422,26 @@ test('verify: a filing the source no longer returns, a stale run, a record with 
   assert.equal(filers.ok, false); assert.deepEqual(filers.detail.gone, ['0009900999']);
 });
 
+test('verify: every confirmed filer is looked up, however many there are, before the check says all are SEC entities', async () => {
+  const dir = await mapped();
+  await run(dir);
+  // 101 more invented filers, confirmed for bank 103, and one more that is no SEC entity: it sorts last, past the first 100.
+  const extra = Object.fromEntries(Array.from({ length: 101 }, (_, i) => {
+    const cik = String(9901000 + i).padStart(10, '0'), entity = `EXAMPLE FILER ${i} BANCORP`;
+    return [`x${i}`, { cik, display: `${entity}  (CIK ${cik})`, entity, tickers: '', state: 'TX', sic: '6022', place: 'Exampleville, TX' }];
+  }));
+  const map = readJson(filerPaths(dir).map);
+  const confirmed = (filer) => ({ status: 'confirmed', filer, by: 'Pat Example', at: NOW.toISOString(), basis: 'manual' });
+  map['fdic:103'] = { bank: 'fdic:103', ciks: { ...Object.fromEntries(Object.values(extra).map((f) => [f.cik, confirmed(f.entity)])), '0009909999': confirmed(null) } };
+  writeJson(filerPaths(dir).map, map);
+  const fake = fakeSearch({ filers: { ...FILERS, ...extra } });
+  const filers = byId(await vf(dir, fake))['filings.filers'];
+  assert.equal(filers.ok, false, filers.summary);
+  assert.deepEqual(filers.detail.gone, ['0009909999']);
+  assert.match(filers.summary, /1 of 104 confirmed CIK\(s\)/);
+  assert.equal(fake.calls.filter((c) => c.params.keysTyped).length, 104, 'one lookup per confirmed filer');
+});
+
 test('verify: nothing run yet, no confirmed filer, or a placeholder contact each fail and say what to do', async () => {
   assert.match((await vf(makeDir())).checks[0].summary, /Run: outbound sources run filings/);
   const none = await bankList();
@@ -386,4 +477,18 @@ test('the listener runs as a job: refused while the SEC contact is a placeholder
   assert.deepEqual([fake.jobs[1].result.outcome, fake.jobs[1].result.filings, fake.jobs[1].result.proxies, fake.jobs[1].result.discovered], ['ok', 5, 1, 2]);
   assert.ok(fake.docs.has('sources/edgar/filings.json') && fake.docs.has('sources/edgar/filings-state.json'));
   assert.doesNotMatch(JSON.stringify(fake.jobs[1].result), /Example|EXAMPLE|0009/, 'the job result holds counts, not names or ids');
+});
+
+test('a suspect listener run fails its job, so the scheduled workflow turns red: the window has moved past it', async () => {
+  const { fakePostgrest } = await import('./postgrest-fake.mjs');
+  const { platformClient } = await import('../src/platform/client.mjs');
+  const { work } = await import('../src/platform/worker.mjs');
+  const { push } = await import('../src/platform/move.mjs');
+  const fake = fakePostgrest();
+  const worker = platformClient({ url: 'https://example-project.supabase.test', key: 'service', fetchImpl: fake.fetchImpl });
+  await push({ client: worker, dir: await bankList() });   // no confirmed filer: the saved searches cover no bank
+  fake.jobs.push({ id: 1, kind: 'sources.filings', params: {}, status: 'queued', requested_by: 'pat@example.test', result: null });
+  const done = await work({ client: worker, rules: { ...rules, filings: FR, config: { ...rules.config, sec: SEC } }, deps: { fetchImpl: fakeSearch().fetchImpl, now: () => NOW, sleep: nosleep } });
+  assert.deepEqual(done.map((d) => [d.kind, d.outcome]), [['sources.filings', 'failed']]);
+  assert.deepEqual([fake.jobs[0].status, fake.jobs[0].result.outcome], ['failed', 'suspect']);
 });

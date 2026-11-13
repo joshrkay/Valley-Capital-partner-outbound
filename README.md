@@ -122,7 +122,7 @@ npm run outbound -- filers list                          # every bank: confirmed
 Then the listener runs the saved searches in `filings.json` on EDGAR full-text search:
 
 ```bash
-npm run outbound -- sources run filings                  # since the last run; a new filer is searched back a year
+npm run outbound -- sources run filings                  # each filer since its own last search; a new filer is searched back a year
 npm run outbound -- sources run filings --since 2026-06-01
 npm run outbound -- filers discovered                    # bank filers in our five states that are not in the bank list: for review
 npm run outbound -- sources verify filings               # searches again for a few stored filings; each must come back
@@ -142,9 +142,9 @@ What was checked live on 2026-11-13 is written at the top of `src/sources/efts.m
 - A query the server cannot run comes back as HTTP 200 with an error body.
 - A cache serves answers keyed without 8-K items or SIC codes.
 
-So every response is matched to its request before it is used.
+So every response is matched to its request before it is used. A response with no echo, a search that returns fewer hits than it reports, or a hit that does not match its request fails the run: nothing is written, and the next run covers the same days.
 
-On the platform, the job is `sources.filings`. The worker workflow queues it on weekdays at 23:37 UTC, then verifies it. That schedule stays off until a principal has filled `config.sec.userAgent`, confirmed at least one filer, and set the repository variable `FILINGS_ENABLED` to `true`. Until then the run would fail its own checks every day and hide real failures.
+On the platform, the job is `sources.filings`. The worker workflow queues it on weekdays at 23:37 UTC, then verifies it. A `suspect` run fails the job, because the listener's window has moved past it. That schedule stays off until a principal has filled `config.sec.userAgent`, confirmed at least one filer, and set the repository variable `FILINGS_ENABLED` to `true`. Until then the run would fail its own checks every day and hide real failures.
 
 ### Checking the scrapers
 
