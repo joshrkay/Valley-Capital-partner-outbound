@@ -2,7 +2,9 @@
 // REST API with the anon key and the signed-in principal's token, so row-level security decides what comes back.
 export function restReader({ url, key, accessToken, fetchImpl = globalThis.fetch }) {
   const base = `${String(url).replace(/\/$/, '')}/rest/v1`;
-  const headers = { apikey: key, Authorization: `Bearer ${accessToken ?? key}`, Accept: 'application/json' };
+  // A new-style key (sb_publishable_...) is not a JWT and goes in apikey only; Authorization carries the user's session token.
+  const bearer = accessToken ?? (String(key ?? '').split('.').length === 3 ? key : null);
+  const headers = { apikey: key, ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}), Accept: 'application/json' };
   async function get(table, query = {}) {
     const u = new URL(`${base}/${table}`);
     for (const [k, v] of Object.entries(query)) if (v !== undefined && v !== null) u.searchParams.set(k, String(v));

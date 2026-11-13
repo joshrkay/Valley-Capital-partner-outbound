@@ -23,10 +23,16 @@ export function pathFilter(prefixes) {
   return `(${parts.join(',')})`;
 }
 
+export const isJwt = (k) => String(k ?? '').split('.').length === 3;
+
 export function platformClient({ url, key, accessToken, fetchImpl = globalThis.fetch, pageSize = 1000 } = {}) {
   if (!url || !key) throw new Error('platformClient needs the project URL and a key (SUPABASE_URL, and the anon key with a user session or the service key).');
   const base = `${String(url).replace(/\/$/, '')}/rest/v1`;
-  const headers = { apikey: key, Authorization: `Bearer ${accessToken ?? key}`, 'Content-Type': 'application/json', Accept: 'application/json' };
+  // Two kinds of Supabase key exist. Older projects issue JWTs (anon, service_role), which go in both apikey and Authorization. Newer
+  // ones issue sb_publishable_ / sb_secret_ keys, which are not JWTs and go in apikey only. Authorization then carries a signed-in
+  // user's session token when there is one, and is left out when there is not.
+  const bearer = accessToken ?? (isJwt(key) ? key : null);
+  const headers = { apikey: key, ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}), 'Content-Type': 'application/json', Accept: 'application/json' };
 
   async function call(method, path, { query = {}, body } = {}) {
     const u = new URL(`${base}/${path}`);

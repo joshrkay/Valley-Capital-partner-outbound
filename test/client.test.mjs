@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { platformClient, pathFilter, ConflictError, PlatformError } from '../src/platform/client.mjs';
+import { platformClient, pathFilter, ConflictError, PlatformError, isJwt } from '../src/platform/client.mjs';
 import { LOADS } from '../src/uow.mjs';
 import { readJson, writeJson } from '../src/store.mjs';
 import { promote } from '../src/candidates.mjs';
@@ -108,4 +108,17 @@ test('someone who is not a principal reads nothing and cannot write', async () =
   assert.deepEqual(await stranger.load(['accounts/']), { docs: {}, texts: {}, logs: {}, versions: {} });
   await assert.rejects(stranger.flush({ docs: [], lines: [] }), (e) => e.code === '42501');
   assert.throws(() => platformClient({ url: URL_ }), /needs the project URL and a key/);
+});
+
+test('headers: a JWT key also goes in Authorization; a new-style key goes in apikey only; a session token always wins', async () => {
+  const seen = [];
+  const fetchImpl = async (url, init) => { seen.push(init.headers); return new Response('[]', { status: 200 }); };
+  const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYW5vbiJ9.c2ln';
+  await platformClient({ url: URL_, key: jwt, fetchImpl }).candidates();
+  await platformClient({ url: URL_, key: 'sb_publishable_abc123', fetchImpl }).candidates();
+  await platformClient({ url: URL_, key: 'sb_publishable_abc123', accessToken: 'user-session-jwt', fetchImpl }).candidates();
+  assert.deepEqual([seen[0].apikey, seen[0].Authorization], [jwt, `Bearer ${jwt}`]);
+  assert.deepEqual([seen[1].apikey, seen[1].Authorization], ['sb_publishable_abc123', undefined]);
+  assert.equal(seen[2].Authorization, 'Bearer user-session-jwt');
+  assert.equal(isJwt(jwt), true); assert.equal(isJwt('sb_secret_x'), false);
 });

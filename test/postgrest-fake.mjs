@@ -1,7 +1,8 @@
 // A fake Supabase REST API (PostgREST), in memory, for testing src/platform/client.mjs without a server. It speaks only what the client
 // uses: GET on documents, log_lines and candidates with `or`, `eq`, `cs`, `order`, `limit`, `offset`; and the RPCs flush_uow,
 // enqueue_job, claim_job and finish_job. Their rules (versions, roles) mirror the SQL in supabase/migrations, which test/db.test.mjs
-// checks against a real Postgres. Tokens are plain strings here: "service" is the worker; "user:<email>" is a signed-in user.
+// checks against a real Postgres. Keys and tokens are plain strings here: "service" is the worker's key; "user:<email>" is a signed-in
+// user's session token; any other key is the public anon key.
 export function fakePostgrest({ principals = ['pat@example.test'] } = {}) {
   const docs = new Map();      // path -> { path, kind, body, text, version }
   const lines = [];            // { id, path, line, by }
@@ -12,8 +13,9 @@ export function fakePostgrest({ principals = ['pat@example.test'] } = {}) {
   const hooks = { beforeFlush: null };
 
   const who = (h) => {
-    const token = String(h.Authorization ?? '').replace(/^Bearer /, '');
+    // Like Supabase's gateway: a session token in Authorization identifies the caller; without one, the apikey itself does.
     if (!h.apikey) return { kind: 'none' };
+    const token = h.Authorization ? String(h.Authorization).replace(/^Bearer /, '') : String(h.apikey);
     if (token === 'service') return { kind: 'service', name: 'service' };
     if (token.startsWith('user:')) { const email = token.slice(5); return principals.includes(email) ? { kind: 'principal', name: email } : { kind: 'user', name: email }; }
     return { kind: 'anon' };

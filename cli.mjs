@@ -19,6 +19,7 @@ import { platformClient } from './src/platform/client.mjs';
 import { setPerson, confirmRole } from './src/accounts.mjs';
 import { work, JOB_KINDS } from './src/platform/worker.mjs';
 import { push, pull } from './src/platform/move.mjs';
+import { smoke } from './src/platform/smoke.mjs';
 
 const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE this repository first.
 
@@ -67,6 +68,8 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound pilot pass     --by NAME               record a pass (needs enough fully reviewed accounts and zero fabrications)
 
   Platform (PRD E12): needs SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (the worker's key; never put it in the web app).
+  outbound platform smoke                         check a new project with SUPABASE_URL and SUPABASE_ANON_KEY (the PUBLIC key only):
+                                                  sign-ups off, every table and function present and refusing the public key
   outbound worker [--max N]                       run queued jobs until the queue is empty (or N have run); prints ids and outcomes only
   outbound enqueue sources.fdic|sources.edgar|score.run|research.run|draft.run [--account ID] [--channel C] [--step N] [--draft-buybox] [--include-hq]
   outbound platform push [--from DIR]             copy a data folder into the platform (default: OUTBOUND_DATA_DIR); safe to re-run
@@ -113,6 +116,13 @@ async function main() {
   const [cmd, sub] = pos;
   if (!cmd || cmd === 'help' || flags.help) return out(HELP);
   const rules = loadRules();
+
+  if (cmd === 'platform' && sub === 'smoke') {   // the first check of a real project: URL and PUBLIC key only (PRD E12-S7)
+    const r = await smoke({ url: process.env.SUPABASE_URL, key: process.env.SUPABASE_ANON_KEY });
+    console.log(`Key: ${r.keyKind}\n${r.checks.map((c) => `${c.ok ? 'PASS' : 'FAIL'}  ${c.id}: ${c.summary}`).join('\n')}`);
+    if (!r.ok) process.exitCode = 1;
+    return;
+  }
 
   if (['worker', 'enqueue', 'platform'].includes(cmd)) {   // the platform's commands use the database, not a local data folder
     const env = process.env;
