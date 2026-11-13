@@ -459,3 +459,16 @@ test('no file in the repository holds FDIC data written by a test (tests write o
   assert.equal(existsSync(join(fdicPaths(process.cwd()).base)), false);
   assert.ok(readFileSync(new URL('../src/sources/fdic.mjs', import.meta.url), 'utf8').includes('FIELD:("A" OR "B")'));
 });
+
+test("the failed-bank CSV as FDIC really sends it: a non-breaking space after every header, Latin-1 bytes read as UTF-8", () => {
+  // Checked 2026-11-13 against https://www.fdic.gov/bank-failures/download-data.csv. Invented rows; the header bytes are FDIC's.
+  const rows = 'Example Failed Bank,Exampletown,AZ,99999,Example Acquirer Bank,25-Sep-26,10555\nOther Example Bank,Sampleville,PA,88888,"Example Savings, Inc. ",21-Aug-26,\n';
+  const head = ['Bank Name', 'City', 'State', 'Cert', 'Acquiring Institution', 'Closing Date', 'Fund'];
+  const latin1 = Buffer.from(`${head.map((h, i) => (i < 6 ? `${h}\u00a0` : h)).join(',')}\n${rows}`, 'latin1');
+  for (const enc of ['utf8', 'latin1']) {
+    const r = parseFailedBankCsv(latin1.toString(enc));
+    assert.deepEqual(r.missing, [], enc);
+    assert.deepEqual(r.rows.map((x) => [x.cert, x.closed, x.acquirer]), [['99999', '2026-09-25', 'Example Acquirer Bank'], ['88888', '2026-08-21', 'Example Savings, Inc.']], enc);
+    assert.deepEqual(r.headers.slice(0, 6), head.slice(0, 6), enc);
+  }
+});

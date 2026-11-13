@@ -203,7 +203,7 @@ test('every signal type in the shipped config declares its kind, and the kind mu
   assert.deepEqual(s.concentration.signals.map((r) => [r.id, r.kind]), [['concentration-construction', 'state'], ['concentration-cre', 'state']]);
   assert.deepEqual(s.structureEvents.signals.map((r) => [r.id, r.kind, r.windowQuarters]), [['acquired-metro-bank', 'event', 4]]);
   assert.match(s.structureEvents._note, /PLACEHOLDER/);
-  assert.match(s.concentration._note, /UNCONFIRMED/);
+  assert.match(s.concentration._note, /checked against its text on 2026-11-13 \(71 FR 74580/);
   const noKind = scoring(); delete noKind.signals[0].kind;
   assert.match(validateScoring(noKind).errors.join(), /cre-noncurrent-rising: kind must be "state" \(got none\)/);
   const wrong = scoring(); wrong.concentration.signals[0].kind = 'event';
@@ -225,7 +225,7 @@ test('the paper profile shows the screen\'s ratios, each with its fields, dates 
   const p = buildProfile({ financials: fin, footprint: { branchesByMetro: { 38060: 1 } }, institution: { via: { branch: true } }, buybox: filledBuybox(), metros, scoring: scoring() });
   const c = p.concentration;
   assert.equal(c.period, '20260630');
-  assert.match(c.note, /unconfirmed/);
+  assert.match(c.note, /2006 interagency guidance on CRE concentrations \(71 FR 74580\)/);
   assert.deepEqual([c.denominator.basis, c.denominator.label, c.denominator.value], ['totalRiskBasedCapital', 'total risk-based capital', 250000]);
   assert.equal(c.constructionToCapital.value, 0.4);
   assert.equal(c.constructionToCapital.denominator, 'total risk-based capital');
@@ -254,7 +254,7 @@ test('end to end: an acquisition is an EVENT signal kept for its window; the scr
   // The card states both from its templates.
   const text = it.card.text;
   assert.match(text, /Construction and land loans are 120% of total risk-based capital, at or above the 100% concentration screen \(June 30, 2026\)\./);
-  assert.match(text, /The concentration screen follows the 2006 interagency guidance as we understand it; its definition is not yet confirmed/);
+  assert.match(text, /The screen is the 2006 interagency guidance on CRE concentrations: it marks a bank for closer supervisory review, not a limit on its lending\./);
   assert.match(text, /It acquired another bank \(FDIC cert 777\) with 4 branches in Phoenix, effective June 1, 2026\. That bank held \$64\.0 million of CRE loans at its last report \(March 31, 2026\)\./);
   // A new quarter below the screen: the state signal is gone. The acquisition is still shown: its window has not ended.
   const f = readFileSync(join(dir, 'sources', 'fdic', 'financials', '1.json'), 'utf8');

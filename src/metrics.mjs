@@ -147,20 +147,24 @@ export function detectSignals(series, rules = []) {
 }
 
 // ---- The CRE concentration screen (PRD E3-S7) -----------------------------------------------------------------------------------
-// The 2006 interagency guidance on concentrations in commercial real estate lending, AS WE UNDERSTAND IT. UNCONFIRMED: no primary source
-// (the guidance text, an FDIC or OCC page, or the Federal Register) could be reached from the development environment on 2026-11-13, so
-// this is from memory and docs/data-sources.md. Either test flags a bank:
+// The supervisory criteria of the 2006 interagency guidance on concentrations in commercial real estate lending. CHECKED 2026-11-13
+// against the guidance text (71 FR 74580, December 12, 2006; FDIC FIL-104-2006, read from fdic.gov). Either test flags a bank for closer
+// supervisory review; the guidance says the criteria are a screen, not limits on lending:
 //   (a) construction and land development loans at or above 100% of total risk-based capital; or
 //   (b) CRE at or above 300% of total risk-based capital, AND CRE grown 50% or more over the prior 36 months.
 // The guidance's CRE = construction and land development + multifamily + nonfarm nonresidential NOT owner-occupied + loans to finance CRE
-// not secured by real estate. Owner-occupied nonfarm nonresidential is left out. The thresholds live in scoring.json.
+// not secured by real estate (its footnote: Call Report RC-C items 1a, 1d, 1e and Memorandum item 3). Owner-occupied nonfarm
+// nonresidential is left out: the guidance counts only property whose repayment comes mainly from rental income or its sale or
+// refinancing, and the 2006 Call Report did not yet split item 1e, so today that is item 1.e.(2). "Total capital" is total risk-based
+// capital (RC-R). The thresholds live in scoring.json.
 // The fields, from FDIC's own definitions ("All Financial Reports", api.fdic.gov/banks/docs) and checked live on all 268 metro banks for
 // June 30, 2026 and June 30, 2023: LNRECONS construction and land development; LNREMULT multifamily; LNRENROT other (non-owner-occupied)
 // nonfarm nonresidential; LNCOMRE CRE loans not secured by real estate; RBC total risk-based capital (it equals RBCT1J + RBCT2, and
 // RBC / risk-weighted assets equals FDIC's own total capital ratio, on every bank checked); RBCT1J tier 1 capital; LNATRES the allowance
 // for credit losses on loans and leases; CBLRIND 1 for a bank that elected the community bank leverage ratio (CBLR).
 // CBLR banks do not report total risk-based capital: FDIC sends RBC as 0 for them (all 72 such banks at June 30, 2026). For them the
-// denominator is tier 1 capital plus the allowance, UBPR's approach. Every computed value says which denominator it used.
+// denominator is tier 1 capital plus the allowance, UBPR's approach: the guidance predates the CBLR (2020), so this choice is ours,
+// not the guidance's. Every computed value says which denominator it used.
 export const CONCENTRATION = Object.freeze({
   construction: ['LNRECONS'],
   cre: ['LNRECONS', 'LNREMULT', 'LNRENROT', 'LNCOMRE'],
@@ -172,7 +176,7 @@ export const DENOMINATORS = Object.freeze({
 });
 export const CONCENTRATION_FIELDS = [...new Set([...CONCENTRATION.cre, 'RBC', 'RBCT1J', 'LNATRES', 'CBLRIND'])];
 export const CONCENTRATION_TESTS = ['construction', 'cre'];
-export const CONCENTRATION_NOTE = 'The concentration screen follows the 2006 interagency guidance as we understand it. Its definition is unconfirmed: it has not been checked against the guidance text.';
+export const CONCENTRATION_NOTE = 'The concentration screen is the supervisory screen of the 2006 interagency guidance on CRE concentrations (71 FR 74580). It flags a bank for closer supervisory review; it is not a limit on lending. The guidance predates the community bank leverage ratio, so for banks that use it the denominator is tier 1 capital plus the allowance, as in UBPR.';
 
 // Which capital figure divides, for one quarter: total risk-based capital, or for a CBLR bank tier 1 capital plus the allowance.
 export function concentrationDenominator(q, repdte) {

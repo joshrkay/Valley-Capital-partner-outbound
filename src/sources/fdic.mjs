@@ -272,11 +272,14 @@ export function monthsBefore(ymd, months) {
   return ymdOf(t.getUTCFullYear(), t.getUTCMonth() + 1, Math.min(d, last));
 }
 
-// FDIC's failed-bank list, as a CSV a person saves to the data folder (sources/fdic/failed-banks.csv). It is optional: www.fdic.gov is
-// blocked from the development environment, so the file is read when present and never fetched.
-// UNCONFIRMED: these column names are FDIC's documented ones as remembered (https://www.fdic.gov/bank-failures/download-data.csv);
-// they were NOT checked against the live file. Headers are compared ignoring case and spacing only. Any expected header that is not
-// there fails the run loudly and writes nothing, so a renamed column cannot quietly drop a failure.
+// FDIC's failed-bank list, as a CSV a person saves to the data folder (sources/fdic/failed-banks.csv). It is optional: the file is read
+// when present and not fetched.
+// CHECKED 2026-11-13 against the live file (https://www.fdic.gov/bank-failures/download-data.csv, 578 banks since October 2000): the
+// columns are Bank Name, City, State, Cert, Acquiring Institution, Closing Date and Fund; dates look like 25-Sep-26. Every header ends
+// in a non-breaking space, and the bytes are Latin-1 although the server says UTF-8, so read as UTF-8 that space arrives as U+FFFD.
+// Headers and cells therefore treat U+FFFD and non-breaking spaces as spaces. (A letter outside ASCII in a name, if FDIC ever sends one,
+// would show as U+FFFD; the cert and the date, which matching uses, are plain ASCII.) Any expected header that is not there fails the
+// run loudly and writes nothing, so a renamed column cannot quietly drop a failure.
 export const FAILED_BANK_CSV_COLUMNS = Object.freeze({ name: 'Bank Name', city: 'City', state: 'State', cert: 'Cert', acquirer: 'Acquiring Institution', closed: 'Closing Date' });
 
 export function parseCsv(text) {
@@ -294,23 +297,24 @@ export function parseCsv(text) {
   return rows.filter((r) => r.some((x) => x.trim() !== ''));
 }
 
-const normHeader = (h) => String(h ?? '').replace(/[\s ]+/g, ' ').trim().toLowerCase();
+const clean = (v) => String(v ?? '').replace(/[\s\u00a0\ufffd]+/g, ' ').trim();
+const normHeader = (h) => clean(h).toLowerCase();
 
 // Returns { rows: [{ cert, name, city, state, acquirer, closed }], missing: [{ field, rowsLacking, rows }], headers }.
 export function parseFailedBankCsv(text) {
   const [head = [], ...body] = parseCsv(text);
-  const headers = head.map((h) => String(h).replace(/[\s ]+/g, ' ').trim());
+  const headers = head.map(clean);
   const at = Object.fromEntries(Object.entries(FAILED_BANK_CSV_COLUMNS).map(([k, col]) => [k, head.map(normHeader).indexOf(normHeader(col))]));
   const missing = Object.entries(at).filter(([, i]) => i < 0).map(([k]) => ({ field: FAILED_BANK_CSV_COLUMNS[k], rowsLacking: body.length, rows: body.length, header: true }));
   if (missing.length) return { rows: [], missing, headers };
   let noCert = 0, noDate = 0;
   const rows = [];
   for (const r of body) {
-    const cert = String(r[at.cert] ?? '').trim();
-    const closed = isoDate(r[at.closed]);
+    const cert = clean(r[at.cert]);
+    const closed = isoDate(clean(r[at.closed]));
     if (!/^\d+$/.test(cert)) { noCert++; continue; }
     if (!closed) { noDate++; continue; }
-    rows.push({ cert, closed, name: String(r[at.name] ?? '').trim(), city: String(r[at.city] ?? '').trim(), state: String(r[at.state] ?? '').trim(), acquirer: String(r[at.acquirer] ?? '').trim() });
+    rows.push({ cert, closed, name: clean(r[at.name]), city: clean(r[at.city]), state: clean(r[at.state]), acquirer: clean(r[at.acquirer]) });
   }
   if (noCert) missing.push({ field: `${FAILED_BANK_CSV_COLUMNS.cert} (a number)`, rowsLacking: noCert, rows: body.length });
   if (noDate) missing.push({ field: `${FAILED_BANK_CSV_COLUMNS.closed} (a date)`, rowsLacking: noDate, rows: body.length });

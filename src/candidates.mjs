@@ -125,7 +125,7 @@ export function buildCard(item, { scoring = {} } = {}) {
     if (s.test === 'construction') add(`Construction and land loans are ${pct(s.value, 0)} of ${den}, at or above the ${pct(s.threshold, 0)} concentration screen (${period}).`, [s.id, ...s.evidence]);
     else if (s.test === 'cre' && s.growth !== null && s.growth !== undefined) add(`CRE loans as the 2006 interagency guidance counts them are ${pct(s.value, 0)} of ${den}, at or above ${pct(s.threshold, 0)}, and grew ${pct(s.growth, 0)} from ${periodLabel(s.baseRepdte)} to ${period}, at or above ${pct(s.growthThreshold, 0)}.`, [s.id, ...s.evidence]);
   }
-  if (conc.length) add('The concentration screen follows the 2006 interagency guidance as we understand it; its definition is not yet confirmed against the guidance text.', conc.map((s) => s.id));
+  if (conc.length) add('The screen is the 2006 interagency guidance on CRE concentrations: it marks a bank for closer supervisory review, not a limit on its lending.', conc.map((s) => s.id));
 
   // Structure events (event signals): an acquisition of a bank with a presence in the metros, dated, with the target's FDIC cert.
   for (const s of (item.signals ?? []).filter((x) => x.rule === 'acquisition').slice(0, lim.maxEvents)) {

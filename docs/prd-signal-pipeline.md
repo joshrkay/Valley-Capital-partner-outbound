@@ -324,7 +324,7 @@ Every adapter (E3–E5) is built on this shared framework.
   - `/failures`: `RESTYPE` `FAILURE`, with `FAILDATE`.
   - `/institutions`: `ACTIVE` 0, `INACTIVE` 1, `ENDEFYMD` (the day the bank became inactive; `12/31/9999` while open), and `CHANGEC1`, FDIC's code for the event that closed the charter. The failure codes are 211, 215, 216, 217, 230 and 235, with FDIC's own descriptions from `/history` (211 is "Failure - Whole Institution"). Checked against `/failures` on 111 closed banks. Code 213, an assisted merger, is mostly assistance there, so it is not a failure.
   - `/history`: the same codes, on the failed bank's row.
-  - FDIC's failed-bank CSV, when a person saves it as `sources/fdic/failed-banks.csv` in the data folder. www.fdic.gov is blocked from the development environment, so the file is never fetched. Its column names are **Unconfirmed**. A header that differs fails the run, names the headers found, and writes nothing.
+  - FDIC's failed-bank CSV, when a person saves it as `sources/fdic/failed-banks.csv` in the data folder. Its columns were **checked** against the live file on 2026-11-13: Bank Name, City, State, Cert, Acquiring Institution, Closing Date and Fund, with 578 banks since October 2000. FDIC sends each header with a trailing non-breaking space, in Latin-1 bytes labelled UTF-8, and the parser handles both. The file is not fetched yet; fetching it with the weekly run is a follow-up now that www.fdic.gov is reachable. A header that differs fails the run, names the headers found, and writes nothing.
 - [x] Failures are looked for nationwide over 36 months. A failed bank has left `/locations`, so it is never on the bank list.
 - [x] Each record (`sources/fdic/failed.json`) keeps each source's date and code, the sources that agree (`agree`), and those that do not yet (`missingFrom`).
 - [x] A failed bank is placed in the metros by three things, and each metro says which placed it:
@@ -346,7 +346,7 @@ Every adapter (E3–E5) is built on this shared framework.
 - [x] `sources verify fdic`: `fdic.events` checks that every deal FDIC shows with a bank on our list is stored with the same acquirer, target and date.
 
 **E3-S7. The concentration screen.** *As a principal, I want to see which banks meet the regulators' CRE concentration screen so that I know whose examiners are likely pressing them to cut CRE.* P0, R1. **Built** (`src/metrics.mjs`, `src/score.mjs`, `src/candidates.mjs`), from BankFind fields in the existing `sources.fdic` job. First live run (2026-11-13): 27 banks meet test (a), 15 meet test (b), 39 meet either.
-- [ ] **The definition is Unconfirmed.** It is the 2006 interagency guidance's screen as we remember it. The guidance text could not be reached: the Federal Register, FDIC and OCC hosts are blocked from the development environment. Either test is enough:
+- [x] **The definition is checked** against the guidance text on 2026-11-13: 71 FR 74580 (December 12, 2006), read from FDIC's copy (FIL-104-2006). The guidance calls these criteria a screen for closer supervisory review, not limits on lending. Either test is enough:
   - (a) construction and land development loans at or above 100% of total risk-based capital; or
   - (b) CRE at or above 300% of total risk-based capital, **and** CRE grown 50% or more over the prior 36 months.
 
