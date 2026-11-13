@@ -63,7 +63,19 @@ test('every configured model has a price, so cost is always reported', () => {
 test('DATA RULE: no prospect data file is tracked in git in this repository', () => {
   let files;
   try { files = execFileSync('git', ['ls-files'], { cwd: REPO, encoding: 'utf8' }).split('\n').filter(Boolean); } catch { return; }   // no git: skip
-  const bad = files.filter((f) => /(^|\/)(suppression\.json|touches\.jsonl|audit\.jsonl|senders\.json|KILL|\.env)$|(^|\/)(accounts|research|briefs|drafts|facts|data)\//.test(f));
+  // `sources/` is anchored to the root because src/sources/ is code; the data folder's sources/ would sit at the root of a misplaced data dir.
+  // The data-folder names are checked for data formats only: web/app/accounts/page.jsx is a route, not an account.
+  const dataFormat = (f) => /(\.(json|jsonl|md|txt)|\/[^/.]+)$/.test(f);
+  const bad = files.filter((f) => /(^|\/)(suppression\.json|touches\.jsonl|audit\.jsonl|senders\.json|runs\.jsonl|changes\.jsonl|KILL|\.env)$/.test(f)
+    || (dataFormat(f) && /(^|\/)(accounts|research|briefs|drafts|facts|data|candidates|pilot)\//.test(f))
+    || /^sources\//.test(f));
+  // Database dumps and spreadsheet exports are how prospect data most often leaks. Invented test fixtures may use them under test/fixtures/.
+  // Schema SQL is allowed in supabase/migrations/ and test/sql/; a seed file, or SQL anywhere else, is not.
+  const schemaSql = (f) => /^supabase\/migrations\/[^/]+\.sql$/.test(f) || /^test\/sql\/[^/]+\.sql$/.test(f);
+  bad.push(...files.filter((f) => /\.(sql|csv|tsv|xlsx|dump)$/i.test(f) && !f.startsWith('test/fixtures/') && !schemaSql(f)));
+  bad.push(...files.filter((f) => /(^|\/)seed[^/]*\.sql$/i.test(f)));
+  // Migrations hold structure only: no email address (a principal's or a prospect's) may appear in them.
+  for (const f of files.filter((x) => x.startsWith('supabase/'))) if (/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(readFileSync(join(REPO, f), 'utf8'))) bad.push(`${f} (contains an email address)`);
   assert.deepEqual(bad, [], 'prospect data must never be committed; it lives in OUTBOUND_DATA_DIR outside the repo');
 });
 

@@ -1,0 +1,19 @@
+{
+  "_note": "What the firm buys (PRD E0-S1). A rule file, not prospect data. Every [CONFIRM] value must be filled by a principal; until then `outbound score run` refuses (or, with --draft-buybox, marks its output PROVISIONAL). Sectors default to the three the website covers; whether short-term rental portfolios are in is an open question (PRD Q1). The asset cap matches the direct-sale route in the plan (banks under about $10 billion; FDIC ASSET is in thousands). The scoring run records a hash of this file.",
+  "sectors": {
+    "include": ["hospitality", "multifamily", "retail"],
+    "shortTermRentalPortfolios": "[CONFIRM: in or out of the buy box? PRD Q1]"
+  },
+  "loanSize": {
+    "minUsd": "[CONFIRM: smallest loan balance we buy]",
+    "maxUsd": "[CONFIRM: largest loan balance we buy]"
+  },
+  "statuses": "[CONFIRM: which of performing, sub-performing, non-performing, foreclosed (REO)]",
+  "lien": "[CONFIRM: first lien only, or also junior liens]",
+  "metros": ["12420", "19740", "31080", "38060", "29820", "41740"],
+  "exclusions": ["[CONFIRM: what the firm will not touch (property types, loan types, situations)]"],
+  "filters": {
+    "maxAssetsThousands": 10000000,
+    "requireActive": true
+  }
+}

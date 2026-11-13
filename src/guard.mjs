@@ -1,8 +1,7 @@
 // Agent 1: the suppression and cadence guard. Code only, no model. It decides whether a touch may happen, enforces the sequence and the caps,
 // stops everything on a reply or an opt-out, and logs every decision. It has no way to send anything: a person sends, then records it here.
-import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { readJson, readJsonl, writeJson, appendJsonl, audit } from './store.mjs';
+import { readJson, readJsonl, writeJson, appendJsonl, exists, audit } from './store.mjs';
 
 const DAY = 86400000;
 export const norm = (s) => String(s ?? '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim();
@@ -20,7 +19,7 @@ export function loadContext({ dir, config, env = process.env }) {
     suppression: readJson(join(dir, 'suppression.json'), { entries: [] }).entries ?? [],
     touches: readJsonl(join(dir, 'touches.jsonl')),
     senders: readJson(join(dir, 'senders.json'), { senders: [] }).senders ?? [],
-    kill: existsSync(join(dir, 'KILL')) || env.OUTBOUND_KILL === '1',
+    kill: exists(join(dir, 'KILL')) || env.OUTBOUND_KILL === '1',
   };
 }
 
@@ -151,6 +150,19 @@ export function recordTouch(dir, touch, ctx) {
   appendJsonl(join(dir, 'touches.jsonl'), rec);
   ctx.touches.push(rec);
   return rec;
+}
+
+// A send that has already happened: a person sent it, or a mailbox sync saw it leave (PRD E9-S2). It is ALWAYS recorded, because the log
+// must match reality: refusing to log a real send would leave the caps, the cadence and the one-at-a-time rule counting from a false
+// history. Any rule the send broke (a cap filled, a suppression added after the draft was approved) is kept on the record and audited.
+export function recordObservedSend(dir, touch, ctx) {
+  const r = checkTouch(touch, ctx);
+  const codes = r.errors.map((e) => e.code);
+  const rec = { type: 'touch', accountId: touch.accountId, institution: touch.institution, step: touch.step, channel: touch.channel, sender: touch.sender, date: ymd(touch.date ?? new Date()), recordedAt: new Date().toISOString(), observed: true, ...(codes.length ? { violations: codes } : {}) };
+  appendJsonl(join(dir, 'touches.jsonl'), rec);
+  ctx.touches.push(rec);
+  audit(dir, { type: codes.length ? 'send_recorded_with_violations' : 'send_recorded', accountId: touch.accountId, channel: touch.channel, step: touch.step, codes });
+  return { rec, violations: r.errors };
 }
 
 // A reply, opt-out, bounce, meeting or handoff. An opt-out suppresses the person and address at once.

@@ -1,0 +1,19 @@
+{
+  "_note": "The six target metros, by core-based statistical area (CBSA) code. Matching is always on the code; names drift and are kept only for display. County lists are from the Census Bureau's July 2023 delineation file (list1_2023.xlsx, checked 2026-11-13). `name` is the 2023 title; `fdicName` is the older title FDIC still reported on 2026-11-13 for the same code. `recordsCounty` is the county the county-records spike (PRD E5-S1) starts with. No prospect data lives here.",
+  "source": "https://www2.census.gov/programs-surveys/metro-micro/geographies/reference-files/2023/delineation-files/list1_2023.xlsx",
+  "metros": [
+    { "cbsa": "12420", "label": "Austin", "name": "Austin-Round Rock-San Marcos, TX", "fdicName": "Austin-Round Rock-Georgetown, TX", "state": "TX", "recordsCounty": "48453",
+      "counties": { "48021": "Bastrop", "48055": "Caldwell", "48209": "Hays", "48453": "Travis", "48491": "Williamson" } },
+    { "cbsa": "19740", "label": "Denver", "name": "Denver-Aurora-Centennial, CO", "fdicName": "Denver-Aurora-Lakewood, CO", "state": "CO", "recordsCounty": "08031",
+      "counties": { "08001": "Adams", "08005": "Arapahoe", "08014": "Broomfield", "08019": "Clear Creek", "08031": "Denver", "08035": "Douglas", "08039": "Elbert", "08047": "Gilpin", "08059": "Jefferson", "08093": "Park" } },
+    { "cbsa": "31080", "label": "Los Angeles", "name": "Los Angeles-Long Beach-Anaheim, CA", "fdicName": "Los Angeles-Long Beach-Anaheim, CA", "state": "CA", "recordsCounty": "06037",
+      "counties": { "06037": "Los Angeles", "06059": "Orange" } },
+    { "cbsa": "38060", "label": "Phoenix", "name": "Phoenix-Mesa-Chandler, AZ", "fdicName": "Phoenix-Mesa-Chandler, AZ", "state": "AZ", "recordsCounty": "04013",
+      "counties": { "04013": "Maricopa", "04021": "Pinal" } },
+    { "cbsa": "29820", "label": "Las Vegas", "name": "Las Vegas-Henderson-North Las Vegas, NV", "fdicName": "Las Vegas-Henderson-Paradise, NV", "state": "NV", "recordsCounty": "32003",
+      "counties": { "32003": "Clark" } },
+    { "cbsa": "41740", "label": "San Diego", "name": "San Diego-Chula Vista-Carlsbad, CA", "fdicName": "San Diego-Chula Vista-Carlsbad, CA", "state": "CA", "recordsCounty": "06073",
+      "counties": { "06073": "San Diego" } }
+  ],
+  "hqStates": ["TX", "CO", "CA", "AZ", "NV"]
+}
