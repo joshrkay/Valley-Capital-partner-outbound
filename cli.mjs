@@ -14,6 +14,7 @@ import { runDrafter, approveDraft } from './src/draft.mjs';
 import { makeClient } from './src/model.mjs';
 import { writeTruthTemplate, reviewList, markFinding, scorecard, passPilot, researchGate } from './src/pilot.mjs';
 import { platformClient } from './src/platform/client.mjs';
+import { setPerson, confirmRole } from './src/accounts.mjs';
 import { work, JOB_KINDS } from './src/platform/worker.mjs';
 import { push, pull } from './src/platform/move.mjs';
 
@@ -140,21 +141,13 @@ async function main() {
   }
 
   if (cmd === 'account' && sub === 'set-person') {   // a principal picks the person, usually from an institution brief's candidates
-    const id = need(flags, 'account'); const by = need(flags, 'by');
-    const a = loadAccount(dir, id);
-    a.person = { ...(a.person ?? {}), name: need(flags, 'name'), title: flags.title === true ? '' : flags.title ?? '' };
-    a.contact = { ...(a.contact ?? {}), roleConfirmed: false, roleConfirmedBy: undefined, roleConfirmedAt: undefined };   // a new person's role is unconfirmed
-    writeJson(join(dir, 'accounts', `${id}.json`), a);
-    audit(dir, { type: 'person_set', accountId: id, by });
-    return out(`Person set for ${a.name}: ${a.person.name}. Their role is unconfirmed. Read the sources in the brief, or run the briefer again for person research, then: outbound account confirm-role --account ${id} --by NAME`);
+    const a = setPerson({ dir, id: need(flags, 'account'), name: need(flags, 'name'), title: flags.title, by: need(flags, 'by') });
+    return out(`Person set for ${a.name}: ${a.person.name}. Their role is unconfirmed. Read the sources in the brief, or run the briefer again for person research, then: outbound account confirm-role --account ${a.id} --by NAME`);
   }
 
   if (cmd === 'account' && sub === 'confirm-role') {
-    const id = need(flags, 'account'); const by = need(flags, 'by');
-    const a = loadAccount(dir, id);
-    a.contact = { ...(a.contact ?? {}), roleConfirmed: true, roleConfirmedBy: by, roleConfirmedAt: new Date().toISOString() };
-    writeJson(join(dir, 'accounts', `${id}.json`), a);
-    audit(dir, { type: 'role_confirmed', accountId: id, by });
+    const by = need(flags, 'by');
+    const a = confirmRole({ dir, id: need(flags, 'account'), by });
     return out(`Role confirmed for ${a.person?.name} at ${a.name} by ${by}.`);
   }
 
