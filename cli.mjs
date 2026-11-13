@@ -12,6 +12,9 @@ import { runBriefer } from './src/research.mjs';
 import { runDrafter, approveDraft } from './src/draft.mjs';
 import { makeClient } from './src/model.mjs';
 import { writeTruthTemplate, reviewList, markFinding, scorecard, passPilot, researchGate } from './src/pilot.mjs';
+import { platformClient } from './src/platform/client.mjs';
+import { work, JOB_KINDS } from './src/platform/worker.mjs';
+import { push, pull } from './src/platform/move.mjs';
 
 const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE this repository first.
 
@@ -53,6 +56,12 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound pilot mark     --account ID --finding F --verdict true|false|unknown --by NAME [--note TEXT]
   outbound pilot scorecard                        precision, recall, fabrications and cost across the pilot
   outbound pilot pass     --by NAME               record a pass (needs enough fully reviewed accounts and zero fabrications)
+
+  Platform (PRD E12): needs SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (the worker's key; never put it in the web app).
+  outbound worker [--max N]                       run queued jobs until the queue is empty (or N have run); prints ids and outcomes only
+  outbound enqueue sources.fdic|score.run|research.run|draft.run [--account ID] [--channel C] [--step N] [--draft-buybox] [--include-hq]
+  outbound platform push [--from DIR]             copy a data folder into the platform (default: OUTBOUND_DATA_DIR); safe to re-run
+  outbound platform pull --to DIR                 write everything back to a new or empty folder outside this repository
 `;
 
 function parse(argv) {
@@ -76,8 +85,28 @@ async function main() {
   const { pos, flags } = parse(process.argv.slice(2));
   const [cmd, sub] = pos;
   if (!cmd || cmd === 'help' || flags.help) return out(HELP);
-  const dir = dataDir();
   const rules = loadRules();
+
+  if (['worker', 'enqueue', 'platform'].includes(cmd)) {   // the platform's commands use the database, not a local data folder
+    const env = process.env;
+    if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) throw new Error('Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (the service key, for the worker and operators only).');
+    const client = platformClient({ url: env.SUPABASE_URL, key: env.SUPABASE_SERVICE_ROLE_KEY });
+    if (cmd === 'worker') {
+      const done = await work({ client, rules, max: Number(flags.max ?? 10), log: (l) => console.log(l), deps: { makeModelClient: env.ANTHROPIC_API_KEY ? makeClient : null } });
+      if (done.some((d) => d.outcome === 'failed')) process.exitCode = 1;
+      return out(`${done.length} job(s) run.`);
+    }
+    if (cmd === 'enqueue') {
+      if (!JOB_KINDS.includes(sub)) throw new Error(`Usage: outbound enqueue ${JOB_KINDS.join('|')}`);
+      const params = { ...(flags.account ? { account: flags.account } : {}), ...(flags.channel ? { channel: flags.channel } : {}), ...(flags.step ? { step: Number(flags.step) } : {}), ...(flags['draft-buybox'] ? { draftBuybox: true } : {}), ...(flags['include-hq'] ? { includeHq: true } : {}) };
+      return out(`Queued job ${await client.enqueue(sub, params)} (${sub}).`);
+    }
+    if (cmd === 'platform' && sub === 'push') return out(await push({ client, dir: flags.from && flags.from !== true ? flags.from : dataDir() }));
+    if (cmd === 'platform' && sub === 'pull') return out(await pull({ client, to: need(flags, 'to') }));
+    out(HELP); process.exitCode = 1; return;
+  }
+
+  const dir = dataDir();
   const ctx = () => loadContext({ dir, config: rules.config });
 
   if (cmd === 'init') {
