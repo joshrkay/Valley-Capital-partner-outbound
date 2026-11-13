@@ -97,6 +97,47 @@ npm run outbound -- sources run edgar                    # each CMBS trust's lat
 
 It writes `sources/edgar/loans.json`, `trusts.json` and `servicers.json`. Every loan and property detail is **context for a principal, never for a message**.
 
+### The SEC filings listener (PRD E13-S1)
+
+A daily watch of banks' SEC filings for signs they are selling CRE loans. It needs `config.sec.userAgent` filled in, like the CMBS adapter.
+
+Most banks file through a holding company, so each bank is first mapped to the SEC filer (CIK) that files for it. A principal decides every mapping. Only confirmed filers are searched:
+
+```bash
+npm run outbound -- filers suggest                       # proposes filers for unmapped banks: FDIC's holding-company name, SEC's entity list,
+                                                         # and each candidate's latest 10-K or 10-Q (its SIC code shows whether it is a bank)
+npm run outbound -- filers confirm --bank fdic:12345 --cik 9900101 --by "Pat Example"
+npm run outbound -- filers reject  --bank fdic:12345 --cik 9900301 --by "Pat Example" --reason "a capital trust"
+npm run outbound -- filers list                          # every bank: confirmed, rejected, or not mapped yet
+```
+
+Then the listener runs the saved searches in `filings.json` on EDGAR full-text search:
+
+```bash
+npm run outbound -- sources run filings                  # since the last run; a new filer is searched back a year
+npm run outbound -- sources run filings --since 2026-06-01
+npm run outbound -- filers discovered                    # bank filers in our five states that are not in the bank list: for review
+npm run outbound -- sources verify filings               # searches again for a few stored filings; each must come back
+```
+
+- **Saved searches:** 8-K Items 2.01 and 2.06; "transferred to held for sale", "loans held for sale", "loan sale" and "note sale", each with "commercial real estate"; and "balance sheet repositioning". All are placeholders for a principal to tune.
+- **Phrases:** they must all appear in one document. The endpoint has no "near".
+- **8-K items:** matched on each hit. They are never sent to the server, because its cache ignores them.
+- **Signals:** every hit on a confirmed filer becomes an **event**: a dated change, kept even when a later run no longer sees it. It is stored once per filing, in `sources/edgar/filings.json`. `filingSignals({ dir })` in `src/sources/filings.mjs` returns the signals by bank key, `fdic:CERT`.
+- **Proxy statements** (DEF 14A) of confirmed filers are recorded in `sources/edgar/proxies.json`, by form, date and link only, for the briefer. No names are extracted.
+- **The discovery search** runs by business-address state and bank SIC code. Its hits go to `sources/edgar/discovery.json` and never become signals.
+
+The full-text search returns no filing text and no snippets, and nothing here stores any. Even so, filings are context for a principal only, and a test proves none of it reaches the drafter.
+
+What was checked live on 2026-11-13 is written at the top of `src/sources/efts.mjs`:
+- CIKs must be zero-padded, or nothing matches.
+- A query the server cannot run comes back as HTTP 200 with an error body.
+- A cache serves answers keyed without 8-K items or SIC codes.
+
+So every response is matched to its request before it is used.
+
+On the platform, the job is `sources.filings`. The worker workflow queues it on weekdays at 23:37 UTC, then verifies it.
+
 ### Checking the scrapers
 
 Tests use fakes, so they prove the code does what we meant, not that the sources say what we think. `sources verify` checks the stored data against the live sources. It is read-only and exits 1 on any failure:
