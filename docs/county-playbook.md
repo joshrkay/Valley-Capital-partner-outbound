@@ -96,13 +96,13 @@ The sanctioned route is the **Recorder's bulk account**:
 10. **The estimate to test:** about 10–35 commercial notices a month, from 5.2% of 1.71 million parcels being commercial or apartment. The four-week measure replaces it with a real count.
 
 ### Opening the account
-Decided November 13, 2026: open the metered bulk account (D7). The packet, from the Recorder's application and the statute, Checked:
+Decided November 13, 2026: open the metered bulk account (D7). The packet, from the Recorder's application and the statute:
 - the **Account Application**, with Bulk Name Data and Bulk Image Data ticked;
-- a **certified commercial-purpose statement and its Addendum**, which must be on file before approval (A.R.S. 39-121.03). The form is not online; ask the Recorder for it;
+- a **certified commercial-purpose statement and its Addendum**, which must be on file before approval (A.R.S. 39-121.03). Both are published on the Recorder's site (recorder.maricopa.gov, "Customer Account Information"). That site blocks automated readers, so download them in a browser. Seen;
 - the **Digital Recording MOU** (pages 1–5). Ask whether it applies to a data-only account;
 - a **$300 check**, and a $50 balance kept on the account.
 
-Send it to the Accounting Team, 111 S. 3rd Avenue #103, Phoenix, AZ 85003-2281, (602) 506-3637.
+Send it to the Recorder's Accounting Team at **301 W. Jefferson St., Phoenix, AZ 85003**. The current application (new logo) says 7th Floor, Suite 705, while the office's main listing and FAQ give Suite 200 (Seen). **Confirm the suite by phone before mailing the check.** The older application on the legacy site, which gives 111 S. 3rd Avenue #103, is out of date: do not use it.
 
 **The wording of the statement matters.** The statute counts as commercial "the obtaining of names and addresses from public records for the purpose of solicitation" and any use for expected monetary gain, which covers contacting lenders. Using a record for a different commercial purpose than the one stated triggers triple damages. So the statement must name every use:
 - finding commercial filings;
