@@ -170,7 +170,8 @@ export function withHoldingCompanies(tables) {
   };
   const blank = { NAMEHCR: '', RSSDHCR: '', FED_RSSD: '9200999', CITYHCR: '', STALPHCR: '' };
   tables.locations.push({ CERT: '103', CBSA_NO: '19740', CBSA: 'Denver-Aurora-Lakewood, CO', COUNTY: 'Denver', STCNTY: '08031', STALP: 'CO', MAINOFF: 1 });
-  tables.institutions.push({ CERT: 103, NAME: 'Example Front Range Bank', CITY: 'Denver', STALP: 'CO', ASSET: 700000, WEBADDR: 'www.example3.test', ACTIVE: 1 });
+  // An open bank, shaped like the FDIC fake's own: ENDEFYMD 12/31/9999 and no CHANGEC1 (the failure check reads them).
+  tables.institutions.push({ CERT: 103, NAME: 'Example Front Range Bank', CITY: 'Denver', STALP: 'CO', ASSET: 700000, WEBADDR: 'www.example3.test', ACTIVE: 1, INACTIVE: 0, ENDEFYMD: '12/31/9999', STCNTY: '08031' });
   for (const r of tables.institutions) Object.assign(r, hcs[r.CERT] ?? blank);
   return tables;
 }

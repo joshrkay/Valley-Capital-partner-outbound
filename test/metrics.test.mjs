@@ -1,7 +1,9 @@
 // Metric formulas and signals (PRD E3-S3, E3-S4, Appendix A), against hand-computed values. Invented numbers only.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { computeQuarterMetrics, computeMetrics, detectSignals, shiftQuarter, periodLabel, quarterIndex, METRICS, METRIC_FIELDS, CATEGORIES } from '../src/metrics.mjs';
+import { computeQuarterMetrics, computeMetrics, detectSignals, shiftQuarter, periodLabel, quarterIndex, METRICS, METRIC_FIELDS, CATEGORIES,
+  computeConcentration, concentrationDenominator, detectConcentrationSignals, detectStructureSignals, addMonths, CONCENTRATION, CONCENTRATION_FIELDS, DENOMINATORS } from '../src/metrics.mjs';
+import { FDIC_FIELDS } from '../src/sources/fdic.mjs';
 
 const close = (a, b, msg) => assert.ok(Math.abs(a - b) < 1e-12, `${msg ?? ''} ${a} != ${b}`);
 
@@ -108,4 +110,107 @@ test('every metric and category reads only fields listed in PRD Appendix A', () 
   for (const f of METRIC_FIELDS) assert.ok(appendixA.has(f), `${f} is not in Appendix A`);
   for (const c of CATEGORIES) for (const f of [c.balance, ...Object.values(c.stages).filter(Boolean), ...(c.split ?? []).flatMap((s) => [s.balance, s.noncurrent])]) assert.ok(appendixA.has(f), `${c.id}: ${f} is not in Appendix A`);
   assert.ok(Object.keys(METRICS).includes('mfNoncurrentRatio'), 'multifamily is shown on its own');
+});
+
+test('every metric rule signal declares itself a state signal', () => {
+  const s = computeMetrics(file('42', eight((i) => ({ NCREMULT: 5000 + i * 1500 }))));
+  const sig = detectSignals(s, [{ id: 'rise2', type: 'rising', metric: 'creNoncurrentRatio', quarters: 2, label: 'x' }]);
+  assert.equal(sig[0].kind, 'state');
+});
+
+// ---- The concentration screen (PRD E3-S7) ---------------------------------------------------------------------------------------
+// Invented capital: total risk-based capital 120,000; tier 1 100,000; allowance 10,000. CRE as the guidance counts it =
+// LNRECONS + LNREMULT + LNRENROT + LNCOMRE (owner-occupied nonfarm nonresidential, LNRENROW, is left out).
+const CAP = (over = {}) => Q({ RBC: 120000, RBCT1J: 100000, LNATRES: 10000, CBLRIND: 0, LNCOMRE: 20000, ...over });
+const screenFile = (latest, base = { LNRECONS: 80000, LNREMULT: 200000, LNRENROT: 250000, LNCOMRE: 10000 }, rep = '20260630') => ({
+  CERT: '55', quarters: { [rep]: { REPDTE: rep, ...latest } }, growthBase: base ? { [shiftQuarter(rep, -12)]: { REPDTE: shiftQuarter(rep, -12), ...base } } : {},
+});
+const RULES = [
+  { id: 'concentration-construction', kind: 'state', test: 'construction', threshold: 1, label: 'x' },
+  { id: 'concentration-cre', kind: 'state', test: 'cre', threshold: 3, growthThreshold: 0.5, label: 'x' },
+];
+
+test('the screen\'s ratios match a hand computation, on total risk-based capital, with the guidance\'s CRE', () => {
+  const c = computeConcentration(screenFile(CAP()));
+  assert.equal(c.repdte, '20260630');
+  assert.equal(c.baseRepdte, '20230630', '12 quarters, 36 months, before the latest');
+  assert.equal(c.denominator.basis, 'totalRiskBasedCapital');
+  assert.equal(c.denominator.label, 'total risk-based capital');
+  assert.equal(c.denominator.value, 120000);
+  close(c.construction.value, 100000 / 120000, 'construction');
+  close(c.cre.value, (100000 + 300000 + 400000 + 20000) / 120000, 'CRE');            // 820,000: LNRENROT, not LNRENRES
+  assert.equal(c.cre.balance, 820000);
+  close(c.growth.value, (820000 - 540000) / 540000, 'growth');                        // base 80,000 + 200,000 + 250,000 + 10,000
+  assert.deepEqual(c.cre.inputs.map((x) => x.field), ['LNRECONS', 'LNREMULT', 'LNRENROT', 'LNCOMRE']);
+  for (const r of [c.construction, c.cre]) assert.equal(r.denominator, 'totalRiskBasedCapital', 'every ratio names its denominator');
+  assert.deepEqual(CONCENTRATION.cre, ['LNRECONS', 'LNREMULT', 'LNRENROT', 'LNCOMRE']);
+  assert.ok(!CONCENTRATION.cre.includes('LNRENROW') && !CONCENTRATION.cre.includes('LNRENRES'));
+});
+
+test('a CBLR bank reports no total risk-based capital (FDIC sends 0): it is divided by tier 1 plus the allowance, and says so', () => {
+  const c = computeConcentration(screenFile(CAP({ CBLRIND: 1, RBC: 0 })));
+  assert.equal(c.denominator.basis, 'tier1PlusAllowance');
+  assert.equal(c.denominator.value, 110000);
+  assert.match(c.denominator.label, /^tier 1 capital plus the allowance for credit losses \(the bank uses the community bank leverage ratio/);
+  assert.deepEqual(c.denominator.inputs.map((x) => [x.field, x.value]), [['CBLRIND', 1], ['RBCT1J', 100000], ['LNATRES', 10000]]);
+  close(c.construction.value, 100000 / 110000, 'construction');
+  assert.equal(c.construction.denominator, 'tier1PlusAllowance');
+  assert.deepEqual(DENOMINATORS.tier1PlusAllowance.fields, ['RBCT1J', 'LNATRES']);
+});
+
+test('no denominator is guessed: RBC of 0 on a non-CBLR bank, a missing flag or a missing field give null with a reason', () => {
+  const zero = computeConcentration(screenFile(CAP({ RBC: 0 })));
+  assert.equal(zero.denominator.value, null);
+  assert.match(zero.denominator.reason, /RBC \(total risk-based capital\) is 0, though CBLRIND says the bank is not a CBLR bank/);
+  assert.equal(zero.construction.value, null);
+  assert.match(zero.construction.reason, /^no denominator: /);
+  assert.match(concentrationDenominator(CAP({ CBLRIND: null }), '20260630').reason, /missing CBLRIND/);
+  assert.match(concentrationDenominator(CAP({ CBLRIND: 1, LNATRES: null }), '20260630').reason, /missing LNATRES/);
+  assert.match(computeConcentration(screenFile(CAP({ LNCOMRE: null }))).cre.reason, /missing LNCOMRE/);
+  const noBase = computeConcentration(screenFile(CAP(), null));
+  assert.equal(noBase.growth.value, null);
+  assert.match(noBase.growth.reason, /no report for 20230630 on file/);
+  assert.match(computeConcentration(screenFile(CAP(), { LNRECONS: 0, LNREMULT: 0, LNRENROT: 0, LNCOMRE: 0 })).growth.reason, /zero base/);
+});
+
+test('STATE signals: the screen fires while the condition holds and is gone once a new quarter is below it', () => {
+  const hot = CAP({ LNRECONS: 150000, LNREMULT: 300000, LNRENROT: 400000, LNCOMRE: 20000 });   // construction 125%; CRE 725%, up 61%
+  const s = detectConcentrationSignals(computeConcentration(screenFile(hot)), RULES, '55');
+  assert.deepEqual(s.map((x) => [x.type, x.kind]), [['concentration-construction', 'state'], ['concentration-cre', 'state']]);
+  assert.equal(s[0].id, 'fdic:55:concentration-construction:20260630');
+  assert.deepEqual(s[0].denominator, { basis: 'totalRiskBasedCapital', label: 'total risk-based capital' });
+  assert.deepEqual(s[1].evidence, ['fdic:55:20230630', 'fdic:55:20260630']);
+  close(s[1].growth, (870000 - 540000) / 540000, 'growth on the signal');
+  // The next quarter: construction falls below 100% of capital, and CRE grew less than 50% over 36 months. Recomputed: both are gone.
+  const next = { ...screenFile(hot), quarters: { ...screenFile(hot).quarters, 20260930: { REPDTE: '20260930', ...CAP({ LNRECONS: 90000, LNREMULT: 300000, LNRENROT: 300000 }) } }, growthBase: { 20230930: { REPDTE: '20230930', LNRECONS: 80000, LNREMULT: 300000, LNRENROT: 300000, LNCOMRE: 20000 } } };
+  assert.deepEqual(detectConcentrationSignals(computeConcentration(next), RULES, '55'), []);
+  // Test (b) needs both parts: CRE far above 300% but grown under 50% does not fire.
+  const slow = screenFile(hot, { LNRECONS: 150000, LNREMULT: 300000, LNRENROT: 300000, LNCOMRE: 20000 });
+  assert.deepEqual(detectConcentrationSignals(computeConcentration(slow), RULES, '55').map((x) => x.type), ['concentration-construction']);
+  assert.throws(() => detectConcentrationSignals(computeConcentration(screenFile(hot)), [{ id: 'x', test: 'vibes' }], '55'), /unknown test/);
+});
+
+const EVENT_RULE = { id: 'acquired-metro-bank', kind: 'event', type: 'acquisition', kinds: ['merger', 'assisted-merger', 'failure'], windowQuarters: 4, label: 'x' };
+const ev = (over = {}) => ({ transnum: '2026000777', code: 223, kind: 'merger', effective: '2026-06-01', acquirerCert: '55', targetCert: '777', targetInMetros: true, targetMetros: [{ cbsa: '38060', branches: 4, basis: ['main office'] }], targetLastCre: { repdte: '20260331', value: 5000 }, ...over });
+
+test('EVENT signals: an acquisition stays visible for its window with the same id, whatever later data says, then drops away', () => {
+  const at = (asOf, events = [ev()]) => detectStructureSignals({ cert: '55', events, rules: [EVENT_RULE], asOf });
+  const first = at('2026-11-13');
+  assert.equal(first.length, 1);
+  assert.deepEqual([first[0].kind, first[0].type, first[0].period, first[0].targetCert, first[0].visibleUntil], ['event', 'acquired-metro-bank', '2026-06-01', '777', '2027-06-01']);
+  assert.equal(first[0].id, 'fdic:55:acquired-metro-bank:2026000777');
+  assert.deepEqual(first[0].evidence, ['fdic-history:2026000777', 'fdic:777']);
+  assert.deepEqual(at('2027-05-31'), first, 'later, the same signal: it is a dated change, not recomputed from the numbers');
+  assert.deepEqual(at('2027-06-01'), [], 'after 4 quarters it is no longer shown (the event itself stays stored)');
+  assert.deepEqual(at('2026-05-31'), [], 'not before it took effect');
+  assert.deepEqual(at('2026-11-13', [ev({ kind: 'affiliate-reorganization', code: 224 })]), [], 'a merger inside one holding company is not counted by default');
+  assert.deepEqual(at('2026-11-13', [ev({ targetInMetros: false, targetMetros: [] })]), [], 'only a target with a presence in the metros counts');
+  assert.deepEqual(at('2026-11-13', [ev({ acquirerCert: '56' })]), [], 'it attaches to the acquirer only');
+  assert.deepEqual(detectStructureSignals({ cert: '55', events: [ev()], rules: [EVENT_RULE] }), [], 'no scoring date, no event signals: the clock is never read');
+  assert.equal(addMonths('2026-11-30', 3), '2027-02-28');
+});
+
+test('every concentration field is one the FDIC adapter requests', () => {
+  for (const f of CONCENTRATION_FIELDS) assert.ok(FDIC_FIELDS.financials.includes(f), `${f} is not in the 8-quarter pull`);
+  for (const f of CONCENTRATION.cre) assert.ok(FDIC_FIELDS.growthBase.includes(f), `${f} is not in the growth-base pull`);
 });

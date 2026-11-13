@@ -318,6 +318,62 @@ Every adapter (E3–E5) is built on this shared framework.
 - [ ] Each signal points to the `financial_quarter` records behind it.
 - [ ] FDIC signals are institution-level risk facts. A test confirms the drafter's input never includes one.
 
+**E3-S5. Failed banks, from every FDIC source.** *As a principal, I want every bank failure in our metros caught on time, with the FDIC named as the seller, so that a late FDIC index never hides a failed bank's loan sale.* P0, R1. **Built** (`src/sources/fdic.mjs`, `src/score.mjs`, `outbound sources run fdic`, `outbound candidates list`). First live run (2026-11-13): 10 failures since November 2023. FDIC's `/failures` lacked 2 of them, among them the September 25, 2026 failure in the Los Angeles metro. The adapter found it and placed it there.
+- [x] `/failures` alone is not trusted. Its index was built on August 25, 2026, and lacks the failures of August 21 and September 25, 2026. `/institutions` and `/history` are rebuilt daily and show both. Verified live.
+- [x] A bank counts as failed if any source says so. This extends E3-S1, which read `/failures` only. The sources:
+  - `/failures`: `RESTYPE` `FAILURE`, with `FAILDATE`.
+  - `/institutions`: `ACTIVE` 0, `INACTIVE` 1, `ENDEFYMD` (the day the bank became inactive; `12/31/9999` while open), and `CHANGEC1`, FDIC's code for the event that closed the charter. The failure codes are 211, 215, 216, 217, 230 and 235, with FDIC's own descriptions from `/history` (211 is "Failure - Whole Institution"). Checked against `/failures` on 111 closed banks. Code 213, an assisted merger, is mostly assistance there, so it is not a failure.
+  - `/history`: the same codes, on the failed bank's row.
+  - FDIC's failed-bank CSV, when a person saves it as `sources/fdic/failed-banks.csv` in the data folder. www.fdic.gov is blocked from the development environment, so the file is never fetched. Its column names are **Unconfirmed**. A header that differs fails the run, names the headers found, and writes nothing.
+- [x] Failures are looked for nationwide over 36 months. A failed bank has left `/locations`, so it is never on the bank list.
+- [x] Each record (`sources/fdic/failed.json`) keeps each source's date and code, the sources that agree (`agree`), and those that do not yet (`missingFrom`).
+- [x] A failed bank is placed in the metros by three things, and each metro says which placed it:
+  - its branches in our last footprint;
+  - the branches FDIC lists in the failure (`/history` code 713: `OFF_PSTNUM` and `OFF_CNTYNUM`, the branch's state and county);
+  - its main office's county (`STCNTY`). `CBSA_NO` is not used: it was absent on 97 of 447 charters closed since November 2023.
+- [x] The FDIC is the seller. `candidates list` shows failed banks in the metros beside the candidates, never as candidates, with the FDIC loan-sale page as a link. The page is not scraped. A failed bank stays listed for `failedBanks.windowQuarters` (placeholder: 8).
+- [x] Change log: a new failure, and a known bank's status change. The run notes name the certs `/failures` lacks, and when its index was built.
+- [x] `sources verify fdic`: `fdic.failures` checks that every failure any source shows is in our record. `fdic.failures-index` warns when `/failures` lacks a failure the others show. A warning does not fail the run, because the adapter already reads all three. First live check: 2 failures missing from `/failures`.
+- [ ] Check the CSV's column names against the live file, once www.fdic.gov is reachable.
+
+**E3-S6. Mergers and acquisitions.** *As a principal, I want to know when a bank on our list buys a bank with a presence in our metros so that we can approach the acquirer while it decides which loans to keep.* P0, R1. **Built** (`src/sources/fdic.mjs`, `src/metrics.mjs`, `src/score.mjs`). First live run (2026-11-13): 382 deals nationwide since November 2023, 60 of them with a bank on our list on one side, and 12 acquisition signals.
+- [x] `/history`, filtered by event code and effective date (`EFFDATE`), over 36 months. Codes: mergers 221–223, an assisted merger 213, an affiliate reorganization 224, and the failure codes. Each deal has one row on the leaving bank's side. The acquirer's row (810) is not read.
+- [x] The field check is per event, because `/history` leaves out the keys an event lacks (verified live): a failure row has no `CERT`, and a payoff has no `OUT_CERT` or `ACQ_CERT`. Every row needs `TRANSNUM`, `CHANGECODE`, `EFFDATE` and the bank that left (`OUT_CERT`, or `CERT`). A merger row also needs `ACQ_CERT`.
+- [x] Deals with a bank on our list on either side are kept in `sources/fdic/events.json`, keyed by `TRANSNUM`. Each has the target's cert, the date the deal took effect, the target's metros (placed as in E3-S5), and its CRE at its last report. Events are never dropped when they age out.
+- [x] **Event signal** `acquired-metro-bank`, declared `kind: event`. It attaches to the acquirer, with the effective date and the target's cert, when the target had a presence in the six metros. It stays visible for `windowQuarters` (placeholder: 4) from that date. Its id is the deal's, so it is the same signal on every run. It counts a merger, an assisted merger, and taking over a failed bank. A merger inside one holding company (224) does not count by default.
+- [x] Being acquired means the target is gone. Its record gets `acquiredBy` and `closedOn`. The change log records the acquirer and the status change.
+- [x] The card states it from a fixed template, for example: "It acquired another bank (FDIC cert N) with 4 branches in Phoenix, effective June 1, 2026."
+- [x] `sources verify fdic`: `fdic.events` checks that every deal FDIC shows with a bank on our list is stored with the same acquirer, target and date.
+
+**E3-S7. The concentration screen.** *As a principal, I want to see which banks meet the regulators' CRE concentration screen so that I know whose examiners are likely pressing them to cut CRE.* P0, R1. **Built** (`src/metrics.mjs`, `src/score.mjs`, `src/candidates.mjs`), from BankFind fields in the existing `sources.fdic` job. First live run (2026-11-13): 27 banks meet test (a), 15 meet test (b), 39 meet either.
+- [ ] **The definition is Unconfirmed.** It is the 2006 interagency guidance's screen as we remember it. The guidance text could not be reached: the Federal Register, FDIC and OCC hosts are blocked from the development environment. Either test is enough:
+  - (a) construction and land development loans at or above 100% of total risk-based capital; or
+  - (b) CRE at or above 300% of total risk-based capital, **and** CRE grown 50% or more over the prior 36 months.
+
+  CRE = construction and land development + multifamily + nonfarm nonresidential not owner-occupied + loans to finance CRE not secured by real estate. A principal confirms this against the guidance text. The code comment and the `scoring.json` note say the same.
+- [x] The fields. Meanings are from FDIC's own definitions file (`All Financial Reports.xlsx`, at api.fdic.gov/banks/docs). Each was checked live on the 268 metro banks, for June 30, 2026 and June 30, 2023:
+
+  | Need | Field | Checked live |
+  |---|---|---|
+  | Construction and land development | `LNRECONS` | FDIC's own construction-to-tier-1 ratio, `LNCDT1R`, equals `LNRECONS` / `RBCT1J` on 267 of 267 banks |
+  | Multifamily | `LNREMULT` | |
+  | Nonfarm nonresidential, not owner-occupied | `LNRENROT` | `LNRENROT` + `LNRENROW` = `LNRENRES` on 267 of 268 banks |
+  | CRE loans not secured by real estate | `LNCOMRE` | Above 0 at 132 banks |
+  | Total risk-based capital | `RBC` | FDIC gives only a title ("RBC-TOTAL-PCA"). It equals `RBCT1J` + `RBCT2` on 195 of 196 non-CBLR banks. `RBC` over risk-weighted assets equals FDIC's own total capital ratio on all 195. |
+  | Tier 1 capital | `RBCT1J` | Equals `RBCT1` on all 268 |
+  | Allowance for credit losses on loans | `LNATRES` | Equals `LNLSRES` on all 268 |
+  | CBLR election | `CBLRIND` | 1 at 72 banks |
+
+- [x] CBLR banks report no total risk-based capital. FDIC sends `RBC` as **0** for them, not null (all 72), so a naive ratio would divide by zero. For them the denominator is tier 1 capital plus the allowance (`RBCT1J` + `LNATRES`), UBPR's approach. Every computed value and every signal names its denominator. A non-CBLR bank with `RBC` of 0 gets no ratio, with the reason.
+- [x] The 36-month test needs CRE 12 quarters before the latest. The adapter fetches that one quarter (`growthBase`, four fields) and does not widen the 8-quarter pull. It is kept apart from `quarters`.
+- [x] The paper profile shows the ratios (`profile.concentration`): construction to capital, CRE to capital, and 36-month CRE growth. Each comes with its fields, report dates and denominator, and with whether each test is met.
+- [x] **State signals** `concentration-construction` and `concentration-cre`, declared `kind: state`. They are recomputed from the latest quarter on every run, and they drop away when the ratio falls below. Thresholds are in `scoring.json`, marked as placeholders.
+- [x] The card states them from fixed templates, with the denominator's words taken from code, then says the definition is unconfirmed. No model is used.
+- [x] `sources verify fdic`: `fdic.ratios` now includes `LNCDT1R`. `fdic.concentration` checks that each CBLR flag matches how `RBC` is reported, and that the stored growth-base quarter equals FDIC's.
+- [x] The firm's rule holds: a test runs the fake pull, scoring and promotion, then checks that the briefer gets the ratios and the acquisition as data, and that the drafter's input has no ratio, denominator, signal, deal or cert.
+- [ ] TODO: cross-check against UBPR Page 7B (lines 29–30), once cdr.ffiec.gov is reachable.
+- [ ] A principal decides whether the screen and acquisitions add points to the score, and on which axis. Today they are signals only.
+
 ---
 
 ### E4. CMBS loan signals and rate context

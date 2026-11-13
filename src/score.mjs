@@ -5,7 +5,8 @@
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { readJson, writeJson, listFiles, audit } from './store.mjs';
-import { METRICS, CATEGORIES, SIGNAL_TYPES, computeMetrics, detectSignals, periodLabel, shiftQuarter } from './metrics.mjs';
+import { METRICS, CATEGORIES, SIGNAL_TYPES, computeMetrics, detectSignals, periodLabel, shiftQuarter,
+  computeConcentration, detectConcentrationSignals, detectStructureSignals, addMonths, CONCENTRATION_TESTS, CONCENTRATION_NOTE, STRUCTURE_SIGNAL_KINDS } from './metrics.mjs';
 import { buildCard } from './candidates.mjs';
 
 const PLACEHOLDER = /\[confirm/i;
@@ -73,15 +74,34 @@ export function validateScoring(scoring) {
   const n = (x) => typeof x === 'number' && x >= 0;
   if (!(n(A.score) && n(B.score) && A.score > B.score)) errors.push('tiers.A.score and tiers.B.score must be numbers with A > B >= 0');
   if (!(n(A.distress) && n(A.fit))) errors.push('tiers.A.distress and tiers.A.fit must be numbers of 0 or more (Tier A needs both)');
+  // Every signal type declares its kind (state or event), and the kind must match how the code computes it.
   const sids = new Set();
-  for (const r of scoring.signals ?? []) {
+  const signalId = (r, kind) => {
     if (!r.id || sids.has(r.id)) errors.push(`signal id "${r.id}" is missing or duplicated`);
     sids.add(r.id);
+    if (r.kind !== kind) errors.push(`signal ${r.id}: kind must be "${kind}" (got ${r.kind === undefined ? 'none' : `"${r.kind}"`}); every signal type declares whether it is a state or an event signal`);
+    if (!r.label) errors.push(`signal ${r.id}: no label`);
+  };
+  for (const r of scoring.signals ?? []) {
+    signalId(r, 'state');
     if (!SIGNAL_TYPES.includes(r.type)) errors.push(`signal ${r.id}: unknown type "${r.type}"`);
     if (!METRICS[r.metric]) errors.push(`signal ${r.id}: unknown metric "${r.metric}"`);
-    if (!r.label) errors.push(`signal ${r.id}: no label`);
     if (['above', 'changeAbove'].includes(r.type) && typeof r.threshold !== 'number') errors.push(`signal ${r.id}: threshold must be a number`);
   }
+  for (const r of scoring.concentration?.signals ?? []) {
+    signalId(r, 'state');
+    if (!CONCENTRATION_TESTS.includes(r.test)) errors.push(`signal ${r.id}: unknown concentration test "${r.test}" (known: ${CONCENTRATION_TESTS.join(', ')})`);
+    if (!(typeof r.threshold === 'number' && r.threshold > 0)) errors.push(`signal ${r.id}: threshold must be a positive number (a fraction: 1 = 100%)`);
+    if (r.test === 'cre' && !(typeof r.growthThreshold === 'number' && r.growthThreshold > 0)) errors.push(`signal ${r.id}: growthThreshold must be a positive number`);
+  }
+  for (const r of scoring.structureEvents?.signals ?? []) {
+    signalId(r, 'event');
+    if (r.type !== 'acquisition') errors.push(`signal ${r.id}: unknown structure-event type "${r.type}" (known: acquisition)`);
+    if (!(Number.isInteger(r.windowQuarters) && r.windowQuarters >= 1)) errors.push(`signal ${r.id}: windowQuarters must be a whole number of 1 or more`);
+    if (!Array.isArray(r.kinds) || !r.kinds.length || r.kinds.some((k) => !STRUCTURE_SIGNAL_KINDS.includes(k))) errors.push(`signal ${r.id}: kinds must list one or more of ${STRUCTURE_SIGNAL_KINDS.join(', ')}`);
+  }
+  const fw = scoring.failedBanks?.windowQuarters;
+  if (fw !== undefined && !(Number.isInteger(fw) && fw >= 1)) errors.push('failedBanks.windowQuarters must be a whole number of 1 or more');
   return { ok: !errors.length, errors };
 }
 
@@ -160,7 +180,35 @@ export function buildProfile({ financials, footprint = {}, institution = {}, buy
       ...(cat.split ? { split: cat.split.map((s) => { const b = v(q, s.balance); const nc = v(q, s.noncurrent); return { id: s.id, label: s.label, balance: { field: s.balance, repdte: L, value: b }, noncurrent: { field: s.noncurrent, repdte: L, value: nc }, noncurrentRatio: b > 0 && nc !== null ? nc / b : null }; }) } : {}),
     };
   });
-  return { period: L, creLoans: { fields: baseFields, repdte: L, value: creBase }, netLoans: { field: 'LNLSNET', repdte: L, value: v(q, 'LNLSNET') }, categories, footprint: footprintOut, limits: [...PROFILE_LIMITS] };
+  return { period: L, creLoans: { fields: baseFields, repdte: L, value: creBase }, netLoans: { field: 'LNLSNET', repdte: L, value: v(q, 'LNLSNET') }, categories, footprint: footprintOut,
+    concentration: concentrationProfile(financials, scoring), limits: [...PROFILE_LIMITS] };
+}
+
+// The concentration screen's ratios for the paper profile (E3-S7). Every number carries its fields and report date, and every ratio
+// names the denominator it used. `meets` is null when a value is missing; the thresholds come from scoring.json.
+export function concentrationProfile(financials, scoring = {}) {
+  const c = computeConcentration(financials);
+  if (!c.repdte || !c.denominator) return null;
+  const rule = (t) => (scoring.concentration?.signals ?? []).find((r) => r.test === t) ?? null;
+  const den = c.denominator;
+  const missing = (x) => (x.reason ? { missing: x.reason } : {});
+  const at = (x, th) => (x === null || x === undefined || typeof th !== 'number' ? null : x >= th);
+  const cons = rule('construction'); const cre = rule('cre');
+  // Test (b) needs both parts: it fails if either part fails, and is unknown if either is unknown and neither fails.
+  const parts = [at(c.cre.value, cre?.threshold), at(c.growth.value, cre?.growthThreshold)];
+  const creMeets = parts.includes(false) ? false : parts.includes(null) ? null : true;
+  return {
+    period: c.repdte, note: CONCENTRATION_NOTE,
+    denominator: { basis: den.basis, label: den.label, value: den.value, inputs: den.inputs, ...missing(den) },
+    constructionToCapital: { value: c.construction.value, inputs: c.construction.inputs, denominator: den.label, ...missing(c.construction) },
+    creToCapital: { value: c.cre.value, balance: c.cre.balance ?? null, inputs: c.cre.inputs, denominator: den.label, ...missing(c.cre) },
+    creGrowth36m: { value: c.growth.value, from: c.growth.from, to: c.growth.to, ...missing(c.growth) },
+    screen: {
+      construction: cons ? { threshold: cons.threshold, meets: at(c.construction.value, cons.threshold) } : null,
+      cre: cre ? { threshold: cre.threshold, growthThreshold: cre.growthThreshold, meets: creMeets } : null,
+    },
+    creDefinition: 'construction and land development + multifamily + nonfarm nonresidential not owner-occupied + CRE loans not secured by real estate (LNRECONS + LNREMULT + LNRENROT + LNCOMRE)',
+  };
 }
 
 function profileFootprint({ footprint, buybox, metros, labelOf }) {
@@ -258,12 +306,18 @@ export function tierFor({ score, axes, filtersFailed, tiers }) {
   return { tier: null, note: `score ${score} is below the Tier B threshold of ${B.score}` };
 }
 
-// Scores one bank. Deterministic: no clock, no randomness, no model.
-export function scoreBank({ cert, institution = {}, footprint = {}, financials, scoring, buybox, metros, latestRepdte }) {
+// Scores one bank. Deterministic: no clock, no randomness, no model. `events` are the stored structure events where this bank is the
+// acquirer; `asOf` (YYYY-MM-DD) is the scoring date that decides which event signals are still in their window.
+export function scoreBank({ cert, institution = {}, footprint = {}, financials, scoring, buybox, metros, latestRepdte, events = [], asOf = null }) {
   const fin = financials ?? { CERT: cert, quarters: {} };
   const series = computeMetrics(fin);
   const latestQ = series.quarters.at(-1) ?? null;
-  const signals = detectSignals(series, scoring.signals ?? []);
+  // State signals from the metrics and the concentration screen, recomputed from the latest quarter; then event signals, kept by date.
+  const signals = [
+    ...detectSignals(series, scoring.signals ?? []),
+    ...detectConcentrationSignals(computeConcentration(fin), scoring.concentration?.signals ?? [], String(cert)),
+    ...detectStructureSignals({ cert: String(cert), events, rules: scoring.structureEvents?.signals ?? [], asOf }),
+  ];
   const profile = buildProfile({ financials: fin, footprint, institution, buybox, metros, scoring });
   const components = (scoring.components ?? []).map((c) => component(c, { series, latestQ, profile }));
   const score = round(components.reduce((s, c) => s + c.points, 0));
@@ -273,10 +327,11 @@ export function scoreBank({ cert, institution = {}, footprint = {}, financials, 
   const { tier, note } = tierFor({ score, axes, filtersFailed, tiers: scoring.tiers });
   const labelOf = (c) => metros?.metros?.find((m) => m.cbsa === c)?.label ?? `CBSA ${c}`;
   const metroCodes = (buybox.metros ?? []).filter((c) => Number(footprint?.branchesByMetro?.[c] ?? 0) > 0);
+  const labeled = signals.map((s) => (s.rule === 'acquisition' ? { ...s, metros: s.metros.map((m) => ({ ...m, label: labelOf(m.cbsa) })) } : s));
   const item = {
     key: `fdic:${cert}`, cert: String(cert), name: institution.NAME ?? '', city: institution.CITY ?? '', state: institution.STALP ?? '', via: institution.via ?? {},
     metros: metroCodes, metroLabels: metroCodes.map(labelOf), assets, tier, tierNote: note, score, axes, filtersFailed,
-    profile, components, signals, card: null, latestRepdte: series.latest, sectors: [...(buybox.sectors?.include ?? [])],
+    profile, components, signals: labeled, card: null, latestRepdte: series.latest, sectors: [...(buybox.sectors?.include ?? [])],
     metricsLatest: latestQ ? { ...latestQ.values } : {},
   };
   item.card = buildCard(item, { scoring });
@@ -284,6 +339,19 @@ export function scoreBank({ cert, institution = {}, footprint = {}, financials, 
 }
 
 const byScore = (a, b) => (b.score - a.score) || (a.cert < b.cert ? -1 : a.cert > b.cert ? 1 : 0);
+
+// Failed banks with a presence in the six metros (E3-S5), listed beside the candidates. They are never candidates: the bank is gone,
+// and the FDIC sells its loans. Listed for `failedBanks.windowQuarters` after the failure. Each says which FDIC sources agree.
+export function listFailedBanks({ failed = {}, scoring = {}, metros, asOf }) {
+  const months = (scoring.failedBanks?.windowQuarters ?? 8) * 3;
+  const from = asOf ? addMonths(asOf, -months) : null;
+  const labelOf = (c) => metros?.metros?.find((m) => m.cbsa === c)?.label ?? `CBSA ${c}`;
+  return Object.values(failed).filter((f) => f?.inMetros && f.failedOn && (!from || (f.failedOn > from && f.failedOn <= asOf)))
+    .sort((a, b) => (a.failedOn < b.failedOn ? 1 : a.failedOn > b.failedOn ? -1 : Number(a.cert) - Number(b.cert)))
+    .map((f) => ({ key: `fdic:${f.cert}`, cert: f.cert, name: f.name ?? '', failedOn: f.failedOn, agree: f.agree ?? [], missingFrom: f.missingFrom ?? [], acquirerCert: f.acquirerCert ?? null,
+      metros: (f.metros ?? []).map((m) => ({ ...m, label: labelOf(m.cbsa) })), lastCre: f.lastCre ?? null, seller: 'FDIC', loanSales: f.loanSales,
+      note: 'The bank failed, so the FDIC is the seller of its loans, usually in sealed-bid pools. See the FDIC loan-sale page.' }));
+}
 
 // Reads sources/fdic/*, scores every bank, writes candidates/latest.json. Refuses on a buy box with [CONFIRM] placeholders unless
 // allowPlaceholders is set, in which case the output is marked provisional and lists the unfilled fields.
@@ -301,9 +369,13 @@ export function runScoring({ dir, buybox, scoring, metros, now = new Date(), all
   const fin = new Map(listFiles(finDir, '.json').map((f) => [f.replace(/\.json$/, ''), readJson(join(finDir, f))]));
   const latestRepdte = [...fin.values()].flatMap((f) => Object.keys(f?.quarters ?? {})).sort().at(-1) ?? null;
   const certs = [...new Set([...Object.keys(institutions), ...fin.keys()])].sort();
-  const items = certs.map((cert) => scoreBank({ cert, institution: institutions[cert] ?? {}, footprint: footprints[cert] ?? {}, financials: fin.get(cert) ?? null, scoring, buybox, metros, latestRepdte })).sort(byScore);
+  const asOf = now.toISOString().slice(0, 10);
+  const eventsBy = new Map();
+  for (const e of Object.values(readJson(join(base, 'events.json'), {}))) if (e?.acquirerCert) { const k = String(e.acquirerCert); if (!eventsBy.has(k)) eventsBy.set(k, []); eventsBy.get(k).push(e); }
+  const items = certs.map((cert) => scoreBank({ cert, institution: institutions[cert] ?? {}, footprint: footprints[cert] ?? {}, financials: fin.get(cert) ?? null, scoring, buybox, metros, latestRepdte, events: eventsBy.get(cert) ?? [], asOf })).sort(byScore);
+  const failedBanks = listFailedBanks({ failed: readJson(join(base, 'failed.json'), {}), scoring, metros, asOf });
   const runId = `score-${now.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')}`;
-  const out = { runId, scoredAt: now.toISOString(), latestRepdte, buyboxHash: contentHash(buybox), scoringHash: contentHash(scoring), provisional: vb.placeholders.length > 0, placeholders: vb.placeholders, items };
+  const out = { runId, scoredAt: now.toISOString(), asOf, latestRepdte, buyboxHash: contentHash(buybox), scoringHash: contentHash(scoring), provisional: vb.placeholders.length > 0, placeholders: vb.placeholders, items, failedBanks };
   writeJson(join(dir, 'candidates', 'latest.json'), out);
   audit(dir, { type: 'scoring_run', runId, banks: items.length, tierA: items.filter((i) => i.tier === 'A').length, tierB: items.filter((i) => i.tier === 'B').length, provisional: out.provisional, latestRepdte });
   return out;

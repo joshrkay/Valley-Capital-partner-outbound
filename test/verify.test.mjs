@@ -17,7 +17,7 @@ const NOW = new Date('2026-11-13T12:00:00Z');
 // FDIC's own ratio fields, consistent with the fake's values, so the ratio check has something to agree with.
 const tables = () => {
   const t = TABLES();
-  for (const r of t.financials) { r.NCRECONR = (r.NCRECONS / r.LNRECONS) * 100; r.LNLSGR = 50000; r.NCLNLSR = (r.NCLNLS / 50000) * 100; }
+  for (const r of t.financials) { r.NCRECONR = (r.NCRECONS / r.LNRECONS) * 100; r.LNLSGR = 50000; r.NCLNLSR = (r.NCLNLS / 50000) * 100; r.LNCDT1R = Math.round((r.LNRECONS / r.RBCT1J) * 10000) / 100; }
   return t;
 };
 const pulled = async () => {
@@ -32,7 +32,8 @@ test('FDIC: on clean data every check passes, and the spot checks carry a URL to
   const r = await vf(await pulled());
   for (const c of r.checks) assert.equal(c.ok, true, `${c.id}: ${c.summary}`);
   assert.match(byId(r)['fdic.values'].summary, /match FDIC exactly/);
-  assert.match(byId(r)['fdic.ratios'].summary, /agree with FDIC's own/);
+  assert.match(byId(r)['fdic.ratios'].summary, /agree with FDIC's own .*construction to tier 1 capital, LNCDT1R/);
+  for (const id of ['fdic.concentration', 'fdic.failures', 'fdic.failures-index', 'fdic.events']) assert.ok(byId(r)[id], id);
   assert.equal(r.sample.length, 2);
   assert.match(r.sample[0].check, /^https:\/\/api\.fdic\.gov\/banks\/financials\?filters=CERT:\d+%20AND%20REPDTE:\d{8}/);
 });
@@ -54,6 +55,50 @@ test('FDIC: a newer quarter at the source, or a bank missing from our list, fail
   const inst = readJson(fdicPaths(dir).institutions); delete inst['101']; writeJson(fdicPaths(dir).institutions, inst);
   const c = byId(await vf(dir))['fdic.coverage'];
   assert.equal(c.ok, false); assert.deepEqual(c.detail.missing, ['101']);
+});
+
+test('FDIC: a failure missing from /failures is a WARNING that FDIC\'s index is behind, not a failure of ours', async () => {
+  const dir = await pulled();
+  const r = byId(await vf(dir));
+  const w = r['fdic.failures-index'];
+  assert.equal(w.ok, true);
+  assert.equal(w.warn, true);
+  assert.match(w.summary, /^1 failure\(s\) in \/institutions or \/history is missing from \/failures: FDIC's \/failures index is behind \(built 2026-08-25\)/);
+  assert.deepEqual(w.detail.missingFromFailures, [{ cert: '99999', institutions: '2026-09-25', history: '2026-09-25' }]);
+  assert.equal(r['fdic.failures'].ok, true, r['fdic.failures'].summary);
+  assert.match(r['fdic.failures'].summary, /All 2 failures FDIC shows since 2023-11-13 .* are in our record; 2 had a presence in the six metros/);
+  // Once FDIC rebuilds /failures, the warning goes.
+  const t = tables(); t.failures.push({ CERT: 99999, NAME: 'EXAMPLE BANK', FAILDATE: '9/25/2026', RESTYPE: 'FAILURE' });
+  const caughtUp = byId(await vf(dir, t))['fdic.failures-index'];
+  assert.equal(caughtUp.warn, undefined);
+  assert.match(caughtUp.summary, /lists every failure that \/institutions and \/history show/);
+});
+
+test('FDIC: a failure or a deal FDIC shows that our records lack fails, naming it', async () => {
+  const dir = await pulled();
+  const failed = readJson(fdicPaths(dir).failed); delete failed['99999']; writeJson(fdicPaths(dir).failed, failed);
+  const events = readJson(fdicPaths(dir).events); events['2026000998'].effective = '2026-07-01'; writeJson(fdicPaths(dir).events, events);
+  const r = byId(await vf(dir));
+  assert.equal(r['fdic.failures'].ok, false);
+  assert.deepEqual(r['fdic.failures'].detail.missing, ['99999']);
+  assert.equal(r['fdic.events'].ok, false);
+  assert.deepEqual(r['fdic.events'].detail.first[0], { transnum: '2026000998', acquirerCert: '101', targetCert: '998', effective: '2026-06-01', ours: { acquirerCert: '101', targetCert: '998', effective: '2026-07-01' } });
+});
+
+test('FDIC: the concentration screen\'s fields: a CBLR flag that contradicts RBC, a wrong growth base, or a wrong tier 1 field fails', async () => {
+  const dir = await pulled();
+  assert.equal(byId(await vf(dir))['fdic.concentration'].ok, true);
+  const f = join(dir, 'sources', 'fdic', 'financials', '101.json');
+  const fin = readJson(f);
+  fin.quarters['20260630'].CBLRIND = 1;   // a CBLR bank that reports total risk-based capital: the denominator rule would be wrong
+  fin.growthBase['20230630'].LNCOMRE += 1;
+  fin.quarters['20260630'].RBCT1J += 50;
+  writeJson(f, fin);
+  const r = byId(await vf(dir));
+  assert.equal(r['fdic.concentration'].ok, false);
+  assert.deepEqual(r['fdic.concentration'].detail.denominator, [{ cert: '101', CBLRIND: 1, RBC: 135 }]);
+  assert.deepEqual(r['fdic.concentration'].detail.growthBase.map((d) => d.field), ['LNCOMRE']);
+  assert.ok(r['fdic.ratios'].detail.first.some((d) => d.cert === '101' && d.ratio === 'construction to tier 1 capital'));
 });
 
 test('FDIC: nothing pulled yet is a failure that says what to run', async () => {

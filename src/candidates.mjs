@@ -5,7 +5,7 @@
 import { join } from 'node:path';
 import { readJson, writeJson, listFiles, exists, audit, safeId } from './store.mjs';
 import { norm } from './guard.mjs';
-import { METRICS, periodLabel } from './metrics.mjs';
+import { METRICS, SIGNAL_TYPES, DENOMINATORS, periodLabel } from './metrics.mjs';
 
 const C = (dir, f) => join(dir, 'candidates', f);
 const ymd = (d) => new Date(d).toISOString().slice(0, 10);
@@ -71,7 +71,7 @@ const fmtMetric = (metric, v) => (METRICS[metric]?.kind === 'amount' ? money(v) 
 export function buildCard(item, { scoring = {} } = {}) {
   const L = item.latestRepdte;
   if (!L) return null;
-  const lim = { maxCategories: 2, maxDistress: 2, maxSignals: 3, ...(scoring.card ?? {}) };
+  const lim = { maxCategories: 2, maxDistress: 2, maxSignals: 3, maxEvents: 2, ...(scoring.card ?? {}) };
   const rec = (rep) => `fdic:${item.cert}:${rep}`;
   const period = periodLabel(L);
   const S = [];
@@ -116,8 +116,33 @@ export function buildCard(item, { scoring = {} } = {}) {
     add(`${c.label}: ${change ? `${c.value < 0 ? 'down' : 'up'} ${pts(c.value)}` : pct(c.value)}.`, [...new Set(c.inputs.map((x) => x.repdte).filter(Boolean))].map(rec));
   }
 
-  // Timing: the signals that fired at this quarter, each from its rule type's template. A threshold signal for a level already stated adds nothing.
-  for (const s of (item.signals ?? []).filter((x) => !(x.rule === 'above' && statedLevels.has(x.metric))).slice(0, lim.maxSignals)) {
+  // Pressure: the concentration screen (state signals), each naming the capital figure it divided by. The denominator's words come
+  // from code (DENOMINATORS), never from the stored signal.
+  const conc = (item.signals ?? []).filter((x) => x.rule === 'concentration' && x.value !== null && x.value !== undefined);
+  for (const s of conc) {
+    const den = DENOMINATORS[s.denominator?.basis]?.label;
+    if (!den) continue;
+    if (s.test === 'construction') add(`Construction and land loans are ${pct(s.value, 0)} of ${den}, at or above the ${pct(s.threshold, 0)} concentration screen (${period}).`, [s.id, ...s.evidence]);
+    else if (s.test === 'cre' && s.growth !== null && s.growth !== undefined) add(`CRE loans as the 2006 interagency guidance counts them are ${pct(s.value, 0)} of ${den}, at or above ${pct(s.threshold, 0)}, and grew ${pct(s.growth, 0)} from ${periodLabel(s.baseRepdte)} to ${period}, at or above ${pct(s.growthThreshold, 0)}.`, [s.id, ...s.evidence]);
+  }
+  if (conc.length) add('The concentration screen follows the 2006 interagency guidance as we understand it; its definition is not yet confirmed against the guidance text.', conc.map((s) => s.id));
+
+  // Structure events (event signals): an acquisition of a bank with a presence in the metros, dated, with the target's FDIC cert.
+  for (const s of (item.signals ?? []).filter((x) => x.rule === 'acquisition').slice(0, lim.maxEvents)) {
+    const where = (s.metros ?? []).filter((m) => m.label).map((m) => (m.branches ? `${m.branches} branch${m.branches === 1 ? '' : 'es'} in ${m.label}` : `its main office in ${m.label}`));
+    if (!where.length || !/^\d+$/.test(String(s.targetCert)) || !/^\d{4}-\d{2}-\d{2}$/.test(String(s.effective))) continue;
+    const when = periodLabel(s.effective.replace(/-/g, ''));
+    const places = where.length > 1 ? `${where.slice(0, -1).join(', ')} and ${where.at(-1)}` : where[0];
+    let t = s.eventKind === 'failure'
+      ? `It took over a failed bank (FDIC cert ${s.targetCert}) with ${places}, effective ${when}.`
+      : `It acquired another bank (FDIC cert ${s.targetCert}) with ${places}, effective ${when}.`;
+    const cre = s.targetLastCre;
+    if (cre?.value !== null && cre?.value !== undefined && /^\d{8}$/.test(String(cre.repdte))) t += ` That bank held ${money(cre.value)} of CRE loans at its last report (${periodLabel(cre.repdte)}).`;
+    add(t, [s.id, ...s.evidence, ...(cre?.repdte ? [`fdic:${s.targetCert}:${cre.repdte}`] : [])]);
+  }
+
+  // Timing: the metric signals that fired at this quarter, each from its rule type's template. A threshold signal for a level already stated adds nothing.
+  for (const s of (item.signals ?? []).filter((x) => SIGNAL_TYPES.includes(x.rule) && !(x.rule === 'above' && statedLevels.has(x.metric))).slice(0, lim.maxSignals)) {
     const label = METRICS[s.metric]?.label;
     if (!label || s.value === null || s.value === undefined) continue;
     let t;
@@ -151,7 +176,8 @@ export function listCandidates({ dir, suppression = [], now = new Date(), tiers 
     if (!all && ['promoted', 'dismissed', 'snoozed'].includes(status)) continue;
     items.push({ ...it, status, decision: d ?? null });
   }
-  return { runId: latest.runId, latestRepdte: latest.latestRepdte, provisional: !!latest.provisional, placeholders: latest.placeholders ?? [], items };
+  const failedBanks = (latest.failedBanks ?? []).filter((f) => !suppressedBy({ key: f.key, cert: f.cert, name: f.name }, suppression, aliases));
+  return { runId: latest.runId, latestRepdte: latest.latestRepdte, provisional: !!latest.provisional, placeholders: latest.placeholders ?? [], items, failedBanks };
 }
 
 export function getCandidate({ dir, key }) {

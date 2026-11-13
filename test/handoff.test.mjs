@@ -1,10 +1,16 @@
 // PRD E6-S8: what the pipeline found travels with an account. The briefer sees all of it as context; the drafter sees only the sector.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { account, models, SENDER } from './kit.mjs';
+import { join } from 'node:path';
+import { account, models, SENDER, makeDir } from './kit.mjs';
 import { loadRules } from '../src/rules.mjs';
 import { buildPrompt, pipelineSection } from '../src/research.mjs';
 import { buildDraftPrompt } from '../src/draft.mjs';
+import { readJson } from '../src/store.mjs';
+import { runFdic } from '../src/sources/fdic.mjs';
+import { runScoring } from '../src/score.mjs';
+import { promote } from '../src/candidates.mjs';
+import { fakeFdic, METROS, TABLES, fin } from './fdic-fake.mjs';
 
 const rules = loadRules();
 // Invented figures with distinctive values, so a leak is easy to spot.
@@ -41,4 +47,30 @@ test('the drafter never sees pipeline figures, ratios or signal text: only the s
   const both = system + user;
   for (const leak of ['812345', '0.4321', '0.0617', '41.7', 'noncurrent', 'Multifamily noncurrent', 'fdic:99999', '38060', 'pipeline']) assert.ok(!both.includes(leak), `drafter input leaked "${leak}"`);
   assert.match(user, /"sector":"multifamily"/);
+});
+
+// PRD E3-S5 to S7: the concentration screen, structure events and failures add research. The same rule holds, end to end: pull (fake),
+// score, promote, then build both prompts from the account file a principal would research.
+test('the concentration ratios and the acquisition travel to the briefer as data; the drafter sees none of them', async () => {
+  const NOW = new Date('2026-11-13T12:00:00Z');
+  const dir = makeDir();
+  const t = TABLES();
+  // Distinctive invented figures for bank 101, so a leak is easy to spot: construction 271,828 against total risk-based capital 100,000.
+  t.financials[1] = fin('101', '20260630', { LNRECONS: 271828, RBC: 100000, RBCT1J: 90000, LNATRES: 7000, LNCOMRE: 31415 });
+  await runFdic({ dir, metros: METROS, fetchImpl: fakeFdic(t).fetchImpl, quarters: 2, sleep: async () => {}, minIntervalMs: 0, now: NOW });
+  runScoring({ dir, buybox: rules.buybox, scoring: rules.scoring, metros: rules.metros, now: NOW, allowPlaceholders: true });
+  const promoted = promote({ dir, key: 'fdic:101', by: 'Pat Example', now: NOW });
+  const a = { ...readJson(join(dir, 'accounts', `${promoted.id}.json`)), person: account().person, contact: account().contact };
+  const types = a.pipeline.signals.map((s) => [s.type, s.kind]);
+  assert.ok(types.some(([ty, k]) => ty === 'concentration-construction' && k === 'state'), JSON.stringify(types));
+  assert.ok(types.some(([ty, k]) => ty === 'acquired-metro-bank' && k === 'event'), JSON.stringify(types));
+  assert.equal(a.pipeline.profile.concentration.constructionToCapital.value, 2.71828);
+  // The briefer: all of it, fenced as data.
+  const { user: brief } = buildPrompt({ account: a, playbook: rules.playbooks.types.bank, playbooks: rules.playbooks, models: models(), today: '2026-11-13' });
+  for (const want of ['constructionToCapital', '2.71828', 'total risk-based capital', 'acquired-metro-bank', 'concentration-construction']) assert.ok(brief.includes(want), `briefer lacks "${want}"`);
+  // The drafter: only the sector. No ratio, no denominator, no signal, no deal, no cert.
+  const { system, user } = buildDraftPrompt({ account: a, channel: 'email', step: 2, sender: SENDER, facts: [], claims: rules.claims, priorTouches: [], rules });
+  const both = system + user;
+  for (const leak of ['271828', '2.71828', '272%', '31415', 'concentration', 'risk-based', 'tier 1', 'allowance', 'acquired', 'FDIC cert', '2026000998', 'fdic:', 'growth', 'screen', 'pipeline'])
+    assert.ok(!both.includes(leak), `drafter input leaked "${leak}"`);
 });

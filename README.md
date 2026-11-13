@@ -78,6 +78,14 @@ npm run outbound -- account set-person --account <id> --name "..." --title "..."
 
 Behind a proxy, Node's built-in `fetch` needs `NODE_USE_ENV_PROXY=1` (Node 22.21 or later).
 
+**The FDIC pull also records three kinds of pressure** (PRD E3-S5 to S7), in the same `sources run fdic` job:
+
+- **Failures.** FDIC's `/failures` index is stale: built August 25, 2026, it lacks two later failures, one of them in the Los Angeles metro. So failure is taken from `/failures`, `/institutions` (closing code `CHANGEC1` and end date `ENDEFYMD`) and `/history`, and from FDIC's failed-bank CSV if a person saves it as `sources/fdic/failed-banks.csv` in the data folder. A bank counts as failed if any source says so, and `sources/fdic/failed.json` records which ones agree. A failed bank with a presence in the metros is listed under `candidates list`, with the FDIC as the seller of its loans and a link to the FDIC loan-sale page.
+- **Mergers and acquisitions**, from `/history`, kept in `sources/fdic/events.json`. A bank that acquired a bank with a presence in the metros gets an **event** signal, visible for 4 quarters (a placeholder).
+- **The concentration screen**: construction loans and CRE against capital, and 36-month CRE growth, shown in the paper profile and as **state** signals. Its definition, from the 2006 interagency guidance, is **unconfirmed**. A bank on the community bank leverage ratio reports no total risk-based capital, so it is divided by tier 1 capital plus the allowance, and every value says which denominator it used.
+
+Every signal says whether it is a state signal (recomputed while the condition holds) or an event signal (a dated change, kept).
+
 **Before the briefer researches any bank the pipeline found, it passes a pilot** on 10 accounts the principals already know (PRD E1):
 
 ```bash
@@ -143,7 +151,7 @@ On the platform, the job is `sources.filings`. The worker workflow queues it on 
 Tests use fakes, so they prove the code does what we meant, not that the sources say what we think. `sources verify` checks the stored data against the live sources. It is read-only and exits 1 on any failure:
 
 ```bash
-npm run outbound -- sources verify fdic        # fresh, complete, every stored value and ratio equal to FDIC's own
+npm run outbound -- sources verify fdic        # fresh, complete, every stored value and ratio equal to FDIC's own, every failure and deal stored
 npm run outbound -- sources verify edgar       # every filer accounted for, the parser equal to a plain count of the file
 ```
 
@@ -151,13 +159,17 @@ npm run outbound -- sources verify edgar       # every filer accounted for, the 
 |---|---|---|
 | `fdic.fresh` | We hold the latest quarter FDIC has published | Pass (June 30, 2026) |
 | `fdic.coverage` | Every bank with a branch in the metros is on our list, and none has left | Pass (268 of 268) |
-| `fdic.values` | Every stored field for that quarter equals what FDIC serves now | Pass (8,576 of 8,576) |
-| `fdic.ratios` | Ratios computed from our stored values equal FDIC's own published ratios | Pass (500 of 500) |
+| `fdic.values` | Every stored field for that quarter equals what FDIC serves now | Pass (8,576 of 8,576; 9,916 with the capital fields) |
+| `fdic.ratios` | Ratios computed from our stored values equal FDIC's own published ratios, construction to tier 1 capital included | Pass (500 of 500; 767 with `LNCDT1R`) |
+| `fdic.concentration` | Each bank's CBLR flag matches how it reports total risk-based capital; the 36-month base quarter equals FDIC's | Pass (195 and 72 banks; 1,064 of 1,064) |
+| `fdic.failures` | Every failure any of `/failures`, `/institutions` and `/history` shows in 36 months is in our record | Pass (10) |
+| `fdic.failures-index` | A **warning**, not a failure: `/failures` lacks a failure the other two show | Warn (2 missing; index built 2026-08-25) |
+| `fdic.events` | Every deal with a bank on our list is stored, with the same acquirer, target and date | Pass (60) |
 | `edgar.accounted` | Every filer has a recorded outcome, and nothing that looks like CMBS was set aside | Pass (60 of 60) |
 | `edgar.parse` | Re-reading a few trusts from SEC, our loan counts and total balances equal a plain count of each file | Pass (4 of 4) |
 | `edgar.loans` | Every stored loan belongs to a trust read in the latest run, and carries its source filing | Pass (192) |
 
-It also prints a few records, each with the exact public URL, for a person to compare by eye.
+It also prints a few records, each with the exact public URL, for a person to compare by eye. A `WARN` line flags a gap in FDIC's own data; it does not change the exit code.
 
 The first runs of these checks found real defects, all now fixed and tested:
 - loan files that declare their namespace in the other order were rejected;

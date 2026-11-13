@@ -101,11 +101,13 @@
   "card": {
     "maxCategories": 2,
     "maxDistress": 2,
-    "maxSignals": 3
+    "maxSignals": 3,
+    "maxEvents": 2
   },
   "signals": [
     {
       "id": "cre-noncurrent-rising",
+      "kind": "state",
       "type": "rising",
       "metric": "creNoncurrentRatio",
       "quarters": 2,
@@ -113,6 +115,7 @@
     },
     {
       "id": "first-cre-chargeoff",
+      "kind": "state",
       "type": "firstPositive",
       "metric": "creNetChargeOffs",
       "lookback": 8,
@@ -120,6 +123,7 @@
     },
     {
       "id": "cre-oreo-up",
+      "kind": "state",
       "type": "rising",
       "metric": "creOreo",
       "quarters": 1,
@@ -127,6 +131,7 @@
     },
     {
       "id": "early-stage-rising",
+      "kind": "state",
       "type": "rising",
       "metric": "earlyStageDelinquency",
       "quarters": 1,
@@ -134,6 +139,7 @@
     },
     {
       "id": "cre-noncurrent-high",
+      "kind": "state",
       "type": "above",
       "metric": "creNoncurrentRatio",
       "threshold": 0.03,
@@ -141,6 +147,7 @@
     },
     {
       "id": "mf-noncurrent-rising",
+      "kind": "state",
       "type": "rising",
       "metric": "mfNoncurrentRatio",
       "quarters": 2,
@@ -148,6 +155,7 @@
     },
     {
       "id": "mf-noncurrent-jump",
+      "kind": "state",
       "type": "changeAbove",
       "metric": "mfNoncurrentRatio",
       "over": "yoy",
@@ -155,6 +163,43 @@
       "label": "Multifamily noncurrent ratio up a point or more in a year"
     }
   ],
+  "concentration": {
+    "_note": "The CRE concentration screen (PRD E3-S7). UNCONFIRMED: the thresholds are the 2006 interagency guidance's as we remember them (construction and land loans at or above 100% of total risk-based capital; or CRE at or above 300% of it AND CRE grown 50% or more over 36 months). They were not checked against the guidance text, which could not be reached. Treat them as PLACEHOLDERS until a principal confirms them. Ratios are fractions (1 = 100%). For a bank on the community bank leverage ratio, which reports no total risk-based capital, the denominator is tier 1 capital plus the allowance (UBPR's approach); every value and signal names its denominator. The 36-month base quarter is fixed in code (12 quarters back). These are state signals: recomputed each run, gone when the ratio falls below.",
+    "signals": [
+      {
+        "id": "concentration-construction",
+        "kind": "state",
+        "test": "construction",
+        "threshold": 1,
+        "label": "Construction and land loans at or above 100% of capital (concentration screen)"
+      },
+      {
+        "id": "concentration-cre",
+        "kind": "state",
+        "test": "cre",
+        "threshold": 3,
+        "growthThreshold": 0.5,
+        "label": "CRE at or above 300% of capital, up 50% or more in 36 months (concentration screen)"
+      }
+    ]
+  },
+  "structureEvents": {
+    "_note": "Event signals from FDIC structure events (PRD E3-S6). A bank that acquired a bank with a presence in the six metros gets an event signal, dated when the deal took effect and naming the target's FDIC cert. windowQuarters, how long it stays visible, is a PLACEHOLDER. kinds: merger (codes 221-223), assisted-merger (213), failure (the acquirer took over a failed bank: 211, 215, 216, 217); affiliate-reorganization (224, a merger inside one holding company) is left out by default. Events are kept in sources/fdic/events.json after they leave the window.",
+    "signals": [
+      {
+        "id": "acquired-metro-bank",
+        "kind": "event",
+        "type": "acquisition",
+        "kinds": ["merger", "assisted-merger", "failure"],
+        "windowQuarters": 4,
+        "label": "Acquired a bank with a presence in the six metros"
+      }
+    ]
+  },
+  "failedBanks": {
+    "_note": "Failed banks with a presence in the six metros (PRD E3-S5) are listed beside the candidates, with the FDIC as the seller of their loans. windowQuarters, how long one stays listed after it failed, is a PLACEHOLDER.",
+    "windowQuarters": 8
+  },
   "cmbs": {
     "_note": "CMBS loan signals (PRD E4-S3). A loan is 'maturing' when its maturity (or post-modification maturity) falls within maturityMonths. A placeholder, like every number here.",
     "maturityMonths": 18

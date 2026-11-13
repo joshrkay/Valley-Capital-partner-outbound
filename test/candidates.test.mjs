@@ -79,6 +79,34 @@ test('no template can emit a property, borrower, filing or free-text label: only
   for (const w of card.text.match(/\b[A-Z][A-Za-z-]*\b/g) ?? []) assert.ok(allowed.has(w), `unexpected capitalized word "${w}"`);
 });
 
+test('the concentration and acquisition sentences come from fixed templates: the denominator\'s words are code\'s, never a stored label', () => {
+  const { dir } = world([{ cert: '1', name: 'Alpha Example Bank' }]);
+  const cap = { RBC: 0, RBCT1J: 200000, LNATRES: 20000, CBLRIND: 1, LNCOMRE: 30000, LNRECONS: 400000 };   // a CBLR bank
+  put(dir, 'sources/fdic/financials/1.json', { CERT: '1', quarters: quarters(() => cap), growthBase: { 20230630: { REPDTE: '20230630', LNRECONS: 100000, LNREMULT: 200000, LNRENROT: 250000, LNCOMRE: 0, _source: src } } });
+  put(dir, 'sources/fdic/events.json', { 2026000777: { transnum: '2026000777', code: 211, kind: 'failure', effective: '2026-09-25', acquirerCert: '1', targetCert: '777', targetInMetros: true, targetMetros: [{ cbsa: '29820', branches: null, basis: ['main office'] }], targetLastCre: null, _source: src } });
+  const it = structuredClone(runScoring({ dir, buybox: buybox(), scoring: scoring(), metros, now: NOW }).items[0]);
+  const card = buildCard(it, { scoring: scoring() });
+  assert.match(card.text, /Construction and land loans are 182% of tier 1 capital plus the allowance for credit losses \(the bank uses the community bank leverage ratio, so it reports no total risk-based capital\), at or above the 100% concentration screen/);
+  assert.match(card.text, /CRE loans as the 2006 interagency guidance counts them are 514% of tier 1 capital plus the allowance/);
+  assert.match(card.text, /grew 105% from June 30, 2023 to June 30, 2026, at or above 50%\./);   // 1,130,000 against 550,000
+  assert.match(card.text, /It took over a failed bank \(FDIC cert 777\) with its main office in Las Vegas, effective September 25, 2026\./);
+  for (const s of card.sentences) assert.ok(s.evidence.length > 0, s.text);
+  // Plant hostile text where a careless template might read it.
+  it.signals.forEach((s) => { s.label = 'Sunset Motor Inn foreclosure'; if (s.denominator) s.denominator.label = 'Harbor View Plaza'; (s.metros ?? []).forEach((m) => { m.basis = ['Smith v Jones']; }); });
+  const hostile = buildCard(it, { scoring: scoring() });
+  for (const bad of ['Sunset', 'Harbor', 'Smith', 'Jones', 'foreclosure']) assert.ok(!hostile.text.includes(bad), `"${bad}" leaked into the card`);
+  const allowed = new Set(['Alpha', 'Example', 'Bank', 'Call', 'Report', 'CRE', 'Construction', 'Multifamily', 'Nonfarm', 'None', 'This', 'Branches', 'Summary', 'Deposits', 'It', 'FDIC', 'That', 'The', 'Noncurrent', 'Early-stage', 'Commercial', 'Share', ...MONTH_NAMES, ...metros.metros.flatMap((m) => m.label.split(' '))]);
+  for (const w of hostile.text.match(/\b[A-Z][A-Za-z-]*\b/g) ?? []) assert.ok(allowed.has(w), `unexpected capitalized word "${w}"`);
+});
+
+test('the candidate list carries the failed banks in the metros, suppression applied', () => {
+  const { dir } = world([{ cert: '1', name: 'Alpha Example Bank' }]);
+  put(dir, 'sources/fdic/failed.json', { 99999: { cert: '99999', name: 'Example Bank', failedOn: '2026-09-25', agree: ['institutions', 'history'], missingFrom: ['failures'], inMetros: true, metros: [{ cbsa: '31080', branches: 1, basis: ['main office'] }], seller: 'FDIC', loanSales: 'https://www.fdic.gov/resources/resolutions/asset-sales/loan-sales', _source: src } });
+  runScoring({ dir, buybox: buybox(), scoring: scoring(), metros, now: NOW });
+  assert.deepEqual(listCandidates({ dir, now: NOW }).failedBanks.map((f) => f.key), ['fdic:99999']);
+  assert.deepEqual(listCandidates({ dir, now: NOW, suppression: [{ type: 'institution', cert: '99999' }] }).failedBanks, []);
+});
+
 test('matching: exact name or alias matches; anything fuzzier is only a suggestion', () => {
   const institutions = { 10: { NAME: 'First Example Bank' }, 20: { NAME: 'First Example Bank of Mesa' }, 30: { NAME: 'Unrelated Trust' } };
   assert.deepEqual(matchInstitution('FIRST EXAMPLE BANK', { institutions }), { key: 'fdic:10', how: 'exact', suggestions: [] });
