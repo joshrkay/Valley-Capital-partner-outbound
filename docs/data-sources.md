@@ -63,7 +63,7 @@ Priority is for this firm: **High** feeds scoring or candidates directly, **Med*
 |---|---|---|---|---|---|
 | FDIC BankFind | Banks, branch deposits, 8 quarters of CRE by category and stage. Checked (PRD E3, Appendix A). | api.fdic.gov | None | Quarterly | **Built** |
 | SEC ABS-EE EX-102 and 10-D | CMBS loans in our metros, special servicing, workout codes, servicers. Checked (PRD E4-S1). | sec.gov | Declared User-Agent | Monthly | **Built** |
-| **Concentration screen** (FFIEC CDR bulk Call Reports) | The 2006 interagency guidance's screen. Unconfirmed, from memory; the spike confirms it against the guidance. Either test is enough: (a) construction and land loans at or above 100% of total risk-based capital; or (b) CRE at or above 300% of total risk-based capital **and** CRE grown 50% or more over 36 months. Computed from Call Report items (RC-C loans, RC-R capital), using the guidance's own definitions. | cdr.ffiec.gov/public/PWS/DownloadBulkData.aspx: ZIP, tab-delimited or XBRL. Seen. | None for bulk. Seen. | Quarterly | **High** |
+| **Concentration screen** (FFIEC CDR bulk Call Reports) | The 2006 interagency guidance's screen. Checked against its text (71 FR 74580, December 12, 2006, via FDIC FIL-104-2006). Either test is enough: (a) construction and land loans at or above 100% of total risk-based capital; or (b) CRE at or above 300% of total risk-based capital **and** CRE grown 50% or more over 36 months. Computed from Call Report items (RC-C loans, RC-R capital), using the guidance's own definitions. | cdr.ffiec.gov/public/PWS/DownloadBulkData.aspx: ZIP, tab-delimited or XBRL. Seen. | None for bulk. Seen. | Quarterly | **High** |
 | UBPR bulk (same page) | Page 7B: non-owner-occupied CRE as a percentage of capital (line 29), and its 3-year growth (line 30). Seen. **A cross-check, not the screen.** UBPR divides by tier 1 capital plus allowance, while the guidance divides by total risk-based capital (Seen). So a UBPR value of 300% is not the regulatory test. | Same page | None for bulk. Seen. | Quarterly | Med |
 | FFIEC CDR bulk Call Reports | Every Call Report item. The main gain over BankFind is Schedule RI-C: allowance for credit losses on construction and other CRE, at banks with $1B+ in assets. Seen. BankFind already carries most of the CRE detail. Checked against the FDIC field list. | Same bulk page | None for bulk. The web service needs an account. Seen. | Quarterly | Med |
 | NCUA 5300 | Credit unions' CRE by type (non-owner-occupied, construction and development) with delinquency buckets. Seen. **A seller class we do not cover yet.** | ncua.gov quarterly data: ZIP of CSVs. Seen. | None | About 70–76 days after quarter end. Seen. | Med–High, if in scope (D2) |
@@ -83,6 +83,8 @@ Priority is for this firm: **High** feeds scoring or candidates directly, **Med*
 | FRED | Market context: rates, CRE delinquency and prices, lending standards (series in 2.5) | api.stlouisfed.org | Free key, 120 requests a minute. **The default terms are non-commercial; commercial use has extra restrictions.** Seen. Needs a legal check (D4). | Daily to quarterly | **High**, after the check |
 
 ### 2.3 The assets
+
+The county-by-county plan, starting with Maricopa, is in `docs/county-playbook.md`. It also covers the Phoenix city layer and the Los Angeles vendor comparison.
 
 **The foreclosure trail differs by state.** The warning time decides how useful a county source is:
 
@@ -204,12 +206,12 @@ A source registry (`sources.json`) lists every source: cadence, hosts, key neede
 
 **Phase 1: free, no account, terms allow automation.** These can start now:
 
-1. **Fix failure detection.** Do not rely on `/failures` alone. Cross-check `/institutions` (inactive date) and the FDIC's failed-bank CSV, and add a verify check that flags a gap. Small.
-2. **EDGAR full-text listener.** Daily saved searches for 8-K Items 2.01 and 2.06, held-for-sale and loan-sale phrases, and DEF 14A officer names. It reuses the SEC client and pacing. **It waits for the User-Agent contact (Q11).**
+1. **Fix failure detection.** **Built** (PRD E3-S5). Do not rely on `/failures` alone. Cross-check `/institutions` (inactive date) and the FDIC's failed-bank CSV, and add a verify check that flags a gap. Small.
+2. **EDGAR full-text listener.** **Built** (PRD E13-S1); waits for the SEC contact (Q11) and confirmed filers. Daily saved searches for 8-K Items 2.01 and 2.06, held-for-sale and loan-sale phrases, and DEF 14A officer names. It reuses the SEC client and pacing. **It waits for the User-Agent contact (Q11).**
    - **Production searches** cover the SEC filer IDs (CIKs) of every bank in our candidate universe, **wherever it files from**. That universe includes banks headquartered outside our five states that have branches in our metros (PRD 4.1, A2). Mapping each bank to its filer, usually the holding company, is part of this story: through NIC's RSSD ID and the filer's name, confirmed by a principal when unsure.
    - **A separate discovery search** by filer state (our five states) finds banks not yet in the universe. Its hits go to a principal for review and never score directly.
-3. **FDIC structure and failures.** `/history` mergers involving our banks, the failed-bank CSV, and the FDIC loan-sale page.
-4. **Concentration screen.** Computed quarterly from bulk Call Report items with the guidance's definitions and denominator, and cross-checked against UBPR Page 7B. A pressure signal for scoring.
+3. **FDIC structure and failures.** **Built** (PRD E3-S5, E3-S6). `/history` mergers involving our banks, the failed-bank CSV, and the FDIC loan-sale page.
+4. **Concentration screen.** **Built from FDIC BankFind fields** (PRD E3-S7), so it needs no FFIEC download; the UBPR cross-check is still to do. The guidance's definition was checked against its text on 2026-11-13. Computed quarterly from bulk Call Report items with the guidance's definitions and denominator, and cross-checked against UBPR Page 7B. A pressure signal for scoring.
 5. **Colorado public trustees.** Adams weekly PDFs first, then Denver, Jefferson, Douglas and Broomfield.
 6. **Maricopa.** Recorder search for notices of trustee's sale, joined to the assessor's commercial file.
 

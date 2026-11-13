@@ -7,6 +7,8 @@ import { readJson, readJsonl, writeJson, readText, listFiles, exists, safeId, au
 import { runFdic } from './src/sources/fdic.mjs';
 import { runEdgar } from './src/sources/edgar.mjs';
 import { verifyFdic, verifyEdgar } from './src/sources/verify.mjs';
+import { runFilings, verifyFilings, loadFilingRules, discoveredFilers } from './src/sources/filings.mjs';
+import { suggestFilers, confirmFiler, rejectFiler, filerStatus } from './src/sources/filers.mjs';
 import { LOADS } from './src/uow.mjs';
 import { runScoring } from './src/score.mjs';
 import { listCandidates, getCandidate, promote, dismiss, snooze } from './src/candidates.mjs';
@@ -43,19 +45,36 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound suppress list
 
   Signals (PRD E2, E3): public data only. Nothing here contacts anyone.
-  outbound sources run fdic [--include-hq]       bank list for the six metros, deposit footprint, 8 quarters of CRE credit data (free, no key)
+  outbound sources run fdic [--include-hq]       bank list for the six metros, deposit footprint, 8 quarters of CRE credit data (free, no key),
+                                                  plus failures (from /failures, /institutions and /history), mergers and acquisitions,
+                                                  and the concentration screen's capital fields. FDIC's failed-bank list CSV is read too,
+                                                  if a person saved it as sources/fdic/failed-banks.csv in the data folder (optional)
   outbound sources run edgar                      CMBS loans in the six metros and buy-box sectors, from each trust's monthly SEC filing,
                                                   with workout codes and the special servicer (needs config.sec.userAgent filled in)
+  outbound sources run filings [--since YYYY-MM-DD]   the SEC filings listener (PRD E13-S1): the saved searches in filings.json on
+                                                  EDGAR full-text search, for every bank filer a principal confirmed, plus a discovery
+                                                  search by state and bank SIC code (needs config.sec.userAgent filled in)
   outbound sources status                         the last run of each source, and the latest FDIC quarter seen
-  outbound sources verify [fdic|edgar] [--sample N]   check the stored data against the live sources (read-only): fresh, complete,
-                                                  values and ratios equal FDIC's own, the CMBS parser equal to a plain count; plus a
-                                                  short list of records with their public URL to compare by eye. Exits 1 on any failure.
+  outbound sources verify [fdic|edgar|filings] [--sample N]   check the stored data against the live sources (read-only): fresh, complete,
+                                                  values and ratios equal FDIC's own, every failure and deal stored, the CMBS parser equal
+                                                  to a plain count, stored filings found again; plus a short list of records with their
+                                                  public URL to compare by eye. Exits 1 on any failure. WARN flags a gap in FDIC's own data
+                                                  (a stale /failures index). With no source named: fdic and edgar.
+
+  Bank filers (PRD E13-S1): which SEC filer (CIK) files for each bank, usually its holding company. Only confirmed ones are searched.
+  outbound filers list                            every bank in the list: confirmed, rejected or not mapped yet
+  outbound filers suggest [--limit N]             propose filers for unmapped banks, from FDIC's holding-company name and SEC's entity list
+  outbound filers confirm --bank fdic:CERT --cik N --by NAME     a principal confirms a bank's filer
+  outbound filers reject  --bank fdic:CERT --cik N --by NAME [--reason TEXT]   a principal rejects a proposed filer
+  outbound filers discovered                      bank filers the discovery search found that are not in the bank list: for review only
 
   Candidates (PRD E6): which banks, why now, and what paper they likely hold. A principal decides; nothing is contacted.
   outbound score run [--draft-buybox]             score every bank on distress, fit and timing (refuses while buybox.json has [CONFIRM]
                                                   placeholders; --draft-buybox runs anyway and labels the list PROVISIONAL)
-  outbound candidates list [--tier A|B] [--all]   the list: tier, score by axis, metros, and the "why now" card
-  outbound candidates show --key fdic:CERT        one bank: paper profile, score components with their sources, signals
+  outbound candidates list [--tier A|B] [--all]   the list: tier, score by axis, metros, and the "why now" card; then failed banks
+                                                  in the metros, whose loans the FDIC sells (with the FDIC loan-sale page)
+  outbound candidates show --key fdic:CERT        one bank: paper profile (with the concentration ratios and their denominator),
+                                                  score components with their sources, signals (state or event)
   outbound candidates promote --key K --by NAME   create the account with the pipeline's research attached; then research it
   outbound candidates dismiss --key K --by NAME --reason TEXT      it returns only if a new signal fires
   outbound candidates snooze  --key K --by NAME --until YYYY-MM-DD
@@ -71,10 +90,10 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound platform smoke                         check a new project with SUPABASE_URL and SUPABASE_ANON_KEY (the PUBLIC key only):
                                                   sign-ups off, every table and function present and refusing the public key
   outbound worker [--max N]                       run queued jobs until the queue is empty (or N have run); prints ids and outcomes only
-  outbound enqueue sources.fdic|sources.edgar|score.run|research.run|draft.run [--account ID] [--channel C] [--step N] [--draft-buybox] [--include-hq]
+  outbound enqueue sources.fdic|sources.edgar|sources.filings|score.run|research.run|draft.run [--account ID] [--channel C] [--step N] [--draft-buybox] [--include-hq]
   outbound platform push [--from DIR]             copy a data folder into the platform (default: OUTBOUND_DATA_DIR); safe to re-run
   outbound platform pull --to DIR                 write everything back to a new or empty folder outside this repository
-  outbound platform verify [fdic|edgar] [--sample N]   the same checks on the platform's data (read-only); no spot-check list unless asked
+  outbound platform verify [fdic|edgar|filings] [--sample N]   the same checks on the platform's data (read-only); no spot-check list unless asked
 `;
 
 function parse(argv) {
@@ -98,10 +117,11 @@ async function runVerify(dir, which, rules, flags) {
   const reports = [];
   if (!which || which === 'fdic') reports.push(await verifyFdic({ dir, metros: rules.metros, sample }));
   if (!which || which === 'edgar') reports.push(await verifyEdgar({ dir, sec: rules.config.sec, sample }));
+  if (which === 'filings') reports.push(await verifyFilings({ dir, sec: rules.config.sec, rules: loadFilingRules(), sample }));
   const lines = [];
   for (const r of reports) {
     lines.push(`== ${r.source.toUpperCase()}`);
-    for (const c of r.checks) lines.push(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}: ${c.summary}`);
+    for (const c of r.checks) lines.push(`${c.ok ? (c.warn ? 'WARN' : 'PASS') : 'FAIL'}  ${c.id}: ${c.summary}`);
     if (r.sample.length) { lines.push('', `Compare by eye (${r.sample.length} records, each with the public URL to check against):`); for (const s of r.sample) lines.push(`- ${JSON.stringify(s)}`); }
     lines.push('');
   }
@@ -224,8 +244,13 @@ async function main() {
   }
 
   if (cmd === 'sources') {
+    if (sub === 'run' && pos[2] === 'filings') {   // the SEC filings listener (PRD E13-S1)
+      const r = await runFilings({ dir, sec: rules.config.sec, rules: loadFilingRules(), since: flags.since });
+      if (r.outcome === 'failed') process.exitCode = 1;
+      return out(r);
+    }
     if (sub === 'run') {
-      if (!['fdic', 'edgar'].includes(pos[2])) throw new Error('Usage: outbound sources run fdic [--include-hq] | outbound sources run edgar');
+      if (!['fdic', 'edgar'].includes(pos[2])) throw new Error('Usage: outbound sources run fdic [--include-hq] | outbound sources run edgar | outbound sources run filings [--since YYYY-MM-DD]');
       const r = pos[2] === 'fdic' ? await runFdic({ dir, metros: rules.metros, includeHq: !!flags['include-hq'] }) : await runEdgar({ dir, metros: rules.metros, buybox: rules.buybox, scoring: rules.scoring, sec: rules.config.sec });
       if (r.outcome === 'failed') process.exitCode = 1;
       return out(r);
@@ -235,6 +260,32 @@ async function main() {
       const last = {};
       for (const r of readJsonl(join(dir, 'sources', 'runs.jsonl'))) last[r.source] = r;
       return out({ lastRuns: last, fdic: readJson(join(dir, 'sources', 'fdic', 'state.json'), null) });
+    }
+  }
+
+  if (cmd === 'filers') {   // the bank-to-filer map for the SEC filings listener (PRD E13-S1); a principal decides every mapping
+    const fr = loadFilingRules();
+    if (sub === 'list') {
+      const s = filerStatus({ dir });
+      const row = (r) => `${r.status.padEnd(9)}  ${r.bank.padEnd(11)} ${r.name ?? ''}${r.ciks.length ? `\n${r.ciks.map((c) => `             ${c.status === 'confirmed' ? '->' : 'x '} CIK ${c.cik} ${c.filer ?? ''} (${c.status} by ${c.by}, ${String(c.at).slice(0, 10)})`).join('\n')}` : ''}`;
+      return out(`${s.banks} banks in the list: ${s.confirmed} with a confirmed filer, ${s.rejectedOnly} with only rejected ones, ${s.unmapped} not mapped. ${s.filers} filer(s) are searched.${s.mappedOutsideList.length ? `\n${s.mappedOutsideList.length} bank(s) no longer in the list still have a confirmed filer, and are still searched: ${s.mappedOutsideList.join(', ')}.` : ''}\n\n${s.rows.map(row).join('\n')}`);
+    }
+    if (sub === 'suggest') {
+      const r = await suggestFilers({ dir, sec: rules.config.sec, rules: fr, limit: flags.limit && flags.limit !== true ? Number(flags.limit) : Infinity });
+      if (r.outcome === 'failed') { process.exitCode = 1; return out(r); }
+      const cand = (c, i) => `  ${i + 1}. CIK ${c.cik}  ${c.entity ?? c.name ?? ''}: ${c.basis}; ${c.sics.length ? `SIC ${c.sics.join(', ')} (${c.bankSic ? 'a bank code' : 'NOT a bank code'})` : 'no 10-K or 10-Q in the last year'}${c.states.length ? `; ${c.states.join(', ')}` : ''}${c.lastFiling ? `; last ${c.lastFiling.form} filed ${c.lastFiling.fileDate}` : ''}`;
+      const bank = (b) => [`${b.bank}  ${b.name ?? ''}`, `  ${b.holdingCompany ? `holding company: ${b.holdingCompany}${b.rssdHcr ? ` (RSSD ${b.rssdHcr}${b.holdingCompanyPlace ? `, ${b.holdingCompanyPlace}` : ''})` : ''}` : 'no holding company on its FDIC record'}; looked up as "${b.query}"`,
+        ...(b.candidates.length ? [...b.candidates.map(cand), `  confirm: outbound filers confirm --bank ${b.bank} --cik ${b.candidates[0].cik} --by NAME   (or reject: outbound filers reject --bank ${b.bank} --cik N --by NAME)`] : ['  no SEC filer found. Most banks whose holding company is private have none.'])].join('\n');
+      return out(`Suggestions for ${r.unmapped} unmapped bank(s), from ${r.lookups} name lookup(s): ${r.candidates} candidate(s). Nothing is searched until a principal confirms it.\n\n${Object.values(r.banks).map(bank).join('\n\n')}`);
+    }
+    if (sub === 'confirm' || sub === 'reject') {
+      const args = { dir, bank: need(flags, 'bank'), cik: need(flags, 'cik'), by: need(flags, 'by') };
+      const r = sub === 'confirm' ? confirmFiler(args) : rejectFiler({ ...args, reason: flags.reason === true ? undefined : flags.reason });
+      return out(`${sub === 'confirm' ? 'Confirmed' : 'Rejected'}: ${r.bank} (${r.bankName ?? ''}) ${sub === 'confirm' ? 'is filed for by' : 'is not filed for by'} CIK ${r.cik}${r.filer ? ` (${r.filer})` : ''}, by ${r.by}.${sub === 'confirm' ? '\nThe next run of the listener searches this filer, back a year the first time: outbound sources run filings' : ''}`);
+    }
+    if (sub === 'discovered') {
+      const l = discoveredFilers({ dir });
+      return out(`${l.length} bank filer(s) found by the discovery search and not mapped to any bank in the list. For review only: they are never scored.\n\n${l.map((e) => `CIK ${e.cik}  ${e.name ?? ''}  (${e.states.join(', ')}; SIC ${e.sics.join(', ')})\n${e.filings.map((f) => `  ${f.form} ${f.fileDate}${f.items.length ? ` items ${f.items.join(', ')}` : ''}: ${f.searches.join(', ')}  ${f.link}`).join('\n')}`).join('\n\n')}`);
     }
   }
 
@@ -250,7 +301,10 @@ async function main() {
       const tiers = flags.tier && flags.tier !== true ? [String(flags.tier).toUpperCase()] : ['A', 'B'];
       const l = listCandidates({ dir, suppression: sup, tiers, all: !!flags.all });
       const row = (i) => `${i.tier ?? '-'}  ${String(i.score).padStart(6)}  d${i.axes.distress} f${i.axes.fit} t${i.axes.timing}  ${i.key.padEnd(11)} ${i.name} (${i.metroLabels?.join(', ') ?? ''})${i.status !== 'new' ? ` [${i.status}]` : ''}\n     ${i.card?.text ?? (i.filtersFailed?.length ? `filtered: ${i.filtersFailed.join('; ')}` : '')}`;
-      return out(`${l.provisional ? 'PROVISIONAL: the buy box still has placeholders.\n' : ''}Data as of ${l.latestRepdte} (run ${l.runId}). ${l.items.length} candidate(s). Columns: tier, score, distress/fit/timing, key, bank.\n\n${l.items.map(row).join('\n\n')}`);
+      // Failed banks are never candidates: the bank is gone and the FDIC sells its loans. They are listed so a principal sees them.
+      const failed = (f) => `-  ${f.key.padEnd(11)} ${f.name} failed on ${f.failedOn} (${f.metros.map((m) => m.label).join(', ')}). Sources agreeing: ${f.agree.join(', ')}${f.missingFrom.length ? `; not yet in: ${f.missingFrom.join(', ')}` : ''}.`;
+      const failedBlock = l.failedBanks.length ? `\n\nFailed banks with a presence in the metros. The FDIC is the seller of their loans: ${l.failedBanks[0].loanSales}\n${l.failedBanks.map(failed).join('\n')}` : '';
+      return out(`${l.provisional ? 'PROVISIONAL: the buy box still has placeholders.\n' : ''}Data as of ${l.latestRepdte} (run ${l.runId}). ${l.items.length} candidate(s). Columns: tier, score, distress/fit/timing, key, bank.\n\n${l.items.map(row).join('\n\n')}${failedBlock}`);
     }
     if (sub === 'show') return out(getCandidate({ dir, key: need(flags, 'key') }));
     if (sub === 'promote') {

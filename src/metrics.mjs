@@ -98,7 +98,14 @@ export function computeMetrics(file) {
 }
 
 // ---- Signals --------------------------------------------------------------------------------------------------------------------
+// Every signal type declares its kind (docs/data-sources.md, section 1):
+//   state: holds while a condition holds, and is recomputed from each pull; it drops away when the condition ends.
+//   event: records a dated change once and keeps it; it stays visible for a set window, whatever later pulls say.
+// Every signal these functions return carries its `kind`.
+export const SIGNAL_KINDS = ['state', 'event'];
+
 // Rules live in scoring.json. Each is evaluated at the bank's latest quarter. A signal points to the quarter records behind it.
+// These metric rules are all state signals.
 //   rising:        the metric rose in each of the last `quarters` quarter-over-quarter steps
 //   firstPositive: the metric is above 0 now and was 0 or below in each of the previous `lookback - 1` quarters (all must be known)
 //   above:         the metric is at or above `threshold`
@@ -134,7 +141,146 @@ export function detectSignals(series, rules = []) {
       if (c !== null && c !== undefined && c >= rule.threshold) { fired = [shiftQuarter(L, over === 'yoy' ? -4 : -1), L]; extra = { over, change: c, threshold: rule.threshold }; }
     } else throw new Error(`Signal rule "${rule.id}" has unknown type "${rule.type}". Types: ${SIGNAL_TYPES.join(', ')}.`);
     // `rule`, `metric`, `value` and the extras let the card state the signal from a fixed template, without the rule's free-text label.
-    if (fired) out.push({ id: `fdic:${series.cert}:${rule.id}:${L}`, type: rule.id, label: rule.label, period: L, evidence: ev(fired), rule: rule.type, metric: rule.metric, value: val(L, rule.metric), ...extra });
+    if (fired) out.push({ id: `fdic:${series.cert}:${rule.id}:${L}`, type: rule.id, kind: 'state', label: rule.label, period: L, evidence: ev(fired), rule: rule.type, metric: rule.metric, value: val(L, rule.metric), ...extra });
   }
   return out;
+}
+
+// ---- The CRE concentration screen (PRD E3-S7) -----------------------------------------------------------------------------------
+// The supervisory criteria of the 2006 interagency guidance on concentrations in commercial real estate lending. CHECKED 2026-11-13
+// against the guidance text (71 FR 74580, December 12, 2006; FDIC FIL-104-2006, read from fdic.gov). Either test flags a bank for closer
+// supervisory review; the guidance says the criteria are a screen, not limits on lending:
+//   (a) construction and land development loans at or above 100% of total risk-based capital; or
+//   (b) CRE at or above 300% of total risk-based capital, AND CRE grown 50% or more over the prior 36 months.
+// The guidance's CRE = construction and land development + multifamily + nonfarm nonresidential NOT owner-occupied + loans to finance CRE
+// not secured by real estate (its footnote: Call Report RC-C items 1a, 1d, 1e and Memorandum item 3). Owner-occupied nonfarm
+// nonresidential is left out: the guidance counts only property whose repayment comes mainly from rental income or its sale or
+// refinancing, and the 2006 Call Report did not yet split item 1e, so today that is item 1.e.(2). "Total capital" is total risk-based
+// capital (RC-R). The thresholds live in scoring.json.
+// The fields, from FDIC's own definitions ("All Financial Reports", api.fdic.gov/banks/docs) and checked live on all 268 metro banks for
+// June 30, 2026 and June 30, 2023: LNRECONS construction and land development; LNREMULT multifamily; LNRENROT other (non-owner-occupied)
+// nonfarm nonresidential; LNCOMRE CRE loans not secured by real estate; RBC total risk-based capital (it equals RBCT1J + RBCT2, and
+// RBC / risk-weighted assets equals FDIC's own total capital ratio, on every bank checked); RBCT1J tier 1 capital; LNATRES the allowance
+// for credit losses on loans and leases; CBLRIND 1 for a bank that elected the community bank leverage ratio (CBLR).
+// CBLR banks do not report total risk-based capital: FDIC sends RBC as 0 for them (all 72 such banks at June 30, 2026). For them the
+// denominator is tier 1 capital plus the allowance, UBPR's approach: the guidance predates the CBLR (2020), so this choice is ours,
+// not the guidance's. Every computed value says which denominator it used.
+export const CONCENTRATION = Object.freeze({
+  construction: ['LNRECONS'],
+  cre: ['LNRECONS', 'LNREMULT', 'LNRENROT', 'LNCOMRE'],
+  growthQuarters: 12,   // the guidance's 36 months; the FDIC adapter fetches exactly this one extra quarter
+});
+export const DENOMINATORS = Object.freeze({
+  totalRiskBasedCapital: { label: 'total risk-based capital', fields: ['RBC'] },
+  tier1PlusAllowance: { label: 'tier 1 capital plus the allowance for credit losses (the bank uses the community bank leverage ratio, so it reports no total risk-based capital)', fields: ['RBCT1J', 'LNATRES'] },
+});
+export const CONCENTRATION_FIELDS = [...new Set([...CONCENTRATION.cre, 'RBC', 'RBCT1J', 'LNATRES', 'CBLRIND'])];
+export const CONCENTRATION_TESTS = ['construction', 'cre'];
+export const CONCENTRATION_NOTE = 'The concentration screen is the supervisory screen of the 2006 interagency guidance on CRE concentrations (71 FR 74580). It flags a bank for closer supervisory review; it is not a limit on lending. The guidance predates the community bank leverage ratio, so for banks that use it the denominator is tier 1 capital plus the allowance, as in UBPR.';
+
+// Which capital figure divides, for one quarter: total risk-based capital, or for a CBLR bank tier 1 capital plus the allowance.
+export function concentrationDenominator(q, repdte) {
+  const inp = (fields) => fields.map((f) => ({ field: f, repdte: String(repdte), value: num(q?.[f]) }));
+  const flag = inp(['CBLRIND']);
+  const cblr = flag[0].value;
+  if (cblr === null) return { value: null, basis: null, label: null, inputs: flag, reason: 'missing CBLRIND, so the denominator cannot be chosen' };
+  if (cblr !== 0 && cblr !== 1) return { value: null, basis: null, label: null, inputs: flag, reason: `CBLRIND is ${cblr}, not 0 or 1` };
+  const basis = cblr === 1 ? 'tier1PlusAllowance' : 'totalRiskBasedCapital';
+  const d = DENOMINATORS[basis];
+  const inputs = [...flag, ...inp(d.fields)];
+  const parts = inputs.slice(1);
+  const missing = parts.filter((x) => x.value === null || !Number.isFinite(x.value)).map((x) => x.field);
+  const out = { basis, label: d.label, inputs };
+  if (missing.length) return { ...out, value: null, reason: `missing ${missing.join(', ')}` };
+  const value = parts.reduce((s, x) => s + x.value, 0);
+  if (!(value > 0)) return { ...out, value: null, reason: basis === 'totalRiskBasedCapital' ? 'RBC (total risk-based capital) is 0, though CBLRIND says the bank is not a CBLR bank; the denominator is unknown' : 'zero denominator: RBCT1J + LNATRES is not above 0' };
+  return { ...out, value };
+}
+
+// The screen's ratios for one bank at `repdte` (default: its latest quarter). Fractions: 1 = 100%. Null with a reason, never 0.
+export function computeConcentration(file, repdte) {
+  const reps = Object.keys(file?.quarters ?? {}).sort();
+  const L = repdte ? String(repdte) : reps.at(-1) ?? null;
+  if (!L || !file?.quarters?.[L]) return { repdte: L, baseRepdte: null, denominator: null, reason: 'no financial data', construction: { value: null, reason: 'no financial data', inputs: [] }, cre: { value: null, reason: 'no financial data', inputs: [] }, growth: { value: null, reason: 'no financial data' } };
+  const q = file.quarters[L];
+  const B = shiftQuarter(L, -CONCENTRATION.growthQuarters);
+  const qb = file.growthBase?.[B] ?? file.quarters?.[B] ?? null;
+  const den = concentrationDenominator(q, L);
+  const sum = (rec, fields, rep) => {
+    const inputs = fields.map((f) => ({ field: f, repdte: rep, value: num(rec?.[f]) }));
+    const missing = inputs.filter((x) => x.value === null || !Number.isFinite(x.value)).map((x) => x.field);
+    return { inputs, value: missing.length ? null : inputs.reduce((s, x) => s + x.value, 0), reason: missing.length ? `missing ${missing.join(', ')}` : undefined };
+  };
+  const ratio = (s) => {
+    if (s.value === null) return { value: null, reason: s.reason, inputs: s.inputs, denominator: den.basis };
+    if (den.value === null) return { value: null, reason: `no denominator: ${den.reason}`, inputs: s.inputs, denominator: den.basis };
+    return { value: s.value / den.value, balance: s.value, inputs: s.inputs, denominator: den.basis };
+  };
+  const cons = sum(q, CONCENTRATION.construction, L);
+  const cre = sum(q, CONCENTRATION.cre, L);
+  const base = qb ? sum(qb, CONCENTRATION.cre, B) : { inputs: [], value: null, reason: `no report for ${B} on file` };
+  let growth;
+  if (cre.value === null) growth = { value: null, reason: cre.reason };
+  else if (base.value === null) growth = { value: null, reason: base.reason };
+  else if (base.value === 0) growth = { value: null, reason: `zero base: CRE was 0 on ${B}` };
+  else growth = { value: (cre.value - base.value) / base.value };
+  return { repdte: L, baseRepdte: B, denominator: den, construction: ratio(cons), cre: ratio(cre),
+    growth: { ...growth, from: { repdte: B, value: base.value, inputs: base.inputs }, to: { repdte: L, value: cre.value } } };
+}
+
+// State signals from scoring.json `concentration.signals`. Recomputed from the latest quarter on every scoring run: when a bank's ratio
+// falls below the threshold, the signal is gone. Each carries the denominator it used.
+//   test "construction": construction and land loans to capital at or above `threshold`
+//   test "cre":          CRE to capital at or above `threshold`, AND 36-month CRE growth at or above `growthThreshold`
+export function detectConcentrationSignals(conc, rules = [], cert) {
+  const out = [];
+  const L = conc?.repdte;
+  if (!L || !conc.denominator) return out;
+  const rec = (r) => `fdic:${cert}:${r}`;
+  for (const rule of rules) {
+    if (!CONCENTRATION_TESTS.includes(rule.test)) throw new Error(`Concentration rule "${rule.id}" has unknown test "${rule.test}". Tests: ${CONCENTRATION_TESTS.join(', ')}.`);
+    const r = conc[rule.test];
+    let fired = false; let extra = {}; let evidence = [rec(L)];
+    if (rule.test === 'construction') fired = r.value !== null && r.value >= rule.threshold;
+    else {
+      const g = conc.growth.value;
+      fired = r.value !== null && g !== null && r.value >= rule.threshold && g >= rule.growthThreshold;
+      extra = { growth: g, growthThreshold: rule.growthThreshold, baseRepdte: conc.baseRepdte };
+      evidence = [rec(conc.baseRepdte), rec(L)];
+    }
+    if (fired) out.push({ id: `fdic:${cert}:${rule.id}:${L}`, type: rule.id, kind: 'state', label: rule.label, period: L, evidence, rule: 'concentration', test: rule.test,
+      value: r.value, threshold: rule.threshold, denominator: { basis: conc.denominator.basis, label: conc.denominator.label }, ...extra });
+  }
+  return out;
+}
+
+// ---- Structure events (PRD E3-S6) -----------------------------------------------------------------------------------------------
+export const addMonths = (ymd, n) => {
+  const [y, m, d] = String(ymd).split('-').map(Number);
+  const t = new Date(Date.UTC(y, m - 1 + n, 1));
+  const last = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() + 1, 0)).getUTCDate();
+  return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}-${String(Math.min(d, last)).padStart(2, '0')}`;
+};
+export const STRUCTURE_SIGNAL_KINDS = ['merger', 'assisted-merger', 'affiliate-reorganization', 'failure'];
+
+// Event signals from scoring.json `structureEvents.signals`, from the stored events (sources/fdic/events.json). A signal attaches to the
+// acquirer, carries the date the deal took effect and the target's FDIC cert, and stays visible for `windowQuarters` from that date,
+// whatever the acquirer's numbers do. Its id is the deal's, so it is the same signal on every run. Only a target with a presence in
+// the six metros counts. `asOf` is the scoring date (YYYY-MM-DD), passed in, so the result never depends on the clock.
+export function detectStructureSignals({ cert, events = [], rules = [], asOf }) {
+  const out = [];
+  if (!asOf) return out;
+  for (const rule of rules) {
+    const months = Number(rule.windowQuarters) * 3;
+    const from = addMonths(asOf, -months);
+    for (const e of Array.isArray(events) ? events : Object.values(events)) {
+      if (String(e.acquirerCert) !== String(cert) || !(rule.kinds ?? []).includes(e.kind) || !e.targetInMetros || !e.effective) continue;
+      if (!(e.effective > from && e.effective <= asOf)) continue;
+      out.push({ id: `fdic:${cert}:${rule.id}:${e.transnum}`, type: rule.id, kind: 'event', label: rule.label, period: e.effective, evidence: [`fdic-history:${e.transnum}`, `fdic:${e.targetCert}`],
+        rule: 'acquisition', eventKind: e.kind, code: e.code, transnum: e.transnum, effective: e.effective, targetCert: e.targetCert,
+        metros: (e.targetMetros ?? []).map((m) => ({ cbsa: m.cbsa, branches: m.branches ?? null, basis: m.basis ?? [] })), targetLastCre: e.targetLastCre ?? null,
+        windowQuarters: Number(rule.windowQuarters), visibleUntil: addMonths(e.effective, months) });
+    }
+  }
+  return out.sort((a, b) => (a.effective < b.effective ? 1 : a.effective > b.effective ? -1 : a.id < b.id ? -1 : 1));
 }

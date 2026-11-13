@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeDir, put, loadJson } from './kit.mjs';
 import { validateBuybox, validateScoring, runScoring, scoreBank, tierFor, buildProfile, findPlaceholders, contentHash, AXES } from '../src/score.mjs';
+import { confirmFiler, rejectFiler } from '../src/sources/filers.mjs';
 
 const metros = loadJson('metros.json');
 const scoring = () => structuredClone(loadJson('scoring.json'));
@@ -193,4 +194,109 @@ test('a missing or incomplete Summary of Deposits leaves fit on branches only, a
 test('scoreBank never names a model and does not read the clock', () => {
   const args = { cert: '1', institution: { NAME: 'Alpha Example Bank', ACTIVE: 1, status: 'active' }, footprint: { branchesByMetro: { 38060: 1 } }, financials: { CERT: '1', quarters: quarters(rising) }, scoring: scoring(), buybox: filledBuybox(), metros, latestRepdte: '20260630' };
   assert.deepEqual(scoreBank(args), scoreBank(structuredClone(args)));
+});
+
+// ---- Signal kinds, the concentration screen and structure events (PRD E3-S5 to S7) -----------------------------------------------
+test('every signal type in the shipped config declares its kind, and the kind must match how it is computed', () => {
+  const s = scoring();
+  for (const r of s.signals) assert.equal(r.kind, 'state', r.id);
+  assert.deepEqual(s.concentration.signals.map((r) => [r.id, r.kind]), [['concentration-construction', 'state'], ['concentration-cre', 'state']]);
+  assert.deepEqual(s.structureEvents.signals.map((r) => [r.id, r.kind, r.windowQuarters]), [['acquired-metro-bank', 'event', 4]]);
+  assert.match(s.structureEvents._note, /PLACEHOLDER/);
+  assert.match(s.concentration._note, /checked against its text on 2026-11-13 \(71 FR 74580/);
+  const noKind = scoring(); delete noKind.signals[0].kind;
+  assert.match(validateScoring(noKind).errors.join(), /cre-noncurrent-rising: kind must be "state" \(got none\)/);
+  const wrong = scoring(); wrong.concentration.signals[0].kind = 'event';
+  assert.match(validateScoring(wrong).errors.join(), /concentration-construction: kind must be "state"/);
+  const asState = scoring(); asState.structureEvents.signals[0].kind = 'state';
+  assert.match(validateScoring(asState).errors.join(), /acquired-metro-bank: kind must be "event"/);
+  const dup = scoring(); dup.concentration.signals[0].id = 'cre-noncurrent-rising';
+  assert.match(validateScoring(dup).errors.join(), /duplicated/);
+  const bad = scoring(); bad.structureEvents.signals[0].windowQuarters = 0; bad.structureEvents.signals[0].kinds = ['takeover']; bad.concentration.signals[1].growthThreshold = undefined;
+  assert.equal(validateScoring(bad).errors.length, 3);
+});
+
+// Capital and CRE for the screen. Q() gives construction 100,000, multifamily 300,000, other nonfarm nonresidential 400,000.
+const capital = (over = {}) => ({ RBC: 250000, RBCT1J: 230000, LNATRES: 20000, CBLRIND: 0, LNCOMRE: 50000, ...over });
+const withBase = (qs, base = { LNRECONS: 60000, LNREMULT: 200000, LNRENROT: 250000, LNCOMRE: 20000 }) => ({ CERT: '1', quarters: qs, growthBase: { 20230630: { REPDTE: '20230630', ...base, _source: src('20230630') } } });
+
+test('the paper profile shows the screen\'s ratios, each with its fields, dates and the denominator it used', () => {
+  const fin = withBase(quarters(() => capital()));
+  const p = buildProfile({ financials: fin, footprint: { branchesByMetro: { 38060: 1 } }, institution: { via: { branch: true } }, buybox: filledBuybox(), metros, scoring: scoring() });
+  const c = p.concentration;
+  assert.equal(c.period, '20260630');
+  assert.match(c.note, /2006 interagency guidance on CRE concentrations \(71 FR 74580\)/);
+  assert.deepEqual([c.denominator.basis, c.denominator.label, c.denominator.value], ['totalRiskBasedCapital', 'total risk-based capital', 250000]);
+  assert.equal(c.constructionToCapital.value, 0.4);
+  assert.equal(c.constructionToCapital.denominator, 'total risk-based capital');
+  assert.equal(c.creToCapital.value, 850000 / 250000);
+  assert.equal(c.creToCapital.denominator, 'total risk-based capital');
+  assert.ok(Math.abs(c.creGrowth36m.value - (850000 - 530000) / 530000) < 1e-12);
+  assert.deepEqual([c.creGrowth36m.from.repdte, c.creGrowth36m.to.repdte], ['20230630', '20260630']);
+  for (const x of [...c.denominator.inputs, ...c.constructionToCapital.inputs, ...c.creToCapital.inputs, ...c.creGrowth36m.from.inputs]) assert.ok(x.field && /^\d{8}$/.test(x.repdte) && typeof x.value === 'number', JSON.stringify(x));
+  assert.deepEqual(c.screen, { construction: { threshold: 1, meets: false }, cre: { threshold: 3, growthThreshold: 0.5, meets: true } });
+  const cblr = buildProfile({ financials: withBase(quarters(() => capital({ CBLRIND: 1, RBC: 0 }))), footprint: {}, buybox: filledBuybox(), metros, scoring: scoring() }).concentration;
+  assert.equal(cblr.denominator.basis, 'tier1PlusAllowance');
+  assert.match(cblr.constructionToCapital.denominator, /^tier 1 capital plus the allowance for credit losses/);
+  assert.equal(cblr.constructionToCapital.value, 100000 / 250000);
+});
+
+test('end to end: an acquisition is an EVENT signal kept for its window; the screen is a STATE signal recomputed each quarter', () => {
+  const dir = world([{ cert: '1', name: 'Alpha Example Bank', quarters: withBase(quarters(() => capital({ LNRECONS: 300000 }))).quarters }]);
+  put(dir, 'sources/fdic/financials/1.json', withBase(quarters(() => capital({ LNRECONS: 300000 }))));
+  put(dir, 'sources/fdic/events.json', { 2026000777: { transnum: '2026000777', code: 223, kind: 'merger', label: 'Merger - Without Assistance', effective: '2026-06-01', acquirerCert: '1', targetCert: '777', acquirerOnOurList: true, targetOnOurList: false, targetInMetros: true, targetMetros: [{ cbsa: '38060', branches: 4, basis: ['branches in the FDIC structure event'] }], targetLastCre: { repdte: '20260331', value: 64000, fields: {} }, _source: src('2026-06-01') } });
+  const it = score(dir).items[0];
+  const byType = Object.fromEntries(it.signals.map((s) => [s.type, s]));
+  assert.equal(byType['acquired-metro-bank'].kind, 'event');
+  assert.deepEqual(byType['acquired-metro-bank'].metros, [{ cbsa: '38060', branches: 4, basis: ['branches in the FDIC structure event'], label: 'Phoenix' }]);
+  assert.equal(byType['concentration-construction'].kind, 'state');
+  assert.equal(byType['concentration-construction'].value, 300000 / 250000);
+  // The card states both from its templates.
+  const text = it.card.text;
+  assert.match(text, /Construction and land loans are 120% of total risk-based capital, at or above the 100% concentration screen \(June 30, 2026\)\./);
+  assert.match(text, /The screen is the 2006 interagency guidance on CRE concentrations: it marks a bank for closer supervisory review, not a limit on its lending\./);
+  assert.match(text, /It acquired another bank \(FDIC cert 777\) with 4 branches in Phoenix, effective June 1, 2026\. That bank held \$64\.0 million of CRE loans at its last report \(March 31, 2026\)\./);
+  // A new quarter below the screen: the state signal is gone. The acquisition is still shown: its window has not ended.
+  const f = readFileSync(join(dir, 'sources', 'fdic', 'financials', '1.json'), 'utf8');
+  const next = JSON.parse(f); next.quarters['20260930'] = { ...next.quarters['20260630'], REPDTE: '20260930', LNRECONS: 50000, _source: src('20260930') };
+  put(dir, 'sources/fdic/financials/1.json', next);
+  const later = runScoring({ dir, buybox: filledBuybox(), scoring: scoring(), metros, now: new Date('2027-02-15T12:00:00Z') }).items[0];
+  assert.ok(!later.signals.some((s) => s.type === 'concentration-construction'), 'a state signal drops away when its condition ends');
+  assert.ok(later.signals.some((s) => s.id === byType['acquired-metro-bank'].id), 'an event signal keeps its id and stays within its window');
+  const after = runScoring({ dir, buybox: filledBuybox(), scoring: scoring(), metros, now: new Date('2027-06-02T12:00:00Z') }).items[0];
+  assert.ok(!after.signals.some((s) => s.type === 'acquired-metro-bank'), 'after 4 quarters the event is no longer a signal');
+});
+
+test('failed banks in the metros are listed beside the candidates, never as candidates, with the FDIC as seller', () => {
+  const dir = world([{ cert: '1', name: 'Alpha Example Bank' }]);
+  const rec = (cert, failedOn, inMetros) => ({ cert, name: 'Example Bank', failedOn, agree: ['institutions', 'history'], missingFrom: ['failures'], acquirerCert: '555', inMetros, metros: inMetros ? [{ cbsa: '31080', branches: 1, basis: ['main office'] }] : [], lastCre: null, seller: 'FDIC', loanSales: 'https://www.fdic.gov/resources/resolutions/asset-sales/loan-sales', _source: src(failedOn) });
+  put(dir, 'sources/fdic/failed.json', { 99999: rec('99999', '2026-09-25', true), 88888: rec('88888', '2026-08-01', false), 77777: rec('77777', '2023-01-10', true) });
+  const out = score(dir);
+  assert.deepEqual(out.failedBanks.map((f) => f.cert), ['99999'], 'only those with a presence in the metros, within the window');
+  const f = out.failedBanks[0];
+  assert.deepEqual([f.key, f.seller, f.loanSales, f.metros[0].label, f.missingFrom[0]], ['fdic:99999', 'FDIC', 'https://www.fdic.gov/resources/resolutions/asset-sales/loan-sales', 'Los Angeles', 'failures']);
+  assert.ok(!out.items.some((i) => i.cert === '99999'));
+});
+
+test('SEC filings: an EVENT signal for a confirmed filer, shown within its window, stated on the card from a template, adding no points', () => {
+  const dir = world([{ cert: '1', name: 'Alpha Example Bank' }]);
+  const before = score(dir).items[0];
+  assert.ok(!before.signals.some((s) => s.rule === 'filing'), 'no listener run yet: no filing signals, and scoring still runs');
+  confirmFiler({ dir, bank: 'fdic:1', cik: '9900101', by: 'Pat Example', now: NOW });
+  const rec = (acc, fileDate, searches, form = '10-Q') => ({ key: `sec:${acc}`, accession: acc, cik: '0009900101', filerCiks: ['0009900101'], form, items: [], fileDate, searches,
+    link: `https://www.sec.gov/Archives/edgar/data/9900101/${acc.replace(/-/g, '')}/`, firstSeenAt: '2026-11-13T12:00:00Z' });
+  put(dir, 'sources/edgar/filings.json', {
+    '0009900101-26-000001': rec('0009900101-26-000001', '2026-10-01', ['transferred-held-for-sale-cre']),
+    '0009900101-25-000009': rec('0009900101-25-000009', '2025-12-01', ['loan-sale-cre']),   // more than 180 days before NOW
+  });
+  const it = score(dir).items[0];
+  const filings = it.signals.filter((s) => s.rule === 'filing');
+  assert.deepEqual(filings.map((s) => s.accession), ['0009900101-26-000001'], 'only filings inside windowDays are shown');
+  assert.equal(filings[0].kind, 'event');
+  assert.deepEqual([it.score, it.axes], [before.score, before.axes], 'filing signals add no points until a principal weights them');
+  assert.match(it.card.text, /An SEC filing matched a saved search: Loans transferred to held for sale, in a filing that mentions commercial real estate \(10-Q, filed 2026-10-01\)\./);
+  assert.doesNotMatch(it.card.text, /2025-12-01/);
+  rejectFiler({ dir, bank: 'fdic:1', cik: '9900101', by: 'Pat Example', reason: 'not this bank', now: NOW });
+  assert.ok(!score(dir).items[0].signals.some((s) => s.rule === 'filing'), 'a rejected filer gives no signal');
+  assert.match(validateScoring({ ...scoring(), filings: { windowDays: 0 } }).errors.join('\n'), /filings\.windowDays/);
 });

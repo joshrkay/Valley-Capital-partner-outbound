@@ -178,6 +178,7 @@ Rules that apply everywhere:
 | E10 Quarterly follow-up and nurture | R3 | P1 | E9 |
 | E11 Scheduling, monitoring and cost | R2 | P0 | E8 |
 | E12 Platform foundation | R2 | P0 | E1–E6 (built) |
+| E13 Event listeners | R2 | P1 | E2, E3, E12 |
 
 ---
 
@@ -316,6 +317,62 @@ Every adapter (E3–E5) is built on this shared framework.
 - [ ] Signal rules live in `scoring.json`, with every threshold marked as a placeholder. Examples: CRE noncurrent ratio up two quarters running; the first CRE charge-off in eight quarters; commercial OREO up from last quarter; early-stage delinquency rising.
 - [ ] Each signal points to the `financial_quarter` records behind it.
 - [ ] FDIC signals are institution-level risk facts. A test confirms the drafter's input never includes one.
+
+**E3-S5. Failed banks, from every FDIC source.** *As a principal, I want every bank failure in our metros caught on time, with the FDIC named as the seller, so that a late FDIC index never hides a failed bank's loan sale.* P0, R1. **Built** (`src/sources/fdic.mjs`, `src/score.mjs`, `outbound sources run fdic`, `outbound candidates list`). First live run (2026-11-13): 10 failures since November 2023. FDIC's `/failures` lacked 2 of them, among them the September 25, 2026 failure in the Los Angeles metro. The adapter found it and placed it there.
+- [x] `/failures` alone is not trusted. Its index was built on August 25, 2026, and lacks the failures of August 21 and September 25, 2026. `/institutions` and `/history` are rebuilt daily and show both. Verified live.
+- [x] A bank counts as failed if any source says so. This extends E3-S1, which read `/failures` only. The sources:
+  - `/failures`: `RESTYPE` `FAILURE`, with `FAILDATE`.
+  - `/institutions`: `ACTIVE` 0, `INACTIVE` 1, `ENDEFYMD` (the day the bank became inactive; `12/31/9999` while open), and `CHANGEC1`, FDIC's code for the event that closed the charter. The failure codes are 211, 215, 216, 217, 230 and 235, with FDIC's own descriptions from `/history` (211 is "Failure - Whole Institution"). Checked against `/failures` on 111 closed banks. Code 213, an assisted merger, is mostly assistance there, so it is not a failure.
+  - `/history`: the same codes, on the failed bank's row.
+  - FDIC's failed-bank CSV, when a person saves it as `sources/fdic/failed-banks.csv` in the data folder. Its columns were **checked** against the live file on 2026-11-13: Bank Name, City, State, Cert, Acquiring Institution, Closing Date and Fund, with 578 banks since October 2000. FDIC sends each header with a trailing non-breaking space, in Latin-1 bytes labelled UTF-8, and the parser handles both. The file is not fetched yet; fetching it with the weekly run is a follow-up now that www.fdic.gov is reachable. A header that differs fails the run, names the headers found, and writes nothing.
+- [x] Failures are looked for nationwide over 36 months. A failed bank has left `/locations`, so it is never on the bank list.
+- [x] Each record (`sources/fdic/failed.json`) keeps each source's date and code, the sources that agree (`agree`), and those that do not yet (`missingFrom`).
+- [x] A failed bank is placed in the metros by three things, and each metro says which placed it:
+  - its branches in our last footprint;
+  - the branches FDIC lists in the failure (`/history` code 713: `OFF_PSTNUM` and `OFF_CNTYNUM`, the branch's state and county);
+  - its main office's county (`STCNTY`). `CBSA_NO` is not used: it was absent on 97 of 447 charters closed since November 2023.
+- [x] The FDIC is the seller. `candidates list` shows failed banks in the metros beside the candidates, never as candidates, with the FDIC loan-sale page as a link. The page is not scraped. A failed bank stays listed for `failedBanks.windowQuarters` (placeholder: 8).
+- [x] Change log: a new failure, and a known bank's status change. The run notes name the certs `/failures` lacks, and when its index was built.
+- [x] `sources verify fdic`: `fdic.failures` checks that every failure any source shows is in our record. `fdic.failures-index` warns when `/failures` lacks a failure the others show. A warning does not fail the run, because the adapter already reads all three. First live check: 2 failures missing from `/failures`.
+- [ ] Check the CSV's column names against the live file, once www.fdic.gov is reachable.
+
+**E3-S6. Mergers and acquisitions.** *As a principal, I want to know when a bank on our list buys a bank with a presence in our metros so that we can approach the acquirer while it decides which loans to keep.* P0, R1. **Built** (`src/sources/fdic.mjs`, `src/metrics.mjs`, `src/score.mjs`). First live run (2026-11-13): 382 deals nationwide since November 2023, 60 of them with a bank on our list on one side, and 12 acquisition signals.
+- [x] `/history`, filtered by event code and effective date (`EFFDATE`), over 36 months. Codes: mergers 221–223, an assisted merger 213, an affiliate reorganization 224, and the failure codes. Each deal has one row on the leaving bank's side. The acquirer's row (810) is not read.
+- [x] The field check is per event, because `/history` leaves out the keys an event lacks (verified live): a failure row has no `CERT`, and a payoff has no `OUT_CERT` or `ACQ_CERT`. Every row needs `TRANSNUM`, `CHANGECODE`, `EFFDATE` and the bank that left (`OUT_CERT`, or `CERT`). A merger row also needs `ACQ_CERT`.
+- [x] Deals with a bank on our list on either side are kept in `sources/fdic/events.json`, keyed by `TRANSNUM`. Each has the target's cert, the date the deal took effect, the target's metros (placed as in E3-S5), and its CRE at its last report. Events are never dropped when they age out.
+- [x] **Event signal** `acquired-metro-bank`, declared `kind: event`. It attaches to the acquirer, with the effective date and the target's cert, when the target had a presence in the six metros. It stays visible for `windowQuarters` (placeholder: 4) from that date. Its id is the deal's, so it is the same signal on every run. It counts a merger, an assisted merger, and taking over a failed bank. A merger inside one holding company (224) does not count by default.
+- [x] Being acquired means the target is gone. Its record gets `acquiredBy` and `closedOn`. The change log records the acquirer and the status change.
+- [x] The card states it from a fixed template, for example: "It acquired another bank (FDIC cert N) with 4 branches in Phoenix, effective June 1, 2026."
+- [x] `sources verify fdic`: `fdic.events` checks that every deal FDIC shows with a bank on our list is stored with the same acquirer, target and date.
+
+**E3-S7. The concentration screen.** *As a principal, I want to see which banks meet the regulators' CRE concentration screen so that I know whose examiners are likely pressing them to cut CRE.* P0, R1. **Built** (`src/metrics.mjs`, `src/score.mjs`, `src/candidates.mjs`), from BankFind fields in the existing `sources.fdic` job. First live run (2026-11-13): 27 banks meet test (a), 15 meet test (b), 39 meet either.
+- [x] **The definition is checked** against the guidance text on 2026-11-13: 71 FR 74580 (December 12, 2006), read from FDIC's copy (FIL-104-2006). The guidance calls these criteria a screen for closer supervisory review, not limits on lending. Either test is enough:
+  - (a) construction and land development loans at or above 100% of total risk-based capital; or
+  - (b) CRE at or above 300% of total risk-based capital, **and** CRE grown 50% or more over the prior 36 months.
+
+  CRE = construction and land development + multifamily + nonfarm nonresidential not owner-occupied + loans to finance CRE not secured by real estate. A principal confirms this against the guidance text. The code comment and the `scoring.json` note say the same.
+- [x] The fields. Meanings are from FDIC's own definitions file (`All Financial Reports.xlsx`, at api.fdic.gov/banks/docs). Each was checked live on the 268 metro banks, for June 30, 2026 and June 30, 2023:
+
+  | Need | Field | Checked live |
+  |---|---|---|
+  | Construction and land development | `LNRECONS` | FDIC's own construction-to-tier-1 ratio, `LNCDT1R`, equals `LNRECONS` / `RBCT1J` on 267 of 267 banks |
+  | Multifamily | `LNREMULT` | |
+  | Nonfarm nonresidential, not owner-occupied | `LNRENROT` | `LNRENROT` + `LNRENROW` = `LNRENRES` on 267 of 268 banks |
+  | CRE loans not secured by real estate | `LNCOMRE` | Above 0 at 132 banks |
+  | Total risk-based capital | `RBC` | FDIC gives only a title ("RBC-TOTAL-PCA"). It equals `RBCT1J` + `RBCT2` on 195 of 196 non-CBLR banks. `RBC` over risk-weighted assets equals FDIC's own total capital ratio on all 195. |
+  | Tier 1 capital | `RBCT1J` | Equals `RBCT1` on all 268 |
+  | Allowance for credit losses on loans | `LNATRES` | Equals `LNLSRES` on all 268 |
+  | CBLR election | `CBLRIND` | 1 at 72 banks |
+
+- [x] CBLR banks report no total risk-based capital. FDIC sends `RBC` as **0** for them, not null (all 72), so a naive ratio would divide by zero. For them the denominator is tier 1 capital plus the allowance (`RBCT1J` + `LNATRES`), UBPR's approach. Every computed value and every signal names its denominator. A non-CBLR bank with `RBC` of 0 gets no ratio, with the reason.
+- [x] The 36-month test needs CRE 12 quarters before the latest. The adapter fetches that one quarter (`growthBase`, four fields) and does not widen the 8-quarter pull. It is kept apart from `quarters`.
+- [x] The paper profile shows the ratios (`profile.concentration`): construction to capital, CRE to capital, and 36-month CRE growth. Each comes with its fields, report dates and denominator, and with whether each test is met.
+- [x] **State signals** `concentration-construction` and `concentration-cre`, declared `kind: state`. They are recomputed from the latest quarter on every run, and they drop away when the ratio falls below. Thresholds are in `scoring.json`, marked as placeholders.
+- [x] The card states them from fixed templates, with the denominator's words taken from code, then says the definition is unconfirmed. No model is used.
+- [x] `sources verify fdic`: `fdic.ratios` now includes `LNCDT1R`. `fdic.concentration` checks that each CBLR flag matches how `RBC` is reported, and that the stored growth-base quarter equals FDIC's.
+- [x] The firm's rule holds: a test runs the fake pull, scoring and promotion, then checks that the briefer gets the ratios and the acquisition as data, and that the drafter's input has no ratio, denominator, signal, deal or cert.
+- [ ] TODO: cross-check against UBPR Page 7B (lines 29–30), once cdr.ffiec.gov is reachable.
+- [ ] A principal decides whether the screen and acquisitions add points to the score, and on which axis. Today they are signals only.
 
 ---
 
@@ -615,6 +672,68 @@ Every adapter (E3–E5) is built on this shared framework.
 - [ ] Keys in each platform's secret store.
 - [ ] The principals' emails in `principals`.
 - [ ] Preview deployments protected or off.
+
+---
+
+### E13. Event listeners
+
+Some sources report a dated change rather than a state: a filing, a notice, an order. A listener records each new event once, with its date, and keeps it (`docs/data-sources.md`, section 1). Every listener keeps the E2 contract:
+- a recorded fake;
+- the run log, field checks and the change log;
+- a verify check;
+- a worker job kind and a line in the schedule.
+
+**E13-S1. The SEC filings listener.** *As a principal, I want banks' SEC filings watched every day for signs that they are selling CRE loans so that I hear of a held-for-sale transfer, a loan sale or an impairment when it is filed, not a quarter later.* P1, R2. **Built** (`src/sources/efts.mjs`, `src/sources/filers.mjs`, `src/sources/filings.mjs`, `filings.json`, `outbound sources run filings`, worker job `sources.filings`). Live runs wait for the SEC User-Agent contact (Q11).
+- [x] **The endpoint, checked live on 2026-11-13.** It is EDGAR full-text search (`efts.sec.gov/LATEST/search-index`), which is undocumented. The findings are written in `src/sources/efts.mjs`:
+  - Phrases separated by spaces must all appear in one document. `OR` makes alternatives. There is no proximity operator, so "near" means "in the same document".
+  - `ciks` filters by filer, but only with 10-digit, zero-padded CIKs. An unpadded one silently matches nothing.
+  - Each hit is one document of a filing, so a filing can come back several times. Every hit carries the 8-K item numbers.
+  - The response echoes the query the server ran.
+  - Errors come back as HTTP 200 with an error body. Seen: paging past 10,000, and once a failure inside the server.
+  - A cache serves answers keyed without 8-K items or SIC codes. Seen: a request got another request's answer.
+  - An entity lookup (`keysTyped`) finds SEC filers by name or CIK.
+- [x] **The client** reuses the SEC pacing, retries and declared User-Agent. It refuses while `config.sec.userAgent` is a placeholder.
+  - Every body is checked.
+  - Every response's echo is compared with its request, and every hit is filtered again on its own fields.
+  - 8-K items are matched on the hits, never sent to the server.
+  - A response with no echo counts as mismatched: the hits carry no text, so only the echo confirms the phrases.
+  - A mismatched response is fetched again after the cache expires, then fails the run. A window of over 10,000 hits is split.
+- [x] **Saved searches** live in `filings.json`. Each has an id, a label, forms, and phrases or 8-K items:
+  - 8-K Items 2.01 and 2.06;
+  - "transferred to held for sale", "loans held for sale", "loan sale" and "note sale", each with "commercial real estate";
+  - "balance sheet repositioning".
+
+  Every search is a placeholder.
+- [x] **The bank-to-filer map** is `sources/edgar/filers.json`, keyed `fdic:CERT`.
+  - `outbound filers suggest` proposes filers. It uses FDIC's holding-company name and RSSD ID (`NAMEHCR`, `RSSDHCR`), the SEC's entity lookup, and each candidate's latest 10-K or 10-Q with its SIC code.
+  - A filer confirmed for one bank is proposed for the other banks of its holding company.
+  - `filers confirm` and `filers reject` record a principal's decision, audited with their name.
+  - **Only confirmed mappings are searched.**
+- [x] **Signals.** Every hit on a confirmed filer is an **event** signal.
+  - It is stored once per filing, de-duplicated on the accession number. It is kept when a later run no longer sees it.
+  - Each carries the search ids, form, 8-K items, file date, accession number, a link to the filing index, and the bank key.
+  - `filingSignals({ dir })` returns them by bank key. A filing belongs to a bank only while its filer is confirmed.
+- [x] A new filer is searched back a year, once. Later runs start each filer three days before the day it was last searched to. So a filer left unconfirmed while other runs moved on is searched over the gap once it is confirmed again. `--since DATE` searches every filer from a date; a bare `--since` is refused.
+- [x] Proxy statements (DEF 14A) of confirmed filers are recorded by form, date and link, for the briefer. No names are extracted (E7).
+- [x] **A discovery search** finds bank filers not in the list. It searches by business-address state (our five) and bank SIC code. Its hits go to a for-review list (`outbound filers discovered`) and never become signals.
+- [x] **Into scoring:** each filing becomes an event signal on its bank's candidate (`detectFilingSignals` in `src/score.mjs`). It is shown while its file date is within `scoring.json` `filings.windowDays` (placeholder: 180), and stated on the card from a fixed template. It adds no points until a principal decides how filings should count.
+- [x] **E2:**
+  - a fake shaped like the real responses (`test/edgar-search-fake.mjs`);
+  - the run log;
+  - a field check on every field used: a missing one fails the run and writes nothing;
+  - a short read (fewer hits than the reported total), or a hit that does not match its request, fails the run too. Nothing is written and the window stays where it was, because the listener's window never comes back to a day it has passed;
+  - the change log;
+  - `outbound sources verify filings`: fresh, mapped, sourced, stored filings found again, every confirmed filer still an SEC entity.
+- [x] Filings are context for a principal only. The search returns no filing text, and none is stored. A test proves no filing, link, CIK, label or person reaches the drafter.
+- [x] Worker job `sources.filings` (migration `20261113213000_jobs_filings.sql`). The workflow queues it on weekdays at 23:37 UTC, then verifies it. A `suspect` run fails the job, unlike the FDIC and CMBS jobs: their next run reads the same state again, but the listener's window has moved past a suspect run.
+- [x] **First live run (2026-11-13).** It used a scratch folder, a neutral User-Agent and throwaway mappings:
+  - Suggestions for 30 banks: 41 candidates for 15 banks, from 30 lookups.
+  - 18 of the 22 exact-name candidates had filed no 10-K or 10-Q in over a year: same-named entities that do not report. So filing evidence outranks the name.
+  - With 4 mappings, a 30-day run made 12 requests and read 116 hits. It found 3 filings and 4 proxy statements, plus 21 filings from 16 bank filers for review.
+  - Every verify check passed.
+  - The first try met an error body from inside the server. Such errors are now retried twice.
+- [ ] The signals are wired into scoring (`scoring.json`, `src/score.mjs`), after merge.
+- [ ] A principal confirms the filer map, and reviews the searches, windows and bank SIC codes.
 
 ## 9. Definition of done (every story)
 

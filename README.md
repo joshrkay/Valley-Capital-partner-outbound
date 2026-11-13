@@ -78,6 +78,14 @@ npm run outbound -- account set-person --account <id> --name "..." --title "..."
 
 Behind a proxy, Node's built-in `fetch` needs `NODE_USE_ENV_PROXY=1` (Node 22.21 or later).
 
+**The FDIC pull also records three kinds of pressure** (PRD E3-S5 to S7), in the same `sources run fdic` job:
+
+- **Failures.** FDIC's `/failures` index is stale: built August 25, 2026, it lacks two later failures, one of them in the Los Angeles metro. So failure is taken from `/failures`, `/institutions` (closing code `CHANGEC1` and end date `ENDEFYMD`) and `/history`, and from FDIC's failed-bank CSV if a person saves it as `sources/fdic/failed-banks.csv` in the data folder. A bank counts as failed if any source says so, and `sources/fdic/failed.json` records which ones agree. A failed bank with a presence in the metros is listed under `candidates list`, with the FDIC as the seller of its loans and a link to the FDIC loan-sale page.
+- **Mergers and acquisitions**, from `/history`, kept in `sources/fdic/events.json`. A bank that acquired a bank with a presence in the metros gets an **event** signal, visible for 4 quarters (a placeholder).
+- **The concentration screen**: construction loans and CRE against capital, and 36-month CRE growth, shown in the paper profile and as **state** signals. Its definition, from the 2006 interagency guidance, is **unconfirmed**. A bank on the community bank leverage ratio reports no total risk-based capital, so it is divided by tier 1 capital plus the allowance, and every value says which denominator it used.
+
+Every signal says whether it is a state signal (recomputed while the condition holds) or an event signal (a dated change, kept).
+
 **Before the briefer researches any bank the pipeline found, it passes a pilot** on 10 accounts the principals already know (PRD E1):
 
 ```bash
@@ -97,12 +105,53 @@ npm run outbound -- sources run edgar                    # each CMBS trust's lat
 
 It writes `sources/edgar/loans.json`, `trusts.json` and `servicers.json`. Every loan and property detail is **context for a principal, never for a message**.
 
+### The SEC filings listener (PRD E13-S1)
+
+A daily watch of banks' SEC filings for signs they are selling CRE loans. It needs `config.sec.userAgent` filled in, like the CMBS adapter.
+
+Most banks file through a holding company, so each bank is first mapped to the SEC filer (CIK) that files for it. A principal decides every mapping. Only confirmed filers are searched:
+
+```bash
+npm run outbound -- filers suggest                       # proposes filers for unmapped banks: FDIC's holding-company name, SEC's entity list,
+                                                         # and each candidate's latest 10-K or 10-Q (its SIC code shows whether it is a bank)
+npm run outbound -- filers confirm --bank fdic:12345 --cik 9900101 --by "Pat Example"
+npm run outbound -- filers reject  --bank fdic:12345 --cik 9900301 --by "Pat Example" --reason "a capital trust"
+npm run outbound -- filers list                          # every bank: confirmed, rejected, or not mapped yet
+```
+
+Then the listener runs the saved searches in `filings.json` on EDGAR full-text search:
+
+```bash
+npm run outbound -- sources run filings                  # each filer since its own last search; a new filer is searched back a year
+npm run outbound -- sources run filings --since 2026-06-01
+npm run outbound -- filers discovered                    # bank filers in our five states that are not in the bank list: for review
+npm run outbound -- sources verify filings               # searches again for a few stored filings; each must come back
+```
+
+- **Saved searches:** 8-K Items 2.01 and 2.06; "transferred to held for sale", "loans held for sale", "loan sale" and "note sale", each with "commercial real estate"; and "balance sheet repositioning". All are placeholders for a principal to tune.
+- **Phrases:** they must all appear in one document. The endpoint has no "near".
+- **8-K items:** matched on each hit. They are never sent to the server, because its cache ignores them.
+- **Signals:** every hit on a confirmed filer becomes an **event**: a dated change, kept even when a later run no longer sees it. It is stored once per filing, in `sources/edgar/filings.json`. `filingSignals({ dir })` in `src/sources/filings.mjs` returns the signals by bank key, `fdic:CERT`.
+- **Proxy statements** (DEF 14A) of confirmed filers are recorded in `sources/edgar/proxies.json`, by form, date and link only, for the briefer. No names are extracted.
+- **The discovery search** runs by business-address state and bank SIC code. Its hits go to `sources/edgar/discovery.json` and never become signals.
+
+The full-text search returns no filing text and no snippets, and nothing here stores any. Even so, filings are context for a principal only, and a test proves none of it reaches the drafter.
+
+What was checked live on 2026-11-13 is written at the top of `src/sources/efts.mjs`:
+- CIKs must be zero-padded, or nothing matches.
+- A query the server cannot run comes back as HTTP 200 with an error body.
+- A cache serves answers keyed without 8-K items or SIC codes.
+
+So every response is matched to its request before it is used. A response with no echo, a search that returns fewer hits than it reports, or a hit that does not match its request fails the run: nothing is written, and the next run covers the same days.
+
+On the platform, the job is `sources.filings`. The worker workflow queues it on weekdays at 23:37 UTC, then verifies it. A `suspect` run fails the job, because the listener's window has moved past it. That schedule stays off until a principal has filled `config.sec.userAgent`, confirmed at least one filer, and set the repository variable `FILINGS_ENABLED` to `true`. Until then the run would fail its own checks every day and hide real failures.
+
 ### Checking the scrapers
 
 Tests use fakes, so they prove the code does what we meant, not that the sources say what we think. `sources verify` checks the stored data against the live sources. It is read-only and exits 1 on any failure:
 
 ```bash
-npm run outbound -- sources verify fdic        # fresh, complete, every stored value and ratio equal to FDIC's own
+npm run outbound -- sources verify fdic        # fresh, complete, every stored value and ratio equal to FDIC's own, every failure and deal stored
 npm run outbound -- sources verify edgar       # every filer accounted for, the parser equal to a plain count of the file
 ```
 
@@ -110,13 +159,17 @@ npm run outbound -- sources verify edgar       # every filer accounted for, the 
 |---|---|---|
 | `fdic.fresh` | We hold the latest quarter FDIC has published | Pass (June 30, 2026) |
 | `fdic.coverage` | Every bank with a branch in the metros is on our list, and none has left | Pass (268 of 268) |
-| `fdic.values` | Every stored field for that quarter equals what FDIC serves now | Pass (8,576 of 8,576) |
-| `fdic.ratios` | Ratios computed from our stored values equal FDIC's own published ratios | Pass (500 of 500) |
+| `fdic.values` | Every stored field for that quarter equals what FDIC serves now | Pass (8,576 of 8,576; 9,916 with the capital fields) |
+| `fdic.ratios` | Ratios computed from our stored values equal FDIC's own published ratios, construction to tier 1 capital included | Pass (500 of 500; 767 with `LNCDT1R`) |
+| `fdic.concentration` | Each bank's CBLR flag matches how it reports total risk-based capital; the 36-month base quarter equals FDIC's | Pass (195 and 72 banks; 1,064 of 1,064) |
+| `fdic.failures` | Every failure any of `/failures`, `/institutions` and `/history` shows in 36 months is in our record | Pass (10) |
+| `fdic.failures-index` | A **warning**, not a failure: `/failures` lacks a failure the other two show | Warn (2 missing; index built 2026-08-25) |
+| `fdic.events` | Every deal with a bank on our list is stored, with the same acquirer, target and date | Pass (60) |
 | `edgar.accounted` | Every filer has a recorded outcome, and nothing that looks like CMBS was set aside | Pass (60 of 60) |
 | `edgar.parse` | Re-reading a few trusts from SEC, our loan counts and total balances equal a plain count of each file | Pass (4 of 4) |
 | `edgar.loans` | Every stored loan belongs to a trust read in the latest run, and carries its source filing | Pass (192) |
 
-It also prints a few records, each with the exact public URL, for a person to compare by eye.
+It also prints a few records, each with the exact public URL, for a person to compare by eye. A `WARN` line flags a gap in FDIC's own data; it does not change the exit code.
 
 The first runs of these checks found real defects, all now fixed and tested:
 - loan files that declare their namespace in the other order were rejected;
