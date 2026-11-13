@@ -9,5 +9,6 @@ async function queue(fn, ok) {
   try { await fn(ctx); await flash('ok', ok); } catch (e) { await flash('error', e.message); }
   redirect('/status');
 }
+export const queueEdgarAction = async () => queue((ctx) => ops.queueEdgar(ctx.client), 'CMBS (SEC EDGAR) pull queued.');
 export const queueSourcesAction = async () => queue((ctx) => ops.queueSources(ctx.client), 'FDIC pull queued.');
 export const queueScoreAction = async (fd) => queue((ctx) => ops.queueScore(ctx.client, { draftBuybox: fd.get('draftBuybox') === 'on' }), 'Scoring queued.');

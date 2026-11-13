@@ -2,11 +2,17 @@
 import { readFlash } from '../lib/session.mjs';
 import { parseMarkdown } from '../lib/markdown.mjs';
 import { source } from '../lib/format.mjs';
+import { CONTEXT_ONLY } from '../lib/servicers.mjs';
 
 export async function Flash() {
   const f = await readFlash();
   if (!f?.text) return null;
   return <div className={`banner ${f.kind === 'ok' ? 'ok' : 'error'}`} role="status">{f.text}</div>;
+}
+
+// Always visible on any page that shows loan or property detail (asset-level facts never go in a message).
+export function ContextOnlyBanner() {
+  return <div className="banner warn context-only" role="note">{CONTEXT_ONLY}</div>;
 }
 
 export function Problem({ text }) {

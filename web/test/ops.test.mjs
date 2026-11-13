@@ -82,7 +82,7 @@ test('a suppressed bank cannot be promoted from the web either', async () => {
 test('naming the person resets the role; confirming needs a name first', async () => {
   const { fake, client } = setup();
   seed(fake, 'accounts/alpha-bank.json', { id: 'alpha-bank', name: 'Alpha Bank', type: 'bank', person: { name: '' }, contact: { roleConfirmed: false } });
-  await assert.rejects(ops.confirmRole(client, { id: 'alpha-bank', by: 'Pat' }), /Name the person/);
+  await assert.rejects(ops.confirmRole(client, { id: 'alpha-bank', by: 'Pat' }), /no named person yet/);   // the engine's own rule (src/accounts.mjs)
   await ops.setPerson(client, { id: 'alpha-bank', name: 'Jordan Sample', title: 'Chief Credit Officer', by: 'Pat' });
   await ops.confirmRole(client, { id: 'alpha-bank', by: 'Pat' });
   const a = fake.docs.get('accounts/alpha-bank.json').body;

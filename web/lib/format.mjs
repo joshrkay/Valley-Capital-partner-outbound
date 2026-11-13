@@ -21,7 +21,17 @@ export function pct(v, digits = 2) {
   return `${(Number(v) * 100).toFixed(digits)}%`;
 }
 
-export const num = (v, digits = 1) => (v === null || v === undefined || Number.isNaN(Number(v)) ? '–' : Number(v).toFixed(digits));
+// EDGAR amounts are in whole dollars.
+export function moneyDollars(v) {
+  if (v === null || v === undefined || Number.isNaN(Number(v))) return '–';
+  const n = Number(v), s = n < 0 ? '−' : '', a = Math.abs(n);
+  if (a >= 1e9) return `${s}$${(a / 1e9).toFixed(2)}B`;
+  if (a >= 1e6) return `${s}$${(a / 1e6).toFixed(1)}M`;
+  if (a >= 1e3) return `${s}$${(a / 1e3).toFixed(0)}K`;
+  return `${s}$${a.toFixed(0)}`;
+}
+
+export const num =(v, digits = 1) => (v === null || v === undefined || Number.isNaN(Number(v)) ? '–' : Number(v).toFixed(digits));
 
 // "LNREMULT, June 30, 2026": the source line shown next to (or on hover over) every FDIC number.
 export function source(input) {

@@ -4,6 +4,7 @@
 import { join } from 'node:path';
 import { engine, loadRules } from './engine.mjs';
 import { visibleCandidates } from './candidates-view.mjs';
+import { sortServicers, loansFor, edgarStatus } from './servicers.mjs';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const need = (v, what) => { const s = typeof v === 'string' ? v.trim() : ''; if (!s) throw new Error(`${what} is required.`); return s; };
@@ -82,30 +83,15 @@ export async function accountDetail(client, id) {
   return result;
 }
 
+// The engine's own functions (src/accounts.mjs), the same ones `outbound account set-person` and `confirm-role` call.
 export async function setPerson(client, { id, name, title, by }) {
-  const { LOADS, store } = await mods();
-  await client.unitOfWork(LOADS.account, (dir) => {   // the same change as `outbound account set-person`
-    const p = join(dir, 'accounts', `${need(id, 'An account id')}.json`);
-    const a = store.readJson(p, null);
-    if (!a) throw new Error(`There is no account ${id}.`);
-    a.person = { ...(a.person ?? {}), name: need(name, 'The person\'s name'), title: typeof title === 'string' ? title.trim() : '' };
-    a.contact = { ...(a.contact ?? {}), roleConfirmed: false, roleConfirmedBy: undefined, roleConfirmedAt: undefined };
-    store.writeJson(p, a);
-    store.audit(dir, { type: 'person_set', accountId: id, by });
-  });
+  const [{ LOADS }, accounts] = await Promise.all([engine('src/uow.mjs'), engine('src/accounts.mjs')]);
+  await client.unitOfWork(LOADS.account, (dir) => accounts.setPerson({ dir, id: need(id, 'An account id'), name, title: typeof title === 'string' ? title : '', by }));
 }
 
 export async function confirmRole(client, { id, by }) {
-  const { LOADS, store } = await mods();
-  await client.unitOfWork(LOADS.account, (dir) => {   // the same change as `outbound account confirm-role`
-    const p = join(dir, 'accounts', `${need(id, 'An account id')}.json`);
-    const a = store.readJson(p, null);
-    if (!a) throw new Error(`There is no account ${id}.`);
-    if (!a.person?.name) throw new Error('Name the person before confirming their role.');
-    a.contact = { ...(a.contact ?? {}), roleConfirmed: true, roleConfirmedBy: by, roleConfirmedAt: new Date().toISOString() };
-    store.writeJson(p, a);
-    store.audit(dir, { type: 'role_confirmed', accountId: id, by });
-  });
+  const [{ LOADS }, accounts] = await Promise.all([engine('src/uow.mjs'), engine('src/accounts.mjs')]);
+  await client.unitOfWork(LOADS.account, (dir) => accounts.confirmRole({ dir, id: need(id, 'An account id'), by }));
 }
 
 // Research is queued only if the pilot gate would let it run, so a principal hears "not yet" now rather than from a failed job.
@@ -186,11 +172,28 @@ export async function passPilot(client, { by }) {
 }
 
 // ---- Status ---------------------------------------------------------------------------------------------------------------------
-export async function statusOverview(rest) {
+export async function statusOverview(rest, client) {
   const rules = await loadRules();
-  const [runs, jobs, killDoc] = await Promise.all([rest.runs(20), rest.jobs(25), rest.killDocument()]);
-  return { runs: runs.map((r) => r.line), jobs, kill: { config: !!rules.config.killSwitch, document: killDoc } };
+  const [runs, jobs, killDoc, snap] = await Promise.all([rest.runs(50), rest.jobs(25), rest.killDocument(), client ? client.load(['sources/edgar/state.json']) : { docs: {} }]);
+  const lines = runs.map((r) => r.line);
+  return { runs: lines.slice(0, 20), jobs, kill: { config: !!rules.config.killSwitch, document: killDoc }, edgar: edgarStatus({ state: snap.docs['sources/edgar/state.json'] ?? null, runs: lines, jobs }) };
 }
 
 export const queueSources = (client) => client.enqueue('sources.fdic', {});
+export const queueEdgar = (client) => client.enqueue('sources.edgar', {});
+
+// ---- CMBS servicers (PRD E4-S3) ----------------------------------------------------------------------------------------------------
+// The list needs only the per-servicer summary; loans.json is loaded only for one servicer's page.
+export async function listServicers(client) {
+  const snap = await client.load(['sources/edgar/servicers.json', 'sources/edgar/state.json']);
+  return { servicers: sortServicers(snap.docs['sources/edgar/servicers.json'] ?? {}), state: snap.docs['sources/edgar/state.json'] ?? null };
+}
+
+export async function servicerDetail(client, name) {
+  const n = need(name, 'A servicer name');
+  const snap = await client.load(['sources/edgar/servicers.json', 'sources/edgar/loans.json']);
+  const summary = (snap.docs['sources/edgar/servicers.json'] ?? {})[n] ?? null;
+  if (!summary) return null;
+  return { summary, loans: loansFor(snap.docs['sources/edgar/loans.json'] ?? {}, n) };
+}
 export const queueScore = (client, { draftBuybox }) => client.enqueue('score.run', { draftBuybox: !!draftBuybox });

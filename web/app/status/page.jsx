@@ -2,7 +2,7 @@ import { requirePrincipal } from '../../lib/session.mjs';
 import { statusOverview } from '../../lib/ops.mjs';
 import { when } from '../../lib/format.mjs';
 import { NotAuthorized, Problem } from '../ui.jsx';
-import { queueSourcesAction, queueScoreAction } from './actions.js';
+import { queueSourcesAction, queueScoreAction, queueEdgarAction } from './actions.js';
 
 export const metadata = { title: 'Status · Valley Capital outbound' };
 
@@ -10,16 +10,33 @@ export default async function Status() {
   const ctx = await requirePrincipal();
   if (ctx.denied) return <NotAuthorized email={ctx.email} />;
   let s;
-  try { s = await statusOverview(ctx.rest); } catch (e) { return <Problem text={`Status could not be loaded: ${e.message}`} />; }
+  try { s = await statusOverview(ctx.rest, ctx.client); } catch (e) { return <Problem text={`Status could not be loaded: ${e.message}`} />; }
   const killed = s.kill.config || s.kill.document;
+  const edgar = s.edgar;
   return (
     <>
       <h1>Status</h1>
       <div className={`banner ${killed ? 'error' : 'ok'}`}>{killed ? `Kill switch ON (${[s.kill.config ? 'config.json' : null, s.kill.document ? 'KILL document' : null].filter(Boolean).join(' and ')}): no draft is created and no mailbox is touched.` : 'Kill switch off.'}</div>
       <div className="panel row">
         <form action={queueSourcesAction} className="inline"><button type="submit">Queue FDIC pull</button></form>
+        <form action={queueEdgarAction} className="inline"><button type="submit">Queue CMBS pull (SEC EDGAR)</button></form>
         <form action={queueScoreAction} className="inline"><label className="row" style={{ flexDirection: 'row', alignItems: 'center' }}><input type="checkbox" name="draftBuybox" /> draft buy box (PROVISIONAL list)</label><button type="submit">Queue scoring</button></form>
       </div>
+      <h2>CMBS loan data (SEC EDGAR)</h2>
+      {edgar.failure ? <div className="banner error">The last EDGAR pull failed: {edgar.failure.text}</div> : null}
+      <div className="panel">
+        {edgar.ranAt ? (
+          <dl className="kv">
+            <dt>Last run</dt><dd>{when(edgar.ranAt)} <span className="src">{edgar.lastRun}</span></dd>
+            <dt>Filings since</dt><dd>{edgar.since ?? '–'}</dd>
+            <dt>CMBS trusts read</dt><dd>{edgar.trusts ?? '–'}{edgar.trustErrors ? <span className="muted"> ({edgar.trustErrors} could not be read)</span> : null}</dd>
+            <dt>Loans read</dt><dd>{edgar.loansRead ?? '–'}</dd>
+            <dt>Loans kept</dt><dd>{edgar.loansKept ?? '–'} <span className="muted small">in our metros and sectors</span></dd>
+            {edgar.suspect ? <><dt>Note</dt><dd>The run was marked suspect; check its notes below.</dd></> : null}
+          </dl>
+        ) : <p className="muted" style={{ margin: 0 }}>No EDGAR pull has finished yet.</p>}
+      </div>
+
       <h2>Jobs</h2>
       {!s.jobs.length ? <p className="muted">No jobs yet.</p> : (
         <div className="scroll"><table>

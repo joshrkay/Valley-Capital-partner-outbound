@@ -34,10 +34,12 @@ PRD E12-S5. It is a private Next.js app where the firm's principals can:
 |---|---|
 | `/candidates` | The candidate list, filtered by tier and metro, with the PROVISIONAL banner. Suppressed, promoted, dismissed and snoozed banks are hidden exactly as `outbound candidates list` hides them. |
 | `/candidates/[key]` | The paper profile: each CRE category's balance, share and stages of distress, each with its FDIC field and report date. Also the footprint by metro, components by axis with their inputs, signals, and the "why now" sentences with their evidence. Promote, dismiss (reason required), snooze (date required). |
+| `/servicers` | CMBS special servicers of loans on properties in our metros and buy-box sectors, from the trusts' SEC loan-level filings (PRD E4-S3). Each shows loans, balance, how many are in special servicing, coded for a note sale, delinquent or maturing, and its metros and sectors. Sorted by special servicing, then note sale, then balance. Reads only the per-servicer summary. |
+| `/servicers/[name]` | That servicer's loans: trust, balance, rate, maturity, payment status, workout, signals, and each property's city, metro, type, occupancy and DSCR. Every value names its filing and reporting period, with a link to the filing on sec.gov. A banner that stays visible while scrolling says the detail is context for a principal only and never goes in a message. Property names and addresses are not shown. |
 | `/accounts`, `/accounts/[id]` | Accounts with person, role, research status and origin. The pipeline block, the brief, set person, confirm role, and queue research (refused with the pilot message until it passes) or a draft. |
 | `/drafts` | Drafts waiting for approval, with their lint result. Approve re-runs the linter and the guard. There is no send button. |
 | `/pilot`, `/pilot/[id]` | The scorecard, finding-by-finding verdicts, and recording a pass. |
-| `/status` | Jobs, source runs and the kill switch. Queue an FDIC pull or scoring (optionally with the draft buy box). |
+| `/status` | Jobs, source runs and the kill switch. Queue an FDIC pull, a CMBS pull (SEC EDGAR) or scoring (optionally with the draft buy box). The last EDGAR run's counts (trusts read, loans read and kept), and its error if the last pull failed. A placeholder SEC contact fails before the run log is written, so the failed job's own error is shown too. |
 
 ## Run it
 
