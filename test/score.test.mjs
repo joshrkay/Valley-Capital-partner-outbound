@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeDir, put, loadJson } from './kit.mjs';
 import { validateBuybox, validateScoring, runScoring, scoreBank, tierFor, buildProfile, findPlaceholders, contentHash, AXES } from '../src/score.mjs';
+import { confirmFiler, rejectFiler } from '../src/sources/filers.mjs';
 
 const metros = loadJson('metros.json');
 const scoring = () => structuredClone(loadJson('scoring.json'));
@@ -275,4 +276,27 @@ test('failed banks in the metros are listed beside the candidates, never as cand
   const f = out.failedBanks[0];
   assert.deepEqual([f.key, f.seller, f.loanSales, f.metros[0].label, f.missingFrom[0]], ['fdic:99999', 'FDIC', 'https://www.fdic.gov/resources/resolutions/asset-sales/loan-sales', 'Los Angeles', 'failures']);
   assert.ok(!out.items.some((i) => i.cert === '99999'));
+});
+
+test('SEC filings: an EVENT signal for a confirmed filer, shown within its window, stated on the card from a template, adding no points', () => {
+  const dir = world([{ cert: '1', name: 'Alpha Example Bank' }]);
+  const before = score(dir).items[0];
+  assert.ok(!before.signals.some((s) => s.rule === 'filing'), 'no listener run yet: no filing signals, and scoring still runs');
+  confirmFiler({ dir, bank: 'fdic:1', cik: '9900101', by: 'Pat Example', now: NOW });
+  const rec = (acc, fileDate, searches, form = '10-Q') => ({ key: `sec:${acc}`, accession: acc, cik: '0009900101', filerCiks: ['0009900101'], form, items: [], fileDate, searches,
+    link: `https://www.sec.gov/Archives/edgar/data/9900101/${acc.replace(/-/g, '')}/`, firstSeenAt: '2026-11-13T12:00:00Z' });
+  put(dir, 'sources/edgar/filings.json', {
+    '0009900101-26-000001': rec('0009900101-26-000001', '2026-10-01', ['transferred-held-for-sale-cre']),
+    '0009900101-25-000009': rec('0009900101-25-000009', '2025-12-01', ['loan-sale-cre']),   // more than 180 days before NOW
+  });
+  const it = score(dir).items[0];
+  const filings = it.signals.filter((s) => s.rule === 'filing');
+  assert.deepEqual(filings.map((s) => s.accession), ['0009900101-26-000001'], 'only filings inside windowDays are shown');
+  assert.equal(filings[0].kind, 'event');
+  assert.deepEqual([it.score, it.axes], [before.score, before.axes], 'filing signals add no points until a principal weights them');
+  assert.match(it.card.text, /An SEC filing matched a saved search: Loans transferred to held for sale, in a filing that mentions commercial real estate \(10-Q, filed 2026-10-01\)\./);
+  assert.doesNotMatch(it.card.text, /2025-12-01/);
+  rejectFiler({ dir, bank: 'fdic:1', cik: '9900101', by: 'Pat Example', reason: 'not this bank', now: NOW });
+  assert.ok(!score(dir).items[0].signals.some((s) => s.rule === 'filing'), 'a rejected filer gives no signal');
+  assert.match(validateScoring({ ...scoring(), filings: { windowDays: 0 } }).errors.join('\n'), /filings\.windowDays/);
 });

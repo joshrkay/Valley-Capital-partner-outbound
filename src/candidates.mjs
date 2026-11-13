@@ -141,6 +141,13 @@ export function buildCard(item, { scoring = {} } = {}) {
     add(t, [s.id, ...s.evidence, ...(cre?.repdte ? [`fdic:${s.targetCert}:${cre.repdte}`] : [])]);
   }
 
+  // SEC filings (event signals, E13-S1): which saved searches a filing matched, its form and file date. The label is built from
+  // filings.json labels and the filing's metadata only; no filing text is ever stored.
+  for (const s of (item.signals ?? []).filter((x) => x.rule === 'filing').slice(0, lim.maxFilings ?? lim.maxEvents ?? 2)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(s.fileDate)) || !s.label) continue;
+    add(`An SEC filing matched a saved search: ${s.label}.`, [s.id, ...(s.evidence ?? [])]);
+  }
+
   // Timing: the metric signals that fired at this quarter, each from its rule type's template. A threshold signal for a level already stated adds nothing.
   for (const s of (item.signals ?? []).filter((x) => SIGNAL_TYPES.includes(x.rule) && !(x.rule === 'above' && statedLevels.has(x.metric))).slice(0, lim.maxSignals)) {
     const label = METRICS[s.metric]?.label;

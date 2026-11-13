@@ -8,6 +8,7 @@ import { readJson, writeJson, listFiles, audit } from './store.mjs';
 import { METRICS, CATEGORIES, SIGNAL_TYPES, computeMetrics, detectSignals, periodLabel, shiftQuarter,
   computeConcentration, detectConcentrationSignals, detectStructureSignals, addMonths, CONCENTRATION_TESTS, CONCENTRATION_NOTE, STRUCTURE_SIGNAL_KINDS } from './metrics.mjs';
 import { buildCard } from './candidates.mjs';
+import { filingSignals } from './sources/filings.mjs';
 
 const PLACEHOLDER = /\[confirm/i;
 const SECTORS = ['hospitality', 'multifamily', 'retail'];
@@ -102,6 +103,8 @@ export function validateScoring(scoring) {
   }
   const fw = scoring.failedBanks?.windowQuarters;
   if (fw !== undefined && !(Number.isInteger(fw) && fw >= 1)) errors.push('failedBanks.windowQuarters must be a whole number of 1 or more');
+  const sw = scoring.filings?.windowDays;
+  if (sw !== undefined && !(Number.isInteger(sw) && sw >= 1)) errors.push('filings.windowDays must be a whole number of 1 or more');
   return { ok: !errors.length, errors };
 }
 
@@ -306,9 +309,19 @@ export function tierFor({ score, axes, filtersFailed, tiers }) {
   return { tier: null, note: `score ${score} is below the Tier B threshold of ${B.score}` };
 }
 
+// SEC filing signals (E13-S1) are event signals: kept in sources/edgar/filings.json, shown while their file date is within windowDays of
+// asOf. With no asOf every one is kept. They carry rule 'filing' for the card, and add no points.
+export function detectFilingSignals({ signals = [], windowDays = 180, asOf = null }) {
+  const day = (d) => Date.parse(`${d}T00:00:00Z`);
+  return signals
+    .filter((s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s.fileDate)))
+    .filter((s) => !asOf || (day(s.fileDate) <= day(asOf) && (day(asOf) - day(s.fileDate)) / 86400000 <= windowDays))
+    .map((s) => ({ ...s, rule: 'filing' }));
+}
+
 // Scores one bank. Deterministic: no clock, no randomness, no model. `events` are the stored structure events where this bank is the
 // acquirer; `asOf` (YYYY-MM-DD) is the scoring date that decides which event signals are still in their window.
-export function scoreBank({ cert, institution = {}, footprint = {}, financials, scoring, buybox, metros, latestRepdte, events = [], asOf = null }) {
+export function scoreBank({ cert, institution = {}, footprint = {}, financials, scoring, buybox, metros, latestRepdte, events = [], filings = [], asOf = null }) {
   const fin = financials ?? { CERT: cert, quarters: {} };
   const series = computeMetrics(fin);
   const latestQ = series.quarters.at(-1) ?? null;
@@ -317,6 +330,7 @@ export function scoreBank({ cert, institution = {}, footprint = {}, financials, 
     ...detectSignals(series, scoring.signals ?? []),
     ...detectConcentrationSignals(computeConcentration(fin), scoring.concentration?.signals ?? [], String(cert)),
     ...detectStructureSignals({ cert: String(cert), events, rules: scoring.structureEvents?.signals ?? [], asOf }),
+    ...detectFilingSignals({ signals: filings, windowDays: scoring.filings?.windowDays ?? 180, asOf }),
   ];
   const profile = buildProfile({ financials: fin, footprint, institution, buybox, metros, scoring });
   const components = (scoring.components ?? []).map((c) => component(c, { series, latestQ, profile }));
@@ -372,7 +386,8 @@ export function runScoring({ dir, buybox, scoring, metros, now = new Date(), all
   const asOf = now.toISOString().slice(0, 10);
   const eventsBy = new Map();
   for (const e of Object.values(readJson(join(base, 'events.json'), {}))) if (e?.acquirerCert) { const k = String(e.acquirerCert); if (!eventsBy.has(k)) eventsBy.set(k, []); eventsBy.get(k).push(e); }
-  const items = certs.map((cert) => scoreBank({ cert, institution: institutions[cert] ?? {}, footprint: footprints[cert] ?? {}, financials: fin.get(cert) ?? null, scoring, buybox, metros, latestRepdte, events: eventsBy.get(cert) ?? [], asOf })).sort(byScore);
+  const filingsBy = filingSignals({ dir });   // {} until the SEC listener has run for a confirmed filer
+  const items = certs.map((cert) => scoreBank({ cert, institution: institutions[cert] ?? {}, footprint: footprints[cert] ?? {}, financials: fin.get(cert) ?? null, scoring, buybox, metros, latestRepdte, events: eventsBy.get(cert) ?? [], filings: filingsBy[`fdic:${cert}`] ?? [], asOf })).sort(byScore);
   const failedBanks = listFailedBanks({ failed: readJson(join(base, 'failed.json'), {}), scoring, metros, asOf });
   const runId = `score-${now.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')}`;
   const out = { runId, scoredAt: now.toISOString(), asOf, latestRepdte, buyboxHash: contentHash(buybox), scoringHash: contentHash(scoring), provisional: vb.placeholders.length > 0, placeholders: vb.placeholders, items, failedBanks };

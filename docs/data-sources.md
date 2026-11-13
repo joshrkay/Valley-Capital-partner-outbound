@@ -204,12 +204,12 @@ A source registry (`sources.json`) lists every source: cadence, hosts, key neede
 
 **Phase 1: free, no account, terms allow automation.** These can start now:
 
-1. **Fix failure detection.** Do not rely on `/failures` alone. Cross-check `/institutions` (inactive date) and the FDIC's failed-bank CSV, and add a verify check that flags a gap. Small.
-2. **EDGAR full-text listener.** Daily saved searches for 8-K Items 2.01 and 2.06, held-for-sale and loan-sale phrases, and DEF 14A officer names. It reuses the SEC client and pacing. **It waits for the User-Agent contact (Q11).**
+1. **Fix failure detection.** **Built** (PRD E3-S5). Do not rely on `/failures` alone. Cross-check `/institutions` (inactive date) and the FDIC's failed-bank CSV, and add a verify check that flags a gap. Small.
+2. **EDGAR full-text listener.** **Built** (PRD E13-S1); waits for the SEC contact (Q11) and confirmed filers. Daily saved searches for 8-K Items 2.01 and 2.06, held-for-sale and loan-sale phrases, and DEF 14A officer names. It reuses the SEC client and pacing. **It waits for the User-Agent contact (Q11).**
    - **Production searches** cover the SEC filer IDs (CIKs) of every bank in our candidate universe, **wherever it files from**. That universe includes banks headquartered outside our five states that have branches in our metros (PRD 4.1, A2). Mapping each bank to its filer, usually the holding company, is part of this story: through NIC's RSSD ID and the filer's name, confirmed by a principal when unsure.
    - **A separate discovery search** by filer state (our five states) finds banks not yet in the universe. Its hits go to a principal for review and never score directly.
-3. **FDIC structure and failures.** `/history` mergers involving our banks, the failed-bank CSV, and the FDIC loan-sale page.
-4. **Concentration screen.** Computed quarterly from bulk Call Report items with the guidance's definitions and denominator, and cross-checked against UBPR Page 7B. A pressure signal for scoring.
+3. **FDIC structure and failures.** **Built** (PRD E3-S5, E3-S6). `/history` mergers involving our banks, the failed-bank CSV, and the FDIC loan-sale page.
+4. **Concentration screen.** **Built from FDIC BankFind fields** (PRD E3-S7), so it needs no FFIEC download; the UBPR cross-check is still to do, and the guidance's definition is still Unconfirmed. Computed quarterly from bulk Call Report items with the guidance's definitions and denominator, and cross-checked against UBPR Page 7B. A pressure signal for scoring.
 5. **Colorado public trustees.** Adams weekly PDFs first, then Denver, Jefferson, Douglas and Broomfield.
 6. **Maricopa.** Recorder search for notices of trustee's sale, joined to the assessor's commercial file.
 

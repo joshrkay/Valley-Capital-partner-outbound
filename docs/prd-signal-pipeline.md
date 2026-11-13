@@ -715,6 +715,7 @@ Some sources report a dated change rather than a state: a filing, a notice, an o
 - [x] A new filer is searched back a year, once. Later runs start three days before the last one ended. `--since` searches every filer from a date.
 - [x] Proxy statements (DEF 14A) of confirmed filers are recorded by form, date and link, for the briefer. No names are extracted (E7).
 - [x] **A discovery search** finds bank filers not in the list. It searches by business-address state (our five) and bank SIC code. Its hits go to a for-review list (`outbound filers discovered`) and never become signals.
+- [x] **Into scoring:** each filing becomes an event signal on its bank's candidate (`detectFilingSignals` in `src/score.mjs`). It is shown while its file date is within `scoring.json` `filings.windowDays` (placeholder: 180), and stated on the card from a fixed template. It adds no points until a principal decides how filings should count.
 - [x] **E2:**
   - a fake shaped like the real responses (`test/edgar-search-fake.mjs`);
   - the run log;

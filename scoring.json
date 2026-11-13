@@ -102,7 +102,8 @@
     "maxCategories": 2,
     "maxDistress": 2,
     "maxSignals": 3,
-    "maxEvents": 2
+    "maxEvents": 2,
+    "maxFilings": 2
   },
   "signals": [
     {
@@ -199,6 +200,10 @@
   "failedBanks": {
     "_note": "Failed banks with a presence in the six metros (PRD E3-S5) are listed beside the candidates, with the FDIC as the seller of their loans. windowQuarters, how long one stays listed after it failed, is a PLACEHOLDER.",
     "windowQuarters": 8
+  },
+  "filings": {
+    "_note": "SEC filing signals (PRD E13-S1): each filing by a confirmed bank filer that matched a saved search in filings.json is an event signal, dated by its file date, kept in sources/edgar/filings.json. windowDays, how long it shows on the candidate and its card, is a PLACEHOLDER. Filing signals add no points: whether they should, and on which axis, is a principal's decision, as for the concentration screen and acquisitions.",
+    "windowDays": 180
   },
   "cmbs": {
     "_note": "CMBS loan signals (PRD E4-S3). A loan is 'maturing' when its maturity (or post-modification maturity) falls within maturityMonths. A placeholder, like every number here.",
