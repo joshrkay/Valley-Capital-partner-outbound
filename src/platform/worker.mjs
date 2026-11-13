@@ -5,13 +5,14 @@ import { join } from 'node:path';
 import { LOADS } from '../uow.mjs';
 import { readJson } from '../store.mjs';
 import { runFdic } from '../sources/fdic.mjs';
+import { runEdgar } from '../sources/edgar.mjs';
 import { runScoring } from '../score.mjs';
 import { runBriefer } from '../research.mjs';
 import { runDrafter } from '../draft.mjs';
 import { loadContext } from '../guard.mjs';
 import { researchGate } from '../pilot.mjs';
 
-export const JOB_KINDS = ['sources.fdic', 'score.run', 'research.run', 'draft.run'];
+export const JOB_KINDS = ['sources.fdic', 'sources.edgar', 'score.run', 'research.run', 'draft.run'];
 const ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const CHANNELS = ['email', 'letter', 'call', 'linkedin_note'];
 
@@ -30,6 +31,10 @@ export async function runJob({ client, job, rules, deps = {} }) {
     case 'sources.fdic': {
       const { result } = await client.unitOfWork(LOADS.sources, (dir) => runFdic({ dir, metros: rules.metros, includeHq: !!p.includeHq, fetchImpl: deps.fetchImpl ?? globalThis.fetch }), { retries: 0 });
       return { ok: result.outcome !== 'failed', summary: { outcome: result.outcome, banks: result.banks, latestRepdte: result.latestRepdte, newQuarter: result.newQuarter, missingFields: result.missingFields, changed: result.changed } };
+    }
+    case 'sources.edgar': {
+      const { result } = await client.unitOfWork(LOADS.sources, (dir) => runEdgar({ dir, metros: rules.metros, buybox: rules.buybox, scoring: rules.scoring, sec: rules.config.sec, fetchImpl: deps.fetchImpl ?? globalThis.fetch, now: deps.now?.() ?? new Date() }), { retries: 0 });
+      return { ok: result.outcome !== 'failed', summary: { outcome: result.outcome, cmbsTrusts: result.cmbsTrusts, loansRead: result.loansRead, loansKept: result.loansKept, servicers: result.servicers, notes: result.notes, changed: result.changed } };
     }
     case 'score.run': {
       const { result } = await client.unitOfWork(LOADS.score, (dir) => runScoring({ dir, buybox: rules.buybox, scoring: rules.scoring, metros: rules.metros, allowPlaceholders: !!p.draftBuybox, now: deps.now?.() ?? new Date() }));

@@ -105,6 +105,9 @@ test('the job queue: principals queue, only the worker claims and finishes, and 
   assert.match(id, /^\d+$/);
   assert.equal(as('authenticated', PAT, 'select * from claim_job()').ok, false, 'a principal cannot claim');
   assert.equal(as('authenticated', PAT, `select enqueue_job('send.email')`).ok, false, 'unknown kinds are refused');
+  const edgar = must(as('authenticated', PAT, `select enqueue_job('sources.edgar')`));
+  assert.match(edgar, /^\d+$/, 'the second migration adds the CMBS pull');
+  must(as('service_role', SERVICE, `update jobs set status = 'done' where id = ${edgar}`));
   const claimed = must(as('service_role', SERVICE, 'select id || \' \' || kind || \' \' || status || \' \' || requested_by from claim_job()'));
   assert.equal(claimed, `${id} score.run running pat@example.test`);
   assert.equal(must(as('service_role', SERVICE, 'select count(*) from claim_job()')), '0', 'nothing else is queued');

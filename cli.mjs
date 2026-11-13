@@ -5,6 +5,7 @@ import { dataDir } from './src/paths.mjs';
 import { loadRules } from './src/rules.mjs';
 import { readJson, readJsonl, writeJson, readText, listFiles, exists, safeId, audit } from './src/store.mjs';
 import { runFdic } from './src/sources/fdic.mjs';
+import { runEdgar } from './src/sources/edgar.mjs';
 import { runScoring } from './src/score.mjs';
 import { listCandidates, getCandidate, promote, dismiss, snooze } from './src/candidates.mjs';
 import { loadContext, checkTouch, recordObservedSend, recordEvent, addSuppression, dueList, touchFromAccount } from './src/guard.mjs';
@@ -39,6 +40,8 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
 
   Signals (PRD E2, E3): public data only. Nothing here contacts anyone.
   outbound sources run fdic [--include-hq]       bank list for the six metros, deposit footprint, 8 quarters of CRE credit data (free, no key)
+  outbound sources run edgar                      CMBS loans in the six metros and buy-box sectors, from each trust's monthly SEC filing,
+                                                  with workout codes and the special servicer (needs config.sec.userAgent filled in)
   outbound sources status                         the last run of each source, and the latest FDIC quarter seen
 
   Candidates (PRD E6): which banks, why now, and what paper they likely hold. A principal decides; nothing is contacted.
@@ -59,7 +62,7 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
 
   Platform (PRD E12): needs SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (the worker's key; never put it in the web app).
   outbound worker [--max N]                       run queued jobs until the queue is empty (or N have run); prints ids and outcomes only
-  outbound enqueue sources.fdic|score.run|research.run|draft.run [--account ID] [--channel C] [--step N] [--draft-buybox] [--include-hq]
+  outbound enqueue sources.fdic|sources.edgar|score.run|research.run|draft.run [--account ID] [--channel C] [--step N] [--draft-buybox] [--include-hq]
   outbound platform push [--from DIR]             copy a data folder into the platform (default: OUTBOUND_DATA_DIR); safe to re-run
   outbound platform pull --to DIR                 write everything back to a new or empty folder outside this repository
 `;
@@ -190,8 +193,8 @@ async function main() {
 
   if (cmd === 'sources') {
     if (sub === 'run') {
-      if (pos[2] !== 'fdic') throw new Error('Usage: outbound sources run fdic [--include-hq]. FDIC is the only source in Release 1.');
-      const r = await runFdic({ dir, metros: rules.metros, includeHq: !!flags['include-hq'] });
+      if (!['fdic', 'edgar'].includes(pos[2])) throw new Error('Usage: outbound sources run fdic [--include-hq] | outbound sources run edgar');
+      const r = pos[2] === 'fdic' ? await runFdic({ dir, metros: rules.metros, includeHq: !!flags['include-hq'] }) : await runEdgar({ dir, metros: rules.metros, buybox: rules.buybox, scoring: rules.scoring, sec: rules.config.sec });
       if (r.outcome === 'failed') process.exitCode = 1;
       return out(r);
     }

@@ -109,3 +109,20 @@ test('pull refuses the repository and a folder that is not empty', async () => {
   await assert.rejects(pull({ client: worker(fake), to: busy }), /not empty/);
   await assert.rejects(pull({ client: worker(fake) }), /--to DIR/);
 });
+
+test('the CMBS pull runs as a job: refused while the SEC contact is a placeholder, then run through a unit of work', async () => {
+  const { fakeSec } = await import('./edgar-fake.mjs');
+  const fake = fakePostgrest();
+  await pat(fake).enqueue('sources.edgar');
+  await work({ client: worker(fake), rules, deps: deps({ fetchImpl: fakeSec().fetchImpl }) });
+  assert.equal(fake.jobs[0].status, 'failed');
+  assert.match(fake.jobs[0].result.error, /sec\.userAgent is a placeholder/);
+
+  const filled = { ...rules, config: { ...rules.config, sec: { ...rules.config.sec, userAgent: 'Example Firm ops@example.test', minIntervalMs: 0, knownSpecialServicers: ['Example Special Servicing LLC'] } } };
+  await pat(fake).enqueue('sources.edgar');
+  await work({ client: worker(fake), rules: filled, deps: deps({ fetchImpl: fakeSec().fetchImpl }) });
+  assert.equal(fake.jobs[1].status, 'done', JSON.stringify(fake.jobs[1].result));
+  assert.deepEqual([fake.jobs[1].result.cmbsTrusts, fake.jobs[1].result.loansKept], [1, 2]);
+  assert.ok(fake.docs.has('sources/edgar/loans.json') && fake.docs.has('sources/edgar/servicers.json'));
+  assert.doesNotMatch(JSON.stringify(fake.jobs[1].result), /Example Apartments|Example Special/, 'the job result holds counts, not names');
+});

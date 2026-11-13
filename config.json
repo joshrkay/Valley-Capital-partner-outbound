@@ -13,6 +13,15 @@
       "auto_dialer": "No automated dialing."
     }
   },
+  "sec": {
+    "_note": "SEC EDGAR access for the CMBS adapter (PRD E4-S2). The SEC asks automated clients to name themselves with a contact (fair access policy [verify current wording]) and to stay under 10 requests a second; 150 ms between requests keeps well under. userAgent is a [CONFIRM] placeholder until a principal fills it (PRD Q11): firm name and a monitored contact email, e.g. \"Firm Name ops@firm-domain\". knownSpecialServicers is the reviewed list of special servicer firm names; a name the distribution report shows that is not on it is flagged in the run notes, never guessed. Seeded with the seven firm names that appeared as special servicer on distribution-report covers in the 2026-11-13 run (matching is by substring, so \"Midland Loan Services\" also covers its longer legal name). A principal should review the list; add a firm only after checking it.",
+    "userAgent": "[CONFIRM: firm name and contact email for SEC fair access]",
+    "minIntervalMs": 150,
+    "sinceDays": 45,
+    "maxEx102Bytes": 5000000,
+    "reportHeadBytes": 131072,
+    "knownSpecialServicers": ["LNR Partners, LLC", "Midland Loan Services", "CWCapital Asset Management LLC", "K-Star Asset Management LLC", "Rialto Capital Advisors, LLC", "National Cooperative Bank, N.A.", "C-IV Asset Management LLC"]
+  },
   "caps": {
     "firstTouchesPerSenderPerWeek": 15,
     "emailsPerSenderPerDay": 20,

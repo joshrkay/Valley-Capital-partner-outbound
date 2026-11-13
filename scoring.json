@@ -2,31 +2,161 @@
   "_note": "How banks are scored and tiered (PRD E3-S4, E6-S2, E6-S6). Every weight, `full` value, threshold and tier cut below is a PLACEHOLDER, not a researched figure: tune it from the principals' review of the first lists and, after 60 days, from outcomes. Each component sits on one axis: distress (is the institution under pressure), fit (is the paper it likely holds what the buy box buys, where we buy it) or timing (why now). A component earns weight x min(value / full, 1) points, never below 0; a missing value earns 0 and says why. Ratios are fractions (0.04 = 4%); changes are differences in that fraction. Tier A needs the total AND meaningful distress AND meaningful fit; Tier B needs the total only. Signals are evaluated at each bank's latest quarter. The scoring run records a hash of this file.",
   "lookbackQuarters": 8,
   "components": [
-    { "id": "buyboxNoncurrentRatio", "axis": "distress", "source": "profile", "measure": "buyboxNoncurrentRatio", "weight": 15, "full": 0.04 },
-    { "id": "creNoncurrentRatio", "axis": "distress", "metric": "creNoncurrentRatio", "weight": 10, "full": 0.04 },
-    { "id": "creNoncurrentYoY", "axis": "distress", "metric": "creNoncurrentRatio", "change": "yoy", "weight": 10, "full": 0.015 },
-    { "id": "creNonaccrualRatio", "axis": "distress", "metric": "creNonaccrualRatio", "weight": 5, "full": 0.03 },
-    { "id": "creOreoRatio", "axis": "distress", "metric": "creOreoRatio", "weight": 5, "full": 0.01 },
-    { "id": "creNoncurrentQoQ", "axis": "timing", "metric": "creNoncurrentRatio", "change": "qoq", "weight": 10, "full": 0.005 },
-    { "id": "earlyStageDelinquency", "axis": "timing", "metric": "earlyStageDelinquency", "weight": 10, "full": 0.015 },
-    { "id": "creNetChargeOffRate", "axis": "timing", "metric": "creNetChargeOffRate", "weight": 5, "full": 0.0025 },
-    { "id": "buyboxCreShare", "axis": "fit", "source": "profile", "measure": "buyboxCreShare", "weight": 10, "full": 0.6 },
-    { "id": "buyboxShareOfLoans", "axis": "fit", "source": "profile", "measure": "buyboxShareOfLoans", "weight": 10, "full": 0.5 },
-    { "id": "metroDepositShare", "axis": "fit", "source": "footprint", "weight": 10, "full": 0.5 }
+    {
+      "id": "buyboxNoncurrentRatio",
+      "axis": "distress",
+      "source": "profile",
+      "measure": "buyboxNoncurrentRatio",
+      "weight": 15,
+      "full": 0.04
+    },
+    {
+      "id": "creNoncurrentRatio",
+      "axis": "distress",
+      "metric": "creNoncurrentRatio",
+      "weight": 10,
+      "full": 0.04
+    },
+    {
+      "id": "creNoncurrentYoY",
+      "axis": "distress",
+      "metric": "creNoncurrentRatio",
+      "change": "yoy",
+      "weight": 10,
+      "full": 0.015
+    },
+    {
+      "id": "creNonaccrualRatio",
+      "axis": "distress",
+      "metric": "creNonaccrualRatio",
+      "weight": 5,
+      "full": 0.03
+    },
+    {
+      "id": "creOreoRatio",
+      "axis": "distress",
+      "metric": "creOreoRatio",
+      "weight": 5,
+      "full": 0.01
+    },
+    {
+      "id": "creNoncurrentQoQ",
+      "axis": "timing",
+      "metric": "creNoncurrentRatio",
+      "change": "qoq",
+      "weight": 10,
+      "full": 0.005
+    },
+    {
+      "id": "earlyStageDelinquency",
+      "axis": "timing",
+      "metric": "earlyStageDelinquency",
+      "weight": 10,
+      "full": 0.015
+    },
+    {
+      "id": "creNetChargeOffRate",
+      "axis": "timing",
+      "metric": "creNetChargeOffRate",
+      "weight": 5,
+      "full": 0.0025
+    },
+    {
+      "id": "buyboxCreShare",
+      "axis": "fit",
+      "source": "profile",
+      "measure": "buyboxCreShare",
+      "weight": 10,
+      "full": 0.6
+    },
+    {
+      "id": "buyboxShareOfLoans",
+      "axis": "fit",
+      "source": "profile",
+      "measure": "buyboxShareOfLoans",
+      "weight": 10,
+      "full": 0.5
+    },
+    {
+      "id": "metroDepositShare",
+      "axis": "fit",
+      "source": "footprint",
+      "weight": 10,
+      "full": 0.5
+    }
   ],
   "tiers": {
-    "A": { "score": 45, "distress": 15, "fit": 15 },
-    "B": { "score": 20 }
+    "A": {
+      "score": 45,
+      "distress": 15,
+      "fit": 15
+    },
+    "B": {
+      "score": 20
+    }
   },
-  "profile": { "directionThreshold": 0.001 },
-  "card": { "maxCategories": 2, "maxDistress": 2, "maxSignals": 3 },
+  "profile": {
+    "directionThreshold": 0.001
+  },
+  "card": {
+    "maxCategories": 2,
+    "maxDistress": 2,
+    "maxSignals": 3
+  },
   "signals": [
-    { "id": "cre-noncurrent-rising", "type": "rising", "metric": "creNoncurrentRatio", "quarters": 2, "label": "CRE noncurrent ratio up two quarters running" },
-    { "id": "first-cre-chargeoff", "type": "firstPositive", "metric": "creNetChargeOffs", "lookback": 8, "label": "First CRE net charge-off in eight quarters" },
-    { "id": "cre-oreo-up", "type": "rising", "metric": "creOreo", "quarters": 1, "label": "Commercial OREO up from last quarter" },
-    { "id": "early-stage-rising", "type": "rising", "metric": "earlyStageDelinquency", "quarters": 1, "label": "Early-stage CRE delinquency rising" },
-    { "id": "cre-noncurrent-high", "type": "above", "metric": "creNoncurrentRatio", "threshold": 0.03, "label": "CRE noncurrent ratio at or above 3%" },
-    { "id": "mf-noncurrent-rising", "type": "rising", "metric": "mfNoncurrentRatio", "quarters": 2, "label": "Multifamily noncurrent ratio up two quarters running" },
-    { "id": "mf-noncurrent-jump", "type": "changeAbove", "metric": "mfNoncurrentRatio", "over": "yoy", "threshold": 0.01, "label": "Multifamily noncurrent ratio up a point or more in a year" }
-  ]
+    {
+      "id": "cre-noncurrent-rising",
+      "type": "rising",
+      "metric": "creNoncurrentRatio",
+      "quarters": 2,
+      "label": "CRE noncurrent ratio up two quarters running"
+    },
+    {
+      "id": "first-cre-chargeoff",
+      "type": "firstPositive",
+      "metric": "creNetChargeOffs",
+      "lookback": 8,
+      "label": "First CRE net charge-off in eight quarters"
+    },
+    {
+      "id": "cre-oreo-up",
+      "type": "rising",
+      "metric": "creOreo",
+      "quarters": 1,
+      "label": "Commercial OREO up from last quarter"
+    },
+    {
+      "id": "early-stage-rising",
+      "type": "rising",
+      "metric": "earlyStageDelinquency",
+      "quarters": 1,
+      "label": "Early-stage CRE delinquency rising"
+    },
+    {
+      "id": "cre-noncurrent-high",
+      "type": "above",
+      "metric": "creNoncurrentRatio",
+      "threshold": 0.03,
+      "label": "CRE noncurrent ratio at or above 3%"
+    },
+    {
+      "id": "mf-noncurrent-rising",
+      "type": "rising",
+      "metric": "mfNoncurrentRatio",
+      "quarters": 2,
+      "label": "Multifamily noncurrent ratio up two quarters running"
+    },
+    {
+      "id": "mf-noncurrent-jump",
+      "type": "changeAbove",
+      "metric": "mfNoncurrentRatio",
+      "over": "yoy",
+      "threshold": 0.01,
+      "label": "Multifamily noncurrent ratio up a point or more in a year"
+    }
+  ],
+  "cmbs": {
+    "_note": "CMBS loan signals (PRD E4-S3). A loan is 'maturing' when its maturity (or post-modification maturity) falls within maturityMonths. A placeholder, like every number here.",
+    "maturityMonths": 18
+  }
 }

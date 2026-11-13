@@ -104,7 +104,7 @@ export function fakePostgrest({ principals = ['pat@example.test'] } = {}) {
       if (fn === 'flush_uow' || fn === 'enqueue_job') {
         if (!reader) return pgError(403, '42501', 'Not allowed: only an active principal or the service role may write.');
         if (fn === 'flush_uow') return flush(body.plan ?? {}, caller.name);
-        if (!['sources.fdic', 'score.run', 'research.run', 'draft.run'].includes(body.kind)) return pgError(400, '23514', 'new row for relation "jobs" violates check constraint "jobs_kind_check"');
+        if (!['sources.fdic', 'sources.edgar', 'score.run', 'research.run', 'draft.run'].includes(body.kind)) return pgError(400, '23514', 'new row for relation "jobs" violates check constraint "jobs_kind_check"');
         jobs.push({ id: ++jobId, kind: body.kind, params: body.params ?? {}, status: 'queued', requested_by: caller.name, result: null });
         return json(200, jobId);
       }
