@@ -167,7 +167,7 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 - [ ] Worker job `sources.enforcement`, monthly, with its migration and a line in the schedule.
 
 **E18-S3. Merger applications.** *As a principal, I want to hear about a bank merger when it is applied for, not when it closes, so that I can be in front of the acquirer before it decides what to do with the target's CRE book.* P1, Now.
-- [ ] Sources: the Federal Reserve's press-orders RSS (`federalreserve.gov/feeds/press_orders.xml`), the H.2 weekly release, and the OCC Weekly Bulletin. A spike first, as in S2.
+- [ ] Sources: the Federal Reserve's press-orders RSS (`federalreserve.gov/feeds/press_orders.xml`; the spike confirms the filename), the H.2 weekly release, and the OCC's Corporate Applications Search (`apps.occ.gov/CAS/`), which replaced the OCC Weekly Bulletin on December 19, 2025 and shows an application after a five-day delay **[verify]**. For state-chartered banks, which CAS never shows: the California DFPI Monthly Bulletin ("Bank Activity"), Colorado's monthly "Financial Institution Activity" bulletin, and the Texas Department of Banking's corporate filings with the Finance Commission's Corporate Division report **[verify]** (`docs/data-sources.md` 2.2, `docs/listening-sources.md`). A spike first, as in S2.
 - [ ] Each application becomes an event signal, `type: 'merger_pending'`, on the target and on the acquirer, with the filing, approval and, later, close dates.
 - [ ] When the merger closes and appears in `/history` (E3-S6), the existing structure event takes over, and the pending signal links to it. A test proves the merger is never counted twice.
 - [ ] A withdrawn or denied application ends the signal, with its date.
@@ -199,11 +199,11 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 - [ ] `outbound intermediaries build` rebuilds it from stored data only, with no fetching. **Feeders**, each a function from stored records to mandates:
   - the FDIC loan-sale announcements' advisor (E16-S2), as `loan_sale_advisor` for the FDIC as seller;
   - the CMBS special servicers (`sources/edgar/servicers.json`), as `special_servicer` for each trust, with the loans in our metros and sectors;
-  - listing advisors (E16-S8), when that feeder exists;
+  - listing advisors (E16-S8), when that feeder exists: DebtX, First Financial Network, Mission Capital and JLL Invest first, each once its terms are read (`docs/data-sources.md` 2.3). Their listings rarely name the seller. A described seller ("bank", "regional bank", "credit union") goes in an optional `sellerDescription`, shown to a principal and never used to match a bank: a described seller is never guessed into a `fdic:CERT`;
   - county records (E5), when they exist: the lender's counsel on a Colorado election and demand, and receivers in court filings (plan 3.2, step 2);
   - a principal's confirmation that a firm acted for a named seller, with the date and how they know it, audited with their name.
 - [ ] **Referrals are not mandates.** A `wrong_person` call outcome (E15-S2) says only that the person does not decide, and may say who does. When a principal enters the firm it names, it is stored as a **referral**: evidence of a route to that seller, kept apart from mandates. Referrals are shown on the firm's page and never count toward the ranking (S2). The model's free-text referral is never parsed into the registry.
-- [ ] A mandate is `{ intermediary, kind, seller, date, metro?, propertyType?, balance?, sources }`, and each one has a stable id, so a rebuild never counts one twice.
+- [ ] A mandate is `{ intermediary, kind, seller, sellerDescription?, date, metro?, propertyType?, balance?, sources }`, and each one has a stable id, so a rebuild never counts one twice.
 - [ ] No person's name, phone number or email address is stored. The FDIC adapter already cuts the contacts block off before parsing (E16-S2), and a test proves the registry holds none.
 
 **E19-S2. The ranking.** *As a principal, I want intermediaries ranked by how much of our market's selling they handle so that I spend relationship time where the flow is.* P1, R2.
@@ -370,6 +370,6 @@ Added to `docs/data-sources.md` section 7 when each adapter is built:
 |---|---|
 | Backtest | the FDIC and SEC hosts already listed |
 | Enforcement | www.federalreserve.gov, orders.fdic.gov, api.occ.gov, apps.occ.gov, dob.texas.gov **[verify]**, dfpi.ca.gov **[verify]** |
-| Merger applications | www.federalreserve.gov, www.occ.gov **[verify]** |
+| Merger applications | www.federalreserve.gov, apps.occ.gov (CAS), www.occ.gov **[verify]**; the state bulletins: dfpi.ca.gov, banking.colorado.gov, www.dob.texas.gov, www.fc.texas.gov **[verify]** |
 | NCUA | ncua.gov |
 | Non-bank spike | www.sec.gov, efts.sec.gov |

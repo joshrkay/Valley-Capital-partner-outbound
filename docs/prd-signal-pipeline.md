@@ -1082,6 +1082,7 @@ Rules across the epic:
 **E16-S8. Loan-sale listings.** *As a principal, I want loans and pools listed for sale in our metros recorded so that I see the supply, and who sells it when the listing says.* P2, R3.
 - [x] **The shape, with no adapter:** `listingEvent`. Site, listing id, date, title, advisor, property type, metro or county, balance, loan count, status, lien and bid date. The seller is usually unknown; the buyer is always unknown. Tier `observed`. A test proves the ledger accepts it.
 - [ ] The feeders, for listing sites and loan-sale advisors' sale notices, once a principal has read each site's terms (data-sources 2.3).
+  - Listing titles carry the metro and size; the seller is usually only described (data-sources 2.3). The first feeder adds an optional `sellerDescription` ("bank", "regional bank", "credit union") to `listingEvent`: shown to a principal, never used to match a bank, and never guessed into a `fdic:CERT`.
 
 **Decisions for a principal.**
 
