@@ -15,6 +15,7 @@ export default function RootLayout({ children }) {
           <div className="inner">
             <span className="brand">Valley Capital · outbound</span>
             <nav aria-label="Main">
+              <a href="/triage">This week</a>
               <a href="/candidates">Candidates</a>
               <a href="/servicers">Servicers</a>
               <a href="/accounts">Accounts</a>

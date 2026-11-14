@@ -1,5 +1,6 @@
 # The platform worker (PRD E12-S4, E11-S1). Runs queued jobs (data pulls, scoring, research, drafting) and queues the weekly FDIC
-# check, the monthly CMBS pull and the daily SEC filings listener, and verifies each against its source. Off until the platform exists: set the repository variable PLATFORM_ENABLED to "true", and the secrets SUPABASE_URL,
+# check (then scoring and the weekly triage, PRD E6-S5), the monthly CMBS pull and the daily SEC filings listener, and verifies each
+# against its source. Off until the platform exists: set the repository variable PLATFORM_ENABLED to "true", and the secrets SUPABASE_URL,
 # SUPABASE_SERVICE_ROLE_KEY and ANTHROPIC_API_KEY. The worker prints job ids, kinds and outcomes only; it never prints names, figures
 # or message text, and this workflow uploads no artifacts. A job queued from the web app waits for the next hourly run.
 name: platform worker
@@ -7,7 +8,8 @@ name: platform worker
 on:
   schedule:
     - cron: '17 12-23 * * 1-5'   # hourly on weekdays, 12:17 to 23:17 UTC: run whatever is queued
-    - cron: '41 13 * * 1'        # Mondays 13:41 UTC: queue the weekly check for a new FDIC quarter, then verify the FDIC data
+    - cron: '41 13 * * 1'        # Mondays 13:41 UTC: queue the weekly check for a new FDIC quarter, then scoring and the weekly triage,
+                                 # run them in that order, then verify the FDIC data
     - cron: '23 14 20 * *'       # the 20th, 14:23 UTC: queue the monthly CMBS pull (most trusts have filed by then), then verify it
     - cron: '37 23 * * 1-5'      # weekdays 23:37 UTC, after EDGAR's filing day: queue the SEC filings listener, then verify it.
                                  # Only once a principal sets the repository variable FILINGS_ENABLED to "true" (after filling the SEC contact
@@ -40,6 +42,17 @@ jobs:
       - name: Queue the weekly FDIC check
         if: ${{ github.event.schedule == '41 13 * * 1' }}
         run: node cli.mjs enqueue sources.fdic
+      # The weekly triage (PRD E6-S5) compares the candidate list with last week's, so scoring runs between the FDIC check and the
+      # triage: a new quarter's tiers and signals are then in this week's comparison. Jobs run oldest first. Scoring uses
+      # --draft-buybox, which matters only while buybox.json still has [CONFIRM] placeholders: the list is then labelled PROVISIONAL,
+      # instead of the job failing every Monday and the failed worker step skipping the FDIC checks below. Set the repository variable
+      # SCORING_STRICT to "true" to make the weekly scoring refuse instead, as `outbound score run` does. The triage is written to the
+      # platform only, for the principals; it is never sent.
+      - name: Queue scoring and the weekly triage, after the FDIC check
+        if: ${{ github.event.schedule == '41 13 * * 1' }}
+        run: |
+          node cli.mjs enqueue score.run ${{ vars.SCORING_STRICT != 'true' && '--draft-buybox' || '' }}
+          node cli.mjs enqueue triage.run
       - name: Queue the monthly CMBS pull
         if: ${{ github.event.schedule == '23 14 20 * *' }}
         run: node cli.mjs enqueue sources.edgar

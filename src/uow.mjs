@@ -19,6 +19,11 @@ export const LOADS = Object.freeze({
   draft: [...GUARD, 'accounts/', 'research/', 'facts/', 'drafts/'],
   sources: ['sources/'],
   score: ['sources/', 'candidates/'],
+  // The weekly triage (src/triage.mjs): the candidate list and decisions, accounts, the guard's log and suppression list, the run log, the
+  // few source files it reads, and its own snapshot. The day's two output files are added per run (triageLoads), so past triages are
+  // never loaded. No research or drafting action loads triage/, so the triage never reaches a brief or a message.
+  triage: ['candidates/', 'accounts/', 'suppression.json', 'touches.jsonl', 'sources/runs.jsonl', 'sources/fdic/state.json', 'sources/fdic/failed.json',
+    'sources/edgar/loans.json', 'sources/edgar/filings.json', 'sources/edgar/filers.json', 'triage/state.json'],
 });
 
 const covers = (prefix, rel) => prefix === '' || rel === prefix || (prefix.endsWith('/') && rel.startsWith(prefix)) || rel.startsWith(`${prefix}/`);

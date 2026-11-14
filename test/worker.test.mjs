@@ -126,3 +126,31 @@ test('the CMBS pull runs as a job: refused while the SEC contact is a placeholde
   assert.ok(fake.docs.has('sources/edgar/loans.json') && fake.docs.has('sources/edgar/servicers.json'));
   assert.doesNotMatch(JSON.stringify(fake.jobs[1].result), /Example Apartments|Example Special/, 'the job result holds counts, not names');
 });
+
+test('the weekly triage runs as a job after the FDIC pull and scoring: it writes only the day\'s triage and its snapshot, and its result holds counts', async () => {
+  const fake = fakePostgrest();
+  const monday = () => new Date('2026-11-16T14:00:00Z');
+  await pat(fake).enqueue('sources.fdic');
+  await pat(fake).enqueue('score.run', { draftBuybox: true });
+  await pat(fake).enqueue('triage.run');
+  const logged = [];
+  const done = await work({ client: worker(fake), rules, deps: deps({ now: monday }), log: (l) => logged.push(l) });
+  assert.deepEqual(done.map((d) => [d.kind, d.outcome]), [['sources.fdic', 'done'], ['score.run', 'done'], ['triage.run', 'done']]);
+  for (const p of ['triage/2026-11-16.json', 'triage/2026-11-16.md', 'triage/state.json']) assert.ok(fake.docs.has(p), p);
+  const job = fake.jobs[2];
+  assert.equal(job.result.firstRun, true);
+  assert.equal(typeof job.result.actNow, 'number');
+  assert.doesNotMatch(JSON.stringify(job.result), /Example|Bank|fdic:|servicer/, 'no institution name or key in a job result');
+  assert.equal(logged[2], `job ${job.id} triage.run done`);
+  // A week later it compares with that snapshot; past triages are not loaded.
+  await pat(fake).enqueue('triage.run', { since: '2026-11-20' });
+  await work({ client: worker(fake), rules, deps: deps({ now: () => new Date('2026-11-23T14:00:00Z') }) });
+  assert.equal(fake.jobs[3].status, 'done', JSON.stringify(fake.jobs[3].result));
+  assert.equal(fake.jobs[3].result.firstRun, false);
+  assert.equal(fake.docs.get('triage/2026-11-23.json').body.window.basis, 'since');
+  const loads = fake.calls.filter((c) => c.method === 'GET' && c.path === 'documents').map((c) => c.query.or ?? '').at(-1);
+  assert.doesNotMatch(loads, /triage\/2026-11-16/, 'the earlier triage is not loaded');
+  await pat(fake).enqueue('triage.run', { since: 'last week' });
+  await work({ client: worker(fake), rules, deps: deps({ now: () => new Date('2026-11-23T15:00:00Z') }) });
+  assert.match(fake.jobs[4].result.error, /--since needs a date/);
+});

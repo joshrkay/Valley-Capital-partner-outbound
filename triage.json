@@ -1,0 +1,63 @@
+{
+  "_note": "The weekly triage (PRD E6-S5): what changed since the last triage, grouped by institution and sorted into act now, watch or already in conversation. A rule file: NO prospect data lives here. Every value below is a PLACEHOLDER for a principal to review, not a researched figure. The triage is internal: it goes to the firm's principals only (the data folder and the web app), is never sent to anyone, and is never given to the drafter. The calendar decides when a principal looks, never what a message says (PRD E10-S1).",
+  "window": {
+    "_note": "The window starts at the last triage (or at --since YYYY-MM-DD). With no earlier triage it is the last defaultDays days. An event dated more than maxEventAgeDays before the triage is never reported as new, so a backfill (a newly confirmed filer, a newly read CMBS trust) does not flood the list. Both are PLACEHOLDERS.",
+    "defaultDays": 7,
+    "maxEventAgeDays": 90
+  },
+  "actNow": {
+    "_note": "What counts as ACT NOW: a strong event, or a move to Tier A, at an institution that is not in conversation, suppressed, opted out, dismissed or snoozed. cmbsNoteSale: a CMBS loan in our metros newly coded for a note sale (workout code 5); the servicer is the institution. failureInMetros: a bank failure with a presence in our metros; the FDIC is the seller. secFilingSearches: the saved searches in filings.json that mark a loan sale or a held-for-sale transfer. moveToTierA: a new Tier A candidate, or a move from Tier B to Tier A. concentrationOnTierA: concentration-screen signals (scoring.json) that are act now when they turn on at a Tier A bank. requirePassesFilters: a bank that fails a hard filter (assets over the cap, no longer active) is listed under watch instead; failures and servicers are not scored, so it does not apply to them. All PLACEHOLDERS.",
+    "cmbsNoteSale": true,
+    "failureInMetros": true,
+    "secFilingSearches": ["transferred-held-for-sale-cre", "loans-held-for-sale-cre", "loan-sale-cre", "note-sale-cre"],
+    "moveToTierA": true,
+    "concentrationOnTierA": ["concentration-construction", "concentration-cre"],
+    "requirePassesFilters": true
+  },
+  "watch": {
+    "_note": "What counts as WATCH: every other new signal (other SEC filings, acquisitions, CMBS loans newly in special servicing), Tier B movements (a new Tier B candidate, a move down from Tier A), and state signals that turned on. stateSignalTiers: state signals are compared only for banks in these tiers now or at the last triage. signalsOff: also list state signals that turned off. droppedOut: also list candidates that left Tiers A and B. All PLACEHOLDERS.",
+    "stateSignalTiers": ["A", "B"],
+    "signalsOff": true,
+    "droppedOut": true
+  },
+  "inConversation": {
+    "_note": "ALREADY IN CONVERSATION: an institution with one of these events in touches.jsonl. It is shown apart, with its latest touch date, and never in act now or watch. A PLACEHOLDER list; the guard's events are reply, opt_out, bounce, meeting and handoff.",
+    "events": ["reply", "meeting", "handoff"]
+  },
+  "optOut": {
+    "_note": "An institution with one of these events in touches.jsonl is counted and left out of every list, so neither the person nor the institution is ever surfaced again. Suppressed institutions (suppression.json) are left out the same way. A PLACEHOLDER list.",
+    "events": ["opt_out"]
+  },
+  "strength": {
+    "_note": "The order within a category, highest first; then the newest date. An institution takes the strength of its strongest finding. Which findings are act now is set above; these numbers only order them. PLACEHOLDERS.",
+    "cmbs-note-sale": 100,
+    "failure-in-metros": 95,
+    "sec-filing-strong": 90,
+    "new-tier-a": 85,
+    "tier-up-a": 80,
+    "concentration-tier-a": 75,
+    "sec-filing": 60,
+    "acquisition": 55,
+    "cmbs-special-servicing": 50,
+    "new-tier-b": 45,
+    "tier-down-b": 40,
+    "state-on": 35,
+    "dropped": 20,
+    "state-off": 10
+  },
+  "calendar": {
+    "_note": "Where we are in the calendar. reviewWindowWeeks: how long before each quarter-end the review window opens (PRD E10-S1 defaults to the 10th of the quarter's last month; this is a separate placeholder for the triage). callReportLagDays: how long after a quarter-end FDIC is expected to publish its Call Report data; on 2026-11-13 the September 30 quarter, 44 days old, was not yet out. cmbsReportingDay: the day of the month by which most CMBS trusts' monthly reports have landed (the worker pulls them on the 20th). All PLACEHOLDERS. Internal only: quarter-end never appears in a message.",
+    "reviewWindowWeeks": 6,
+    "callReportLagDays": 60,
+    "cmbsReportingDay": 15
+  },
+  "health": {
+    "_note": "System health: failed or suspect source runs in the window, and stale sources. A source is stale when its last ok run is older than staleDays (scoring: the last scoring run). PLACEHOLDERS, matched to the worker schedule: FDIC weekly, CMBS monthly, SEC filings daily on weekdays.",
+    "staleDays": {
+      "fdic": 8,
+      "edgar": 35,
+      "filings": 4,
+      "scoring": 8
+    }
+  }
+}

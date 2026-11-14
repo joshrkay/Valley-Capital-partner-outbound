@@ -12,6 +12,7 @@ import { suggestFilers, confirmFiler, rejectFiler, filerStatus } from './src/sou
 import { LOADS } from './src/uow.mjs';
 import { runScoring } from './src/score.mjs';
 import { listCandidates, getCandidate, promote, dismiss, snooze } from './src/candidates.mjs';
+import { runTriage, readTriage, renderTriage, triagePaths } from './src/triage.mjs';
 import { loadContext, checkTouch, recordObservedSend, recordEvent, addSuppression, dueList, touchFromAccount } from './src/guard.mjs';
 import { runBriefer } from './src/research.mjs';
 import { runDrafter, approveDraft } from './src/draft.mjs';
@@ -79,6 +80,12 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound candidates dismiss --key K --by NAME --reason TEXT      it returns only if a new signal fires
   outbound candidates snooze  --key K --by NAME --until YYYY-MM-DD
 
+  Weekly triage (PRD E6-S5): what changed since the last triage, for the firm's principals only. It is never sent to anyone.
+  outbound triage run [--since YYYY-MM-DD]       compare with the last triage: act now, watch, already in conversation (shown apart),
+                                                  who was left out (snoozed, dismissed, opted out, suppressed), the calendar and source
+                                                  health. Writes triage/<date>.json and .md and the snapshot triage/state.json
+  outbound triage show [--date YYYY-MM-DD]       print a stored triage (default: the latest)
+
   Pilot (PRD E1): check the briefer on accounts you already know before it researches any account the pipeline found.
   outbound pilot template --account ID            write a "what is true" sheet to fill in (pilot/ID.truth.json)
   outbound pilot review   --account ID            list the brief's findings and the verdicts recorded so far
@@ -90,7 +97,7 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound platform smoke                         check a new project with SUPABASE_URL and SUPABASE_ANON_KEY (the PUBLIC key only):
                                                   sign-ups off, every table and function present and refusing the public key
   outbound worker [--max N]                       run queued jobs until the queue is empty (or N have run); prints ids and outcomes only
-  outbound enqueue sources.fdic|sources.edgar|sources.filings|score.run|research.run|draft.run [--account ID] [--channel C] [--step N] [--draft-buybox] [--include-hq]
+  outbound enqueue sources.fdic|sources.edgar|sources.filings|score.run|triage.run|research.run|draft.run [--account ID] [--channel C] [--step N] [--draft-buybox] [--include-hq] [--since YYYY-MM-DD]
   outbound platform push [--from DIR]             copy a data folder into the platform (default: OUTBOUND_DATA_DIR); safe to re-run
   outbound platform pull --to DIR                 write everything back to a new or empty folder outside this repository
   outbound platform verify [fdic|edgar|filings] [--sample N]   the same checks on the platform's data (read-only); no spot-check list unless asked
@@ -155,7 +162,7 @@ async function main() {
     }
     if (cmd === 'enqueue') {
       if (!JOB_KINDS.includes(sub)) throw new Error(`Usage: outbound enqueue ${JOB_KINDS.join('|')}`);
-      const params = { ...(flags.account ? { account: flags.account } : {}), ...(flags.channel ? { channel: flags.channel } : {}), ...(flags.step ? { step: Number(flags.step) } : {}), ...(flags['draft-buybox'] ? { draftBuybox: true } : {}), ...(flags['include-hq'] ? { includeHq: true } : {}) };
+      const params = { ...(flags.account ? { account: flags.account } : {}), ...(flags.channel ? { channel: flags.channel } : {}), ...(flags.step ? { step: Number(flags.step) } : {}), ...(flags['draft-buybox'] ? { draftBuybox: true } : {}), ...(flags['include-hq'] ? { includeHq: true } : {}), ...(flags.since && flags.since !== true ? { since: flags.since } : {}) };
       return out(`Queued job ${await client.enqueue(sub, params)} (${sub}).`);
     }
     if (cmd === 'platform' && sub === 'push') return out(await push({ client, dir: flags.from && flags.from !== true ? flags.from : dataDir() }));
@@ -313,6 +320,19 @@ async function main() {
     }
     if (sub === 'dismiss') return out(dismiss({ dir, key: need(flags, 'key'), by: need(flags, 'by'), reason: need(flags, 'reason') }));
     if (sub === 'snooze') return out(snooze({ dir, key: need(flags, 'key'), by: need(flags, 'by'), until: need(flags, 'until') }));
+  }
+
+  if (cmd === 'triage') {   // internal, for the principals only: written to the data folder, never sent (PRD E6-S5, Q13)
+    if (sub === 'run') {
+      const r = runTriage({ dir, rules: rules.triage, metros: rules.metros, scoring: rules.scoring, since: flags.since, now: new Date() });
+      const p = triagePaths(dir, r.date);
+      return out(`${renderTriage(r)}\nWritten: ${p.json}, ${p.md} and the snapshot ${p.state}.`);
+    }
+    if (sub === 'show') {
+      if (flags.date === true) throw new Error('--date needs a date: YYYY-MM-DD.');
+      const t = readTriage({ dir, date: flags.date });
+      return out(t?.markdown ?? `No triage${flags.date ? ` for ${flags.date}` : ''} yet. Run: outbound triage run`);
+    }
   }
 
   if (cmd === 'pilot') {
