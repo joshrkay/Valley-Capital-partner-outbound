@@ -5,7 +5,7 @@
 import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { mount, writeJson, writeText, appendJsonl } from './store.mjs';
+import { mount, writeJson, writeText, appendJsonl, redactJsonl, safeId } from './store.mjs';
 
 // What each kind of action reads and writes. A prefix ending in "/" covers a folder; anything else is one exact path; "" is everything.
 // audit.jsonl is never listed: the engine only appends to it, and an append needs no load, so no action downloads the whole audit log.
@@ -33,7 +33,28 @@ export const LOADS = Object.freeze({
   triage: ['candidates/', 'accounts/', 'suppression.json', 'touches.jsonl', 'sources/runs.jsonl', 'sources/fdic/state.json', 'sources/fdic/failed.json',
     'sources/edgar/loans.json', 'sources/edgar/filings.json', 'sources/edgar/filers.json', 'triage/state.json'],
   sales: ['sources/', 'sales/'],   // the CMBS and FDIC loan-sale pulls rebuild the sale ledger (sales/ledger.json) when they finish
+  // Contact details (PRD E7-S3, src/accounts.mjs). contactLoads() narrows accounts/ and research/ to one account. Naming a person, an
+  // address, a phone or a street address reads the account's brief (a source can be one of its findings), the suppression list (a
+  // forgotten or opted-out person is never named again) and the vendor passes (a vendor as a source needs one).
+  person: ['accounts/', 'research/', 'suppression.json', 'contacts/vendors.json'],
+  // A domain: every account, because a domain another institution already holds is flagged for a principal (E9-S3).
+  domain: ['accounts/', 'research/'],
+  verify: ['accounts/', 'suppression.json', 'contacts/vendors.json'],
+  // A deletion request (src/forget.mjs) reads and scrubs every store that can hold a person, for every account. It is the only action
+  // that loads calls/, drafts/ and pilot/ whole. The audit log is never loaded or rewritten: it holds ids, codes and counts.
+  forget: ['accounts/', 'research/', 'facts/', 'briefs/', 'drafts/', 'calls/', 'pilot/', 'contacts/', 'suppression.json', 'touches.jsonl', 'outcomes.jsonl'],
+  // The vendor test harness (PRD E7-S2, src/vendors.mjs): the known list, the test reports and the recorded passes. No drafting or
+  // research action loads contacts/, so none of it reaches a brief or a message.
+  vendors: ['contacts/'],
 });
+
+// The contact actions' load lists, narrowed to one account where the action touches only that account.
+export function contactLoads(kind, id) {
+  safeId(id);
+  if (!['person', 'domain', 'verify'].includes(kind)) throw new Error(`Unknown contact action "${kind}".`);
+  const narrow = { 'research/': `research/${id}.json`, ...(kind === 'domain' ? {} : { 'accounts/': `accounts/${id}.json` }) };
+  return LOADS[kind].map((p) => narrow[p] ?? p);
+}
 
 const covers = (prefix, rel) => prefix === '' || rel === prefix || (prefix.endsWith('/') && rel.startsWith(prefix)) || rel.startsWith(`${prefix}/`);
 const kindOf = (rel) => (rel.endsWith('.jsonl') ? 'log' : rel.endsWith('.json') ? 'json' : 'text');
@@ -45,6 +66,7 @@ export function memoryBackend({ docs = {}, texts = {}, logs = {}, versions = {},
   const L = new Map(Object.entries(logs).map(([k, v]) => [k, v.map((x) => JSON.stringify(x))]));
   const appended = new Map();
   const dirty = new Set();
+  const loadedLines = new Map();   // path -> its lines as loaded, kept once a redaction touches the path, so the plan can say what changed
   const need = (rel, what) => {
     if (!loaded.some((p) => covers(p, rel))) throw new Error(`Unit of work: "${rel}" was not loaded, so it cannot be ${what}. Add it to the action's load list (src/uow.mjs, LOADS).`);
   };
@@ -60,6 +82,15 @@ export function memoryBackend({ docs = {}, texts = {}, logs = {}, versions = {},
       appended.get(rel).push(line);
     },
     readJsonl(rel) { need(rel, 'read'); return [...(L.get(rel) ?? []), ...(appended.get(rel) ?? [])].map((l) => JSON.parse(l)); },
+    // A loaded line that changes becomes a redaction in the plan; a line appended in this unit of work is simply appended as changed.
+    redactJsonl(rel, fn) {
+      need(rel, 'redacted');
+      let n = 0;
+      const apply = (lines) => lines.map((l) => { const next = JSON.stringify(fn(JSON.parse(l))); if (next !== l) n++; return next; });
+      if (L.has(rel)) { if (!loadedLines.has(rel)) loadedLines.set(rel, L.get(rel)); L.set(rel, apply(L.get(rel))); }
+      if (appended.has(rel)) appended.set(rel, apply(appended.get(rel)));
+      return n;
+    },
     listFiles(dir, ext) {
       const pre = under(dir);
       need(pre || '', 'listed');
@@ -83,7 +114,10 @@ export function memoryBackend({ docs = {}, texts = {}, logs = {}, versions = {},
       const docsOut = [...dirty].sort().map((path) => (D.has(path) ? { path, kind: 'json', body: JSON.parse(D.get(path)) } : { path, kind: 'text', text: T.get(path) }))
         .map((d) => ({ ...d, baseVersion: versions[d.path] ?? 0 }));
       const lines = [...appended.entries()].flatMap(([path, ls]) => ls.map((l) => ({ path, line: JSON.parse(l) })));
-      return { docs: docsOut, lines };
+      // One redaction per distinct line as loaded: the database rewrites every identical line at once.
+      const red = new Map();
+      for (const [path, before] of loadedLines) before.forEach((orig, i) => { const cur = L.get(path)[i]; if (cur !== orig && !red.has(`${path}\n${orig}`)) red.set(`${path}\n${orig}`, { path, old: JSON.parse(orig), new: JSON.parse(cur) }); });
+      return { docs: docsOut, lines, ...(red.size ? { redactions: [...red.values()] } : {}) };
     },
   };
 }
@@ -114,6 +148,7 @@ export function snapshotFromDir(dir, prefixes = ['']) {
 // Writes a plan to a data folder: the file-backed equivalent of the platform's flush, used by tests and by `platform pull`.
 export function applyPlanToDir(plan, dir) {
   for (const d of plan.docs) d.kind === 'json' ? writeJson(join(dir, d.path), d.body) : writeText(join(dir, d.path), d.text);
+  for (const r of plan.redactions ?? []) { const old = JSON.stringify(r.old); redactJsonl(join(dir, r.path), (l) => (JSON.stringify(l) === old ? r.new : l)); }
   for (const l of plan.lines) appendJsonl(join(dir, l.path), l.line);
 }
 
@@ -128,7 +163,7 @@ export async function withUnitOfWork({ load, flush }, prefixes, fn) {
   try {
     const result = await fn(root);
     const plan = backend.plan();
-    if (plan.docs.length || plan.lines.length) await flush(plan);
+    if (plan.docs.length || plan.lines.length || plan.redactions?.length) await flush(plan);
     return { result, plan };
   } finally {
     unmount();

@@ -5,6 +5,7 @@ import { period, num } from '../../../lib/format.mjs';
 import { NotAuthorized, Problem, Markdown } from '../../ui.jsx';
 import { setPersonAction, confirmRoleAction, queueResearchAction, queueDraftAction } from '../actions.js';
 import { Calls } from './calls.jsx';
+import { Contact } from './contact.jsx';
 
 export default async function Account({ params }) {
   const ctx = await requirePrincipal();
@@ -55,6 +56,8 @@ export default async function Account({ params }) {
           {drafts.length ? <ul className="small">{drafts.map((x) => <li key={`${x.step}-${x.channel}`}>Step {x.step}, {x.channel}: {x.status}{x.approvedBy ? ` by ${x.approvedBy}` : ''}</li>)}</ul> : null}
         </div>
       </div>
+
+      <Contact client={ctx.client} id={a.id} />
 
       {pipe ? (
         <>

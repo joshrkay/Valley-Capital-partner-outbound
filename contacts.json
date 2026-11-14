@@ -1,0 +1,12 @@
+{
+  "_note": "Contact finding and verification (PRD E7-S2, E7-S3). A rule file: NO prospect data lives here. Every value below is a PLACEHOLDER for a principal to set (decisions D-C1 to D-C4 in docs/prd-signal-pipeline.md), not a researched figure. reverifyDays: a verification lasts this many days from the day a principal made it; after that the guard treats the address as unverified until it is verified again (D-C1). requireMx: verifying an address looks up its domain's MX record in DNS, and refuses an address whose domain publishes none, or a null MX (D-C3). No mail server is ever contacted, with or without it. loadRules() also gives this file to the guard as config.contacts.",
+  "reverifyDays": 180,
+  "requireMx": true,
+  "vendorPass": {
+    "_note": "A contact-data vendor is used only after a principal records a pass (outbound contacts vendor-pass), and a pass is refused unless the vendor's latest test (outbound contacts vendor-test) meets every threshold here (D-C2). minSample: people on the known list (contacts/known.json in the data folder) with a name and an institution. minCorrectEmailRate: the vendor's address equals ours, out of the known people who have an address. maxWrongEmailRate: the vendor's address differs from ours, out of the addresses it gave for them (a wrong address reaches the wrong person or bounces). minTitleCurrentRate: the vendor's title equals ours, out of the known people who have a title. All PLACEHOLDERS.",
+    "minSample": 50,
+    "minCorrectEmailRate": 0.9,
+    "maxWrongEmailRate": 0.03,
+    "minTitleCurrentRate": 0.8
+  }
+}

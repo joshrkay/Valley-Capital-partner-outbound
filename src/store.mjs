@@ -62,6 +62,27 @@ export function appendJsonl(p, obj) {
   appendFileSync(p, JSON.stringify(obj) + '\n');
 }
 
+// The one exception to append-only logs (PRD E7-S3): a deletion request blanks values in log lines that mention the person.
+// fn(line) returns the line unchanged, or a copy in which some values are REDACTED; it never adds or drops a key. Returns how many
+// lines changed. On disk the file is rewritten atomically; on the platform the plan carries each redaction (src/uow.mjs), and the
+// database accepts nothing but that shape (supabase/migrations/20261114200000_log_redaction.sql).
+export const REDACTED = '[removed]';
+export function redactJsonl(p, fn) {
+  const r = route(p);
+  if (r) return r.backend.redactJsonl(r.rel, fn);
+  if (!existsSync(p)) return 0;
+  let n = 0;
+  const out = readFileSync(p, 'utf8').split('\n').filter(Boolean).map((l) => {
+    const line = JSON.parse(l);
+    const next = fn(structuredClone(line));
+    if (JSON.stringify(next) === JSON.stringify(line)) return l;
+    n++;
+    return JSON.stringify(next);
+  });
+  if (n) { const tmp = `${p}.tmp-${process.pid}`; writeFileSync(tmp, `${out.join('\n')}\n`); renameSync(tmp, p); }
+  return n;
+}
+
 export const readJsonl = (p) => {
   const r = route(p);
   if (r) return r.backend.readJsonl(r.rel);

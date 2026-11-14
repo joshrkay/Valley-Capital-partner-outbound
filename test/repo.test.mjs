@@ -60,15 +60,25 @@ test('every configured model has a price, so cost is always reported', () => {
   for (const k of ['research', 'structure', 'audit', 'draft']) assert.ok(m.prices[m[k].model], `${k}: no price for ${m[k].model}`);
 });
 
+// A tracked file that belongs in the data folder. `sources/` is anchored to the root because src/sources/ is code; the data folder's
+// sources/ would sit at the root of a misplaced data dir. The data-folder names are checked for data formats only: web/app/accounts/page.jsx
+// is a route, not an account. contacts/ holds the known list and vendor tests (PRD E7-S2); contacts.json at the root is a rule file.
+const dataFormat = (f) => /(\.(json|jsonl|md|txt)|\/[^/.]+)$/.test(f);
+const isDataFile = (f) => /(^|\/)(suppression\.json|touches\.jsonl|audit\.jsonl|senders\.json|runs\.jsonl|changes\.jsonl|KILL|\.env)$/.test(f)
+  || (dataFormat(f) && /(^|\/)(accounts|research|briefs|drafts|facts|data|candidates|pilot|paper|triage|sales|contacts)\//.test(f))
+  || /^sources\//.test(f);
+
+test('DATA RULE: the rule knows every data folder, contacts/ included, and leaves code and rule files alone', () => {
+  for (const f of ['contacts/known.json', 'contacts/vendors.json', 'contacts/vendor-tests/contact-co-2026-11-14.md', 'x/contacts/known.json', 'accounts/acme.json', 'pilot/acme.truth.json', 'suppression.json', 'sources/fdic/state.json'])
+    assert.equal(isDataFile(f), true, f);
+  for (const f of ['contacts.json', 'web/app/accounts/[id]/contact.jsx', 'web/app/accounts/page.jsx', 'src/sources/fdic.mjs', 'src/forget.mjs', 'test/forget.test.mjs'])
+    assert.equal(isDataFile(f), false, f);
+});
+
 test('DATA RULE: no prospect data file is tracked in git in this repository', () => {
   let files;
   try { files = execFileSync('git', ['ls-files'], { cwd: REPO, encoding: 'utf8' }).split('\n').filter(Boolean); } catch { return; }   // no git: skip
-  // `sources/` is anchored to the root because src/sources/ is code; the data folder's sources/ would sit at the root of a misplaced data dir.
-  // The data-folder names are checked for data formats only: web/app/accounts/page.jsx is a route, not an account.
-  const dataFormat = (f) => /(\.(json|jsonl|md|txt)|\/[^/.]+)$/.test(f);
-  const bad = files.filter((f) => /(^|\/)(suppression\.json|touches\.jsonl|audit\.jsonl|senders\.json|runs\.jsonl|changes\.jsonl|KILL|\.env)$/.test(f)
-    || (dataFormat(f) && /(^|\/)(accounts|research|briefs|drafts|facts|data|candidates|pilot|paper|triage|sales)\//.test(f))
-    || /^sources\//.test(f));
+  const bad = files.filter(isDataFile);
   // Database dumps and spreadsheet exports are how prospect data most often leaks. Invented test fixtures may use them under test/fixtures/.
   // Schema SQL is allowed in supabase/migrations/ and test/sql/; a seed file, or SQL anywhere else, is not.
   const schemaSql = (f) => /^supabase\/migrations\/[^/]+\.sql$/.test(f) || /^test\/sql\/[^/]+\.sql$/.test(f);

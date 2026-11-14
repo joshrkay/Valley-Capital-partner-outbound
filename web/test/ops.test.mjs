@@ -83,12 +83,13 @@ test('naming the person resets the role; confirming needs a name first', async (
   const { fake, client } = setup();
   seed(fake, 'accounts/alpha-bank.json', { id: 'alpha-bank', name: 'Alpha Bank', type: 'bank', person: { name: '' }, contact: { roleConfirmed: false } });
   await assert.rejects(ops.confirmRole(client, { id: 'alpha-bank', by: 'Pat' }), /no named person yet/);   // the engine's own rule (src/accounts.mjs)
-  await ops.setPerson(client, { id: 'alpha-bank', name: 'Jordan Sample', title: 'Chief Credit Officer', by: 'Pat' });
+  await assert.rejects(ops.setPerson(client, { id: 'alpha-bank', name: 'Jordan Sample', title: 'Chief Credit Officer', by: 'Pat' }), /Where the name came from is required/);   // PRD E7-S3
+  await ops.setPerson(client, { id: 'alpha-bank', name: 'Jordan Sample', title: 'Chief Credit Officer', by: 'Pat', source: { kind: 'principal_known' } });
   await ops.confirmRole(client, { id: 'alpha-bank', by: 'Pat' });
   const a = fake.docs.get('accounts/alpha-bank.json').body;
   assert.deepEqual([a.person.name, a.contact.roleConfirmed, a.contact.roleConfirmedBy], ['Jordan Sample', true, 'Pat']);
   assert.ok(fake.lines.some((l) => l.line.type === 'person_set') && fake.lines.some((l) => l.line.type === 'role_confirmed'));
-  await assert.rejects(ops.setPerson(client, { id: '../etc', name: 'x', by: 'Pat' }), /Invalid id|was not loaded/);
+  await assert.rejects(ops.setPerson(client, { id: '../etc', name: 'x', by: 'Pat', source: { kind: 'principal_known' } }), /Invalid id|was not loaded/);
 });
 
 test('research on a pipeline account is refused until the pilot passes, then queued as a job', async () => {

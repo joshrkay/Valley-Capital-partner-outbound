@@ -23,10 +23,11 @@ Start with `docs/prd-signal-pipeline.md` for the pipeline, and `docs/research-ag
 - **Counsel has not reviewed any of it,** including the claims and the channel rules.
 - **The FDIC adapter has run live** (2026-11-13): 268 banks, 8 quarters to June 30, 2026, about 7 seconds, public data with no key. The scoring weights, thresholds and tier cuts in `scoring.json` are **placeholders**. The buy box (`buybox.json`) has `[CONFIRM]` fields a principal must fill. Until then `score run` refuses, or with `--draft-buybox` it labels its list PROVISIONAL.
 - **The CMBS adapter has run live** on 40 trusts (2026-11-13) with a generic User-Agent. `config.sec.userAgent` stays a `[CONFIRM]` placeholder, and the adapter refuses to run until a principal fills it with the firm's name and contact (PRD Q11).
-- **The platform is built but not deployed.** The migration and its access rules pass 10 tests on Postgres 16 (`npm run test:db`). The client, worker and web app are tested against a fake of Supabase's REST API; the first run against a real project is E12-S7, which needs a Supabase project and a Vercel team (PRD Q17, Q18).
+- **The platform is built but not deployed.** The migrations and their access rules pass 16 tests on Postgres 16 (`npm run test:db`). The client, worker and web app are tested against a fake of Supabase's REST API; the first run against a real project is E12-S7, which needs a Supabase project and a Vercel team (PRD Q17, Q18).
 - **Not built yet:**
   - county records (PRD E5; the spike first);
-  - servicers as scored candidates (E4-S3), and contact details (E7);
+  - servicers as scored candidates (E4-S3);
+  - a contact-data vendor's API (E7-S2 tests a vendor's exported results; no vendor is wired in);
   - deploying the platform (E12-S7);
   - Gmail drafts and reply detection (E9);
   - quarterly nurture (E10);
@@ -75,7 +76,7 @@ npm run outbound -- candidates list --tier A             # tier, score by axis, 
 npm run outbound -- candidates show --key fdic:12345     # the paper profile and every score component, each with its FDIC field and date
 npm run outbound -- candidates promote --key fdic:12345 --by "Pat Example"
 npm run outbound -- research run --account <id>          # institution research: brings back who decides (refused until the pilot passes)
-npm run outbound -- account set-person --account <id> --name "..." --title "..." --by "Pat Example"
+npm run outbound -- account set-person --account <id> --name "..." --title "..." --by "Pat Example" --finding F3   # the candidate's finding in the brief
 ```
 
 Behind a proxy, Node's built-in `fetch` needs `NODE_USE_ENV_PROXY=1` (Node 22.21 or later).
@@ -180,6 +181,24 @@ npm run outbound -- outcomes report                                     # which 
 - **The report** (`reports/outcomes-<date>.json`) counts confirmed outcomes by signal type, tier and lead time. It uses no model and never changes the weights.
 
 On the platform, the account page does the same: queue a brief, paste notes, confirm or reject.
+
+### Contact details and deletion requests (PRD E7)
+
+Every person field records where it came from, and an address is used only once a principal has verified it:
+
+```bash
+npm run outbound -- account set-person --account acme-bank --name "..." --title "..." --by "Pat Example" --finding F3   # or --url, or --source principal_known
+npm run outbound -- account add-domain --account acme-bank --domain acmebank.example --url https://acmebank.example/contact --by "Pat Example"
+npm run outbound -- account set-email --account acme-bank --email name@acmebank.example --url https://acmebank.example/leadership --by "Pat Example"
+npm run outbound -- account verify-email --account acme-bank --by "Pat Example" --method institution_site --url https://acmebank.example/leadership
+npm run outbound -- account contact --account acme-bank     # each field and its source; the address's state; the domains
+```
+
+- **Verifying** runs checks that must all pass: the syntax, a recorded source, a business address, a domain the account has confirmed, and an MX record for the domain, which is one DNS lookup. It also checks the address is not suppressed. Then it records how you know the address: seen on the bank's own site, they wrote from it, you know it, or a vendor with a recorded pass. **No mail server is ever contacted.** A verification lasts `contacts.json` `reverifyDays` (a placeholder, 180). After that, or for a different address, the guard refuses the email (`EMAIL_UNVERIFIED`). An address with no source of its own is refused too (`EMAIL_UNSOURCED`).
+- **A deletion request**, `account forget-person --account ID --by NAME --reason TEXT --confirm "ACCOUNT NAME"`, removes the person from every record in the data folder: accounts, research, briefs, facts, drafts, calls, the pilot sheets, the known list, and any note in the touch log. The touch log keeps its events. The person stays suppressed as hashes, never as plain text, so they are never contacted or named again. One audit line records the account, who, when and counts. PRD E7-S3 lists each store and how it is handled.
+- **Vendors** are tested before anyone pays (E7-S2). Write `contacts/known.json` in the data folder (people we know: name, institution, email, title, asOf). Then run `contacts vendor-test --vendor NAME --results export.csv`, and `contacts vendor-pass --vendor NAME --by NAME`, which records a pass only if the latest test meets the thresholds in `contacts.json` (placeholders). Without a pass, a vendor cannot be a source.
+
+On the platform, the account page's contact section does the same. The deletion needs the account's name typed, and migration `20261114200000_log_redaction.sql` lets it reach the touch log.
 
 ### The weekly triage (PRD E6-S5)
 
