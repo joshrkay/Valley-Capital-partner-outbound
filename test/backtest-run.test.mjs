@@ -115,7 +115,7 @@ test('HOLDOUT: scored once with --holdout and recorded; a second holdout run wit
   assert.throws(() => run(dir, { mode: 'holdout', scoringPaths: [alt, alt] }), /one scoring file/);
   // Moving the holdout after runs were made on another split is shown on the report.
   const moved = run(dir, { rules: rulesWith({ holdoutFrom: '2023-12-31' }) });
-  assert.deepEqual(moved.report.holdoutMovedFrom, ['2023-09-30']);
+  assert.deepEqual(moved.report.holdoutMovedFrom, ['quarter:2023-09-30']);
   assert.match(readFileSync(moved.paths.md, 'utf8'), /The holdout moved/);
 });
 
@@ -361,7 +361,7 @@ test('HORIZONS SIDE BY SIDE: one ranking, a label counted within each reported h
   assert.deepEqual(bh.map((b) => b.observations), [head(report).observations, head(report).observations, head(report).observations], 'the same bank-quarters at every horizon');
   assert.deepEqual(report.inputs.horizonsReported, [2, 4, 8]);
   assert.match(readFileSync(paths.md, 'utf8'), /### By horizon/);
-  assert.match(summarize(report), /by horizon: 2q lift/);
+  assert.match(summarize(report), /by horizon \(common sample, [^)]*\): 2q lift/);
   const one = run(dir, { rules: rulesWith({ horizonsReported: undefined }) });
   assert.doesNotMatch(readFileSync(one.paths.md, 'utf8'), /### By horizon/, 'one horizon, no table');
   assert.throws(() => run(dir, { rules: rulesWith({ horizonsReported: [0] }) }), /horizonsReported/);
@@ -386,4 +386,47 @@ test('the mode says banks, not quarters, when the holdout is by bank', async () 
   assert.match(run(dir, { rules: bankRules() }).report.modeLabel, /^training banks/);
   assert.match(run(dir, { mode: 'holdout', rules: bankRules() }).report.modeLabel, /^HELD-OUT banks/);
   assert.match(run(dir).report.modeLabel, /^training quarters/);
+});
+
+test('HORIZONS ON A COMMON SAMPLE: every horizon uses only the quarters whose longest horizon has complete labels', async () => {
+  const dir = await world();
+  // Labels are complete through NOW (2026-11-14). A 12-quarter horizon from 2023-12-31 ends 2026-12-31, after it: that quarter is left out.
+  const { report, paths } = run(dir, { rules: rulesWith({ holdoutFrom: '2099-12-31', horizonsReported: [2, 4, 12] }) });
+  const res = report.results[0];
+  assert.deepEqual([res.horizonSample.quarters, res.horizonSample.left, res.horizonSample.to], [7, 1, '2023-09-30']);
+  const n = res.byHorizon.map((b) => b.observations);
+  assert.ok(n.every((x) => x === n[0]), 'the same bank-quarters at every horizon');
+  assert.ok(n[0] < head(report).observations, 'the incomplete quarter is left out of the horizon table, not of the headline');
+  assert.match(readFileSync(paths.md, 'utf8'), /1 later quarter\(s\) are left out here/);
+  const none = run(dir, { rules: rulesWith({ holdoutFrom: '2099-12-31', horizonsReported: [4, 40] }) });
+  assert.equal(none.report.results[0].horizonSample.quarters, 0);
+  assert.match(readFileSync(none.paths.md, 'utf8'), /cannot be compared on a common sample/);
+});
+
+test('ERAS PARTITION THE PANEL: overlaps and repeated ids are refused, and quarters outside every era get their own row', async () => {
+  const dir = await world();
+  const r2 = (eras) => run(dir, { rules: rulesWith({ holdoutFrom: '2099-12-31', eras }) });
+  assert.throws(() => r2([{ id: 'a', from: '2022-03-31', to: '2022-12-31' }, { id: 'b', from: '2022-12-31', to: '2023-12-31' }]), /overlap/);
+  assert.throws(() => r2([{ id: 'a', from: '2022-03-31', to: '2022-06-30' }, { id: 'a', from: '2023-03-31', to: '2023-12-31' }]), /unique/);
+  const { report, paths } = r2([{ id: 'early', label: 'Early', from: '2022-03-31', to: '2022-09-30' }]);
+  const be = report.results[0].byEra;
+  assert.deepEqual(be.map((e) => [e.label, e.quarters]), [['Early', 3], ['Outside every era', 5]]);
+  assert.equal(be.reduce((a, e) => a + e.observations, 0), head(report).observations, 'every bank-quarter is in exactly one row');
+  assert.match(readFileSync(paths.md, 'utf8'), /Outside every era/);
+});
+
+test('BANK-SPLIT WORDING: compare, rolling, reused and moved holdouts speak of banks, and a moved seed names both splits', async () => {
+  const dir = await world();
+  const a = join(makeDir(), 'a.json'); writeFileSync(a, JSON.stringify(base.scoring));
+  const b = join(makeDir(), 'b.json'); writeFileSync(b, JSON.stringify(weighted('creNoncurrentYoY', 0)));
+  assert.match(readFileSync(run(dir, { mode: 'compare', scoringPaths: [a, b], rules: bankRules() }).paths.md, 'utf8'), /Side by side \(training banks only\)/);
+  assert.match(readFileSync(run(dir, { mode: 'rolling', rules: bankRules() }).paths.md, 'utf8'), /training banks only \(the held-out banks are left out\)/);
+  run(dir, { mode: 'holdout', rules: bankRules() });
+  const re = run(dir, { mode: 'holdout', rules: bankRules(), scoringPaths: [b] });
+  assert.match(readFileSync(re.paths.md, 'utf8'), /These held-out banks were scored before/);
+  assert.match(summarize(re.report), /these held-out banks were scored before/);
+  const moved = run(dir, { rules: bankRules({ holdout: { ...BANK_SPLIT, seed: 'changed' } }) });
+  const md = readFileSync(moved.paths.md, 'utf8');
+  assert.match(md, /Earlier runs used a bank holdout \(share 0\.5, seed "test-seed"\); this one uses a bank holdout \(share 0\.5, seed "changed"\)/);
+  assert.doesNotMatch(md, /null/);
 });

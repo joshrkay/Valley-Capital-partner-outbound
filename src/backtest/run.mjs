@@ -143,16 +143,25 @@ function results({ obs, byQuarter, topByQuarter, scoring, file, opts, horizons =
   });
   const context = { label: CONTEXT_LABEL, tiers: { A: cell(obs.filter((o) => o.tier === 'A'), opts.minLabels), B: cell(obs.filter((o) => o.tier === 'B'), opts.minLabels), untiered: cell(obs.filter((o) => !o.tier), opts.minLabels) } };
   // The same groups at each reported horizon (D-B1), and the headline horizon in each era: a pooled figure is never read alone.
-  const byHorizon = horizons.map((h) => {
-    const f = figures(atHorizon(obs, h), { ...opts, horizon: h });
-    const incomplete = [...new Set(obs.map((o) => o.asOf))].filter((d) => labelsAsOf && horizonEnd(d, h) > labelsAsOf).length;
-    return { horizon: h, headline: h === opts.horizon, incompleteQuarters: incomplete, ...f };
-  });
+  // Every horizon is computed on the same bank-quarters: the as-of quarters whose LONGEST reported horizon ends by the labels' date.
+  // Otherwise a long horizon would count still-unobservable events as unlabelled more often than a short one, and the difference
+  // would read as the score being early or late when it is only label availability.
+  const maxH = Math.max(...horizons);
+  const allQ = [...new Set(obs.map((o) => o.asOf))].sort();
+  const commonQ = new Set(allQ.filter((d) => !labelsAsOf || horizonEnd(d, maxH) <= labelsAsOf));
+  const common = obs.filter((o) => commonQ.has(o.asOf));
+  const byHorizon = horizons.map((h) => ({ horizon: h, headline: h === opts.horizon, ...figures(atHorizon(common, h), { ...opts, horizon: h }) }));
+  const horizonSample = { quarters: commonQ.size, from: [...commonQ][0] ?? null, to: [...commonQ].at(-1) ?? null, left: allQ.length - commonQ.size, longest: maxH };
+  // The eras partition the evaluated quarters: validateEras refuses overlaps, and quarters outside every era get a row of their own.
   const byEra = eras.map((e) => {
     const sub = obs.filter((o) => o.asOf >= e.from && o.asOf <= e.to);
     return { id: e.id, label: e.label ?? e.id, from: e.from, to: e.to, quarters: new Set(sub.map((o) => o.asOf)).size, ...figures(sub, opts) };
   });
-  return { scoring: { path: file.path, hash: file.hash }, headline, byHorizon, byEra, components, context, byQuarter, topByQuarter };
+  if (eras.length) {
+    const outside = obs.filter((o) => !eras.some((e) => o.asOf >= e.from && o.asOf <= e.to));
+    if (outside.length) { const q = [...new Set(outside.map((o) => o.asOf))].sort(); byEra.push({ id: '(outside every era)', label: 'Outside every era', from: q[0], to: q.at(-1), quarters: q.length, outside: true, ...figures(outside, opts) }); }
+  }
+  return { scoring: { path: file.path, hash: file.hash }, headline, byHorizon, horizonSample, byEra, components, context, byQuarter, topByQuarter };
 }
 
 // ---- The holdout (D-B5) ---------------------------------------------------------------------------------------------------------
@@ -184,6 +193,9 @@ export function validateEras(eras) {
   for (const e of eras) {
     if (!String(e?.id ?? '').trim() || !QE.test(String(e.from ?? '')) || !QE.test(String(e.to ?? '')) || e.to < e.from) throw new Error(`config.backtest.eras: each era needs an id and quarter-end dates from <= to (got ${JSON.stringify(e)}).`);
   }
+  const ids = eras.map((e) => e.id);
+  if (new Set(ids).size !== ids.length) throw new Error(`config.backtest.eras: era ids must be unique (got ${ids.join(', ')}).`);
+  for (let i = 1; i < eras.length; i++) if (eras[i].from <= eras[i - 1].to) throw new Error(`config.backtest.eras: eras must be in order and must not overlap (${eras[i - 1].id} ends ${eras[i - 1].to}, ${eras[i].id} starts ${eras[i].from}), or a bank-quarter would be counted twice.`);
   return eras;
 }
 
@@ -279,7 +291,7 @@ export function runBacktest({ dir, rules, mode = 'training', scoringPaths = [], 
   const prior = holdoutLog.filter((l) => l.scoringHash !== files[0].hash && (byBank ? priorKey(l) === split.key : priorKey(l)?.startsWith('quarter:') && (l.quarters ?? []).some((q) => holdout.includes(q))));
   const reusedHoldout = touchesHoldout && prior.length > 0;
   const earlierRuns = readJsonl(bp.runs);
-  const movedFrom = [...new Set(earlierRuns.map(priorKey).filter((h) => h && h !== split.key).map((h) => (h.startsWith('quarter:') ? h.slice(8) : h)))];
+  const movedFrom = [...new Set(earlierRuns.map(priorKey).filter((h) => h && h !== split.key))];
 
   const notes = [
     'Groups are ranked over the whole universe each quarter; the strata and the metro subset count which of their banks were in each group.',
@@ -356,13 +368,17 @@ const strataRow = (name, f) => `| ${name} | ${f.observations} | ${f.labelledBank
 const STRATA_HEAD = ['| | Bank-quarters | Labelled banks | Base rate | Top K yield | Top K lift | Top K captured | Tier A distress yield | Tier A distress lift | |', '|---|---|---|---|---|---|---|---|---|---|'];
 const cellText = (c) => `${c.observations} | ${c.labelled} | ${pct(c.rate)}${c.tooFewToTune ? ' (too few to tune on)' : ''}`;
 
+const splitText = (key) => { const [by, a, ...b] = String(key).split(':'); return by === 'bank' ? `a bank holdout (share ${a}, seed "${b.join(':')}")` : `a quarter holdout from ${a}`; };
+
 export function renderReport(r) {
   const L = [];
   L.push(r.provisional ? `# PROVISIONAL: backtest of the score, report ${r.hash}` : `# Backtest of the score, report ${r.hash}`, '');
   if (r.provisional) L.push(`**PROVISIONAL.** The buy box still has placeholders (${r.placeholders.join(', ')}). The hard filters ran with it as it stands. The headline figures do not use fit, but the context table does.`, '');
   L.push(`Mode: ${r.modeLabel}. Generated ${r.generatedAt}. The known limits at the end apply to every figure.`, '');
-  if (r.reusedHoldout) L.push(`**REUSED HOLDOUT.** These holdout quarters were scored before with a different scoring file (report ${r.reusedFrom.join(', ')}). Its figures are no longer an unseen test, and a _calibration note should not cite them.`, '');
-  if (r.holdoutMovedFrom.length) L.push(`**The holdout moved.** Earlier runs used holdoutFrom ${r.holdoutMovedFrom.join(', ')}; this one uses ${r.inputs.holdoutFrom}. Quarters that were in an earlier holdout may have been looked at.`, '');
+  const bank = r.split?.by === 'bank';
+  const what = bank ? 'held-out banks' : 'holdout quarters';
+  if (r.reusedHoldout) L.push(`**REUSED HOLDOUT.** These ${what} were scored before with a different scoring file (report ${r.reusedFrom.join(', ')}). Its figures are no longer an unseen test, and a _calibration note should not cite them.`, '');
+  if (r.holdoutMovedFrom.length) L.push(`**The holdout moved.** Earlier runs used ${r.holdoutMovedFrom.map(splitText).join('; ')}; this one uses ${splitText(r.inputs.holdout ?? `quarter:${r.inputs.holdoutFrom}`)}. ${bank ? 'Banks' : 'Quarters'} that were in an earlier holdout may have been looked at.`, '');
   const i = r.inputs;
   L.push('## Inputs', '',
     ...i.scoring.map((s) => `- Scoring file: ${s.path} (hash ${s.hash})`),
@@ -380,7 +396,7 @@ export function renderReport(r) {
     const [a, b] = r.results;
     const row = (name, fa, fb) => `| ${name} | ${fa} | ${fb} |`;
     const ha = a.headline.all, hb = b.headline.all;
-    L.push('## Side by side (training quarters only)', '', `| | ${a.scoring.path} | ${b.scoring.path} |`, '|---|---|---|',
+    L.push(`## Side by side (${r.split?.by === 'bank' ? 'training banks' : 'training quarters'} only)`, '', `| | ${a.scoring.path} | ${b.scoring.path} |`, '|---|---|---|',
       row('Scoring hash', a.scoring.hash, b.scoring.hash), row('Base rate', pct(ha.baseRate), pct(hb.baseRate)),
       row('Top K yield', pct(ha.groups.topK.yield), pct(hb.groups.topK.yield)), row('Top K lift', lift(ha.groups.topK.lift), lift(hb.groups.topK.lift)),
       row('Top K share captured', pct(ha.groups.topK.captured), pct(hb.groups.topK.captured)),
@@ -389,13 +405,18 @@ export function renderReport(r) {
   }
   for (const res of r.results) {
     const h = res.headline;
-    L.push(`## Headline: ${res.scoring.path} (distress and timing points only; fit left out)`, '', ...(r.mode === 'rolling' ? ['Pooled over every as-of quarter, the holdout included; the folds below are the test windows.', ''] : []), ...figureLines(h.all, ''));
+    L.push(`## Headline: ${res.scoring.path} (distress and timing points only; fit left out)`, '', ...(r.mode === 'rolling' ? [r.split?.by === 'bank' ? 'Pooled over every as-of quarter, training banks only (the held-out banks are left out); the folds below are the test windows.' : 'Pooled over every as-of quarter, the holdout included; the folds below are the test windows.', ''] : []), ...figureLines(h.all, ''));
     if (res.byEra?.length) L.push('### By era (the headline horizon)', '', 'The pooled figure above mixes eras. Read it with this table.', '',
       '| Era | As-of quarters | Bank-quarters | Labelled banks | Base rate | Top K yield | Top K lift | Top K captured | Median lead | |', '|---|---|---|---|---|---|---|---|---|---|',
       ...res.byEra.map((e) => `| ${e.label} (${e.from} to ${e.to}) | ${e.quarters} | ${e.observations} | ${e.labelledBanks} | ${pct(e.baseRate)} | ${pct(e.groups.topK.yield)} | ${lift(e.groups.topK.lift)} | ${pct(e.groups.topK.captured)} | ${e.leadTime.median ?? '–'} | ${e.tooFewToTune ? e.note : 'enough to read'} |`), '');
-    if ((res.byHorizon ?? []).length > 1) L.push('### By horizon', '', 'The same ranking, with a label counted when it falls within each horizon. Strong at long horizons and weak at short ones means the score is early; the reverse, late.', '',
-      '| Horizon (quarters) | Base rate | Top K yield | Top K lift | Top K captured | Median lead | Labelled banks | Quarters with incomplete labels |', '|---|---|---|---|---|---|---|---|',
-      ...res.byHorizon.map((b) => `| ${b.horizon}${b.headline ? ' (headline)' : ''} | ${pct(b.baseRate)} | ${pct(b.groups.topK.yield)} | ${lift(b.groups.topK.lift)} | ${pct(b.groups.topK.captured)} | ${b.leadTime.median ?? '–'} | ${b.labelledBanks}${b.tooFewToTune ? ' (too few to tune on)' : ''} | ${b.incompleteQuarters} |`), '');
+    if ((res.byHorizon ?? []).length > 1) {
+      const hs = res.horizonSample;
+      L.push('### By horizon', '', hs.quarters
+        ? `The same ranking, with a label counted when it falls within each horizon. Every horizon is computed on the same ${hs.quarters} as-of quarter(s), ${hs.from} to ${hs.to}: those whose longest horizon (${hs.longest} quarters) ends by the labels' date.${hs.left ? ` The ${hs.left} later quarter(s) are left out here, so this table does not match the headline exactly.` : ''} On this common sample, strong at long horizons and weak at short ones means the score is early; the reverse, late.`
+        : `No as-of quarter has a complete ${hs.longest}-quarter horizon yet, so the horizons cannot be compared on a common sample.`, '');
+      if (hs.quarters) L.push('| Horizon (quarters) | Base rate | Top K yield | Top K lift | Top K captured | Median lead | Labelled banks |', '|---|---|---|---|---|---|---|',
+        ...res.byHorizon.map((b) => `| ${b.horizon}${b.headline ? ' (headline)' : ''} | ${pct(b.baseRate)} | ${pct(b.groups.topK.yield)} | ${lift(b.groups.topK.lift)} | ${pct(b.groups.topK.captured)} | ${b.leadTime.median ?? '–'} | ${b.labelledBanks}${b.tooFewToTune ? ' (too few to tune on)' : ''} |`), '');
+    }
     L.push('### By label coverage', '', ...STRATA_HEAD, strataRow('With a confirmed SEC filer', h.bySecFiler.withFiler), strataRow('Without one', h.bySecFiler.withoutFiler), '', h.bySecFiler.note, '');
     L.push(`### The metro subset: ${h.metro.size.observations} bank-quarters, ${h.metro.size.banks} banks (a small sample)`, '', ...STRATA_HEAD, strataRow('All in the subset', h.metro.all), strataRow('With a confirmed SEC filer', h.metro.bySecFiler.withFiler), strataRow('Without one', h.metro.bySecFiler.withoutFiler), '', h.metro.note, '');
     L.push('### Per component', '', 'For each component, the labelled rate among bank-quarters where it scored more than 0, against the rest.', '',
@@ -420,14 +441,14 @@ export function summarize(r) {
   const lines = [];
   if (r.provisional) lines.push('PROVISIONAL: the buy box still has placeholders.');
   lines.push(`Backtest report ${r.hash}: ${r.modeLabel}, ${r.quarters.evaluated.length} as-of quarter(s) from ${r.quarters.evaluated[0]} to ${r.quarters.evaluated.at(-1)}, horizon ${r.inputs.horizonQuarters}, K ${r.inputs.topK}.`);
-  if (r.reusedHoldout) lines.push('REUSED HOLDOUT: these holdout quarters were scored before with a different scoring file.');
+  if (r.reusedHoldout) lines.push(`REUSED HOLDOUT: these ${r.split?.by === 'bank' ? 'held-out banks' : 'holdout quarters'} were scored before with a different scoring file.`);
   for (const res of r.results) {
     const h = res.headline.all;
     lines.push(`${res.scoring.path} (${res.scoring.hash}): Base rate ${pct(h.baseRate)} of ${h.observations} bank-quarters, ${h.labelledBanks} labelled bank(s).${h.tooFewToTune ? ` ${h.note}.` : ''}`,
       `  top ${h.groups.topK.k} by distress and timing: observed-label yield ${pct(h.groups.topK.yield)}, lift ${lift(h.groups.topK.lift)}, share of observed labels captured ${pct(h.groups.topK.captured)}; median lead time ${h.leadTime.median ?? '–'} quarter(s)`,
       `  distress at or above ${h.groups.tierADistress.threshold}: yield ${pct(h.groups.tierADistress.yield)}, lift ${lift(h.groups.tierADistress.lift)}, captured ${pct(h.groups.tierADistress.captured)}`);
     for (const e of res.byEra ?? []) lines.push(`  era ${e.label}: base rate ${pct(e.baseRate)}, top K yield ${pct(e.groups.topK.yield)}, lift ${lift(e.groups.topK.lift)}, ${e.labelledBanks} labelled bank(s)${e.tooFewToTune ? ' (too few to tune on)' : ''}`);
-    if ((res.byHorizon ?? []).length > 1) lines.push(`  by horizon: ${res.byHorizon.map((b) => `${b.horizon}q lift ${lift(b.groups.topK.lift)}`).join(', ')}`);
+    if ((res.byHorizon ?? []).length > 1 && res.horizonSample?.quarters) lines.push(`  by horizon (common sample, ${res.horizonSample.from} to ${res.horizonSample.to}): ${res.byHorizon.map((b) => `${b.horizon}q lift ${lift(b.groups.topK.lift)}`).join(', ')}`);
   }
   const off = Object.entries(r.labelKinds).filter(([, x]) => x.status === 'unavailable').map(([k]) => k);
   if (off.length) lines.push(`Unavailable label kinds: ${off.join(', ')} (see the report).`);
