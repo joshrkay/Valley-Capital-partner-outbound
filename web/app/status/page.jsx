@@ -1,6 +1,7 @@
 import { requirePrincipal } from '../../lib/session.mjs';
-import { statusOverview } from '../../lib/ops.mjs';
-import { when } from '../../lib/format.mjs';
+import { statusOverview, coverageOverview } from '../../lib/ops.mjs';
+import { coverageCard } from '../../lib/coverage-view.mjs';
+import { when, period } from '../../lib/format.mjs';
 import { NotAuthorized, Problem } from '../ui.jsx';
 import { queueSourcesAction, queueScoreAction, queueEdgarAction } from './actions.js';
 
@@ -11,6 +12,9 @@ export default async function Status() {
   if (ctx.denied) return <NotAuthorized email={ctx.email} />;
   let s;
   try { s = await statusOverview(ctx.rest, ctx.client); } catch (e) { return <Problem text={`Status could not be loaded: ${e.message}`} />; }
+  // The coverage card reads its own documents; if it cannot, the rest of the page still shows.
+  let cov = null, covError = null;
+  try { cov = coverageCard(await coverageOverview(ctx.client)); } catch (e) { covError = e.message; }
   const killed = s.kill.config || s.kill.document;
   const edgar = s.edgar;
   return (
@@ -22,6 +26,25 @@ export default async function Status() {
         <form action={queueEdgarAction} className="inline"><button type="submit">Queue CMBS pull (SEC EDGAR)</button></form>
         <form action={queueScoreAction} className="inline"><label className="row" style={{ flexDirection: 'row', alignItems: 'center' }}><input type="checkbox" name="draftBuybox" /> draft buy box (PROVISIONAL list)</label><button type="submit">Queue scoring</button></form>
       </div>
+      <h2>Signal coverage</h2>
+      <p className="sub">{cov?.intro ?? 'Which candidates each signal source can see, from stored data only.'}{cov?.asOf && !cov.note ? ` Candidates from the latest scoring run, data as of ${period(cov.asOf)}.` : ''}{cov?.provisional && !cov.note ? ' PROVISIONAL: the buy box still has placeholders, so the tiers are not final.' : ''}</p>
+      {covError ? <div className="banner error">Coverage could not be computed: {covError}</div> : null}
+      {cov ? (
+        <>
+          {cov.note ? <div className="banner warn">{cov.note}</div> : null}
+          <div className="scroll"><table>
+            <thead><tr><th>Source</th>{cov.columns.map((c) => <th key={c.id} className="num">{c.label}</th>)}</tr></thead>
+            <tbody>{cov.rows.map((r) => (
+              <tr key={r.id}>
+                <td className={r.sub ? 'small' : undefined} style={r.sub ? { paddingLeft: 24 } : undefined}>{r.label}<span className="src">{r.basis}{r.detail ? ` ${r.detail}` : ''}</span></td>
+                {r.cells.map((t, i) => <td key={i} className={`num${r.built ? '' : ' muted'}`}>{t}</td>)}
+              </tr>
+            ))}</tbody>
+          </table></div>
+          {cov.notRunNote ? <p className="muted small">{cov.notRunNote}</p> : null}
+        </>
+      ) : null}
+
       <h2>CMBS loan data (SEC EDGAR)</h2>
       {edgar.failure ? <div className="banner error">The last EDGAR pull failed: {edgar.failure.text}</div> : null}
       <div className="panel">
