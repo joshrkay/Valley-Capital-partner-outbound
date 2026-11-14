@@ -180,6 +180,7 @@ Rules that apply everywhere:
 | E12 Platform foundation | R2 | P0 | E1–E6 (built) |
 | E13 Event listeners | R2 | P1 | E2, E3, E12 |
 | E14 The paper estimate | R2 | P0 | E3, E4, E6 |
+| E16 Who sells to whom | R2 | P1 | E3, E4, E12, E13 |
 
 ---
 
@@ -739,6 +740,104 @@ Some sources report a dated change rather than a state: a filing, a notice, an o
 ### E14. The paper estimate
 
 *As a principal, I want one page per candidate that estimates what CRE the lender holds — how much, which property types, where, what sizes, when it matures, whether the lender already sells, and how much fits our buy box — with every number tiered as reported, observed or inferred, so that I go into the first call knowing the paper.* The design, the critical-detail checklist and stories E14-S1 to S6 are in `docs/paper-estimate.md`. P0 for E14-S1 (data in hand), R2.
+
+### E16. Who sells to whom
+
+**Why.** A lender that has sold loans before is the warmest prospect there is. The known buyers show who the firm competes with. Completed sales give price evidence. Today those facts are spread over four sources, or not kept at all: a CMBS loan that is liquidated drops out of the next month's report.
+
+**The design, in one paragraph.** One **sale ledger**, `sales/ledger.json` in the data folder, holds every sale event any source shows. Each event has a stable id, so a rebuild never counts one twice. `outbound sales build` rebuilds it from stored data only; nothing in the build fetches. The CMBS run and the FDIC loan-sale run rebuild it when they finish. Each source is a **feeder**: a function from stored records to events. Later sources plug in as feeders, and two of them already have their event shape. The ledger answers three questions for a principal: who has sold, who has bought, and at what recovery. It never answers them in a message.
+
+**The event.** Built in `src/sales.mjs`; `validateEvent` checks each one before it enters the ledger.
+- `id`, `kind` and `date` (YYYY-MM-DD).
+- `seller` and `buyer`: `{ kind, key?, name }`. The kinds are `bank` (key `fdic:CERT`), `servicer` (key `servicer:<slug>`), `trust` (key `cmbs-trust:CIK`), `fdic` (key `fdic-receiver`), `other` (a named party that is none of these, such as a fund that took an assignment), and `unknown`. A CMBS trust's seller carries `via`: the special servicer that acted for it.
+- `asset`: `{ kind: loan | pool | bank | unknown, propertyType, metro or county, balance }`, in dollars, with `balanceBasis` saying where the balance came from.
+- `priceEvidence` (CMBS only, optional).
+- `tier`: `reported` (the seller or a regulator reported it) or `observed` (built from a record we can see), as in `docs/paper-estimate.md`, section 3.
+- `sources`: `[{ source, ids, link, date }]`.
+- `firstSeenAt`, `supported`, and a `_source` block for the build.
+
+**Rules.**
+- No invented facts. A buyer no source names is `unknown`, and the check refuses an event that names one for a kind whose sources never do. Only a whole-bank deal and a recorded assignment can name a buyer.
+- An implied recovery is labelled approximate and carries `isPrice: false`. The check refuses one without the label.
+- Property names and addresses are kept in the ledger for a principal. They never go in the run log. In the change log, a change to them is recorded by field name only.
+- Every event is context for a principal only. A test proves no event, signal, label, party, property, price or source reaches the drafter.
+
+**E16-S1. CMBS completed dispositions.** *As a principal, I want every CMBS loan in our metros and sectors that is liquidated recorded as a sale, with its servicer and its loss, so that I know which special servicers sell and at what recovery.* P1, R2. **Built** (`src/sources/edgar.mjs`, `sources/edgar/dispositions.json`).
+- [x] The adapter stores, on each loan: `liquidationPrepaymentCode` (item 2(i)(1), with the schema's 11 meanings), `liquidationPrepaymentDate`, `realizedLossToTrustAmount`, the full `workoutStrategyCode` list (the schema lets it repeat; the old parser kept only the last), `originatorName`, `originationDate`, `originalLoanAmount`, `originalTermLoanNumber`, and `reportPeriodBeginningScheduleLoanBalanceAmount`.
+- [x] A field check counts how many kept loans lack each of these optional fields (`state.json` `fieldCoverage`, and the run log's `nullCounts`). A value that is present but malformed is a run note.
+- [x] Each loan keeps a **workout history**: every code it has shown, with the first period seen, carried from run to run.
+- [x] A curtailment (codes 1, 10 and 11) is a partial payment. The loan keeps its signals. Before, any liquidation code silenced them.
+- [x] A kept loan whose report shows code **3** (disposition) or **6** (DPO) is written to `dispositions.json` and kept for good. The loan leaves the next report, so the month that carries the code is the only chance to see it.
+- [x] Kind: `note_sale_completed` if workout code 5 (note sale) is in the loan's history or current report; else `dpo` for code 6; else `disposition`. A disposition may be an REO sale or a foreclosure, and the event says so.
+- [x] Seller: the trust, through its special servicer, by firm name. Buyer: unknown.
+- [x] Price evidence: the balance before liquidation, the realized loss, and an implied recovery = 1 − loss ÷ balance.
+  - The balance is the report's beginning scheduled balance: the realized loss is defined against it (item 2(h)). Without it, the previous report's ending balance is used, and the event says which.
+  - The magnitude of the loss is used, because filers differ on its sign; a negative figure is flagged. A missing loss or balance gives no value, with the reason. A zero loss gives 1, and says so.
+  - Labelled approximate: the loss is net of liquidation expenses and can include advances. It is never shown as the price.
+- [ ] Check live, on a few trusts, how often each field is filled, and which sign filers use for the loss. The coverage counts are in each run's state. *(Not run yet: the live SEC request was not permitted in the session that built this.)*
+
+**E16-S2. FDIC loan-sale announcements.** *As a principal, I want each FDIC loan sale recorded, with its dates, the failed banks behind it and the pools, so that I see the FDIC's sales as they are announced.* P1, R2. **Built** (`src/sources/fdicsales.mjs`, `outbound sources run fdicsales`, worker job `sources.fdicsales`).
+- [x] **Checked live on 2026-11-14** (nine requests to www.fdic.gov, a few a minute at most):
+  - `robots.txt` allows `/asset-sales/` and sets `Crawl-delay: 1`.
+  - The loan-sales page lists the current sales under "Loan Sales Event(s)". Each links a sale page under `/asset-sales/events/`.
+  - A sale page has an Event Date field, a Key Dates table (row labels vary), a sentence naming the receivership with the loan count and UPB, portfolio paragraphs, the loan-sale advisor's firm name, and then named contacts with phone numbers and email addresses.
+  - The announcement PDF is FlateDecode text in simple fonts. Node's zlib reads it, with no new dependency. Its first lines give the announcement date, which the page does not.
+- [x] **Results and buyers: not published where we can read them.** The loan-sales page links "FDIC Closed Loan Sales" (January 2010 on), an application on `sales.fdic.gov`. This environment's network refused that host. `/asset-sales/historical-sales` links the same application and lists no results itself. So only announcements are recorded, and every buyer is unknown.
+- [x] Per sale: the id and name, the event and key dates (due diligence, calculation date, bid deadline, closing), the receiverships, the loan count and UPB, the portfolio and pool sentences, the data's as-of date, the advisor's firm name, and the PDF link. The announcement date comes from the PDF when its text can be read; a PDF that cannot be read is kept as a link only.
+- [x] Each receivership is matched to `sources/fdic/failed.json` by name (legal suffixes ignored) and state, and by city when two banks share a name. Two candidates leave it unmatched, with both listed. Nothing is guessed.
+- [x] **Gentle.** `robots.txt` is read first, and only paths it allows are read; a `robots.txt` that cannot be read stops the run. Requests are at least `config.fdic.minIntervalMs` apart (placeholder 20 seconds, so three a minute), or the Crawl-delay if longer. At most `maxEvents` sale pages a run. A PDF is read once, when it is new or its link changes.
+- [x] `config.fdic.userAgent` is a placeholder; the run refuses while it is one, and refuses an email address at a personal domain.
+- [x] The contacts block is cut off before anything is parsed. A test proves no person, phone number or email address is stored.
+- [x] E2: a fake shaped like the real pages (`test/fdicsales-fake.mjs`), the run log, a field check (a sale page without its id, dates or receivership fails the run and writes nothing), the change log, and `outbound sources verify fdicsales` (fresh, every listed sale stored, every record sourced and free of contacts).
+- [ ] Ask whether the closed-sales application may be read, and whether it names buyers (D-S1). If it does, results become events with the buyer named.
+
+**E16-S3. Sales banks disclose to the SEC.** *As a principal, I want a bank's filing that reports a completed sale or disposition recorded as a sale so that a bank that sells is on the "has sold" list.* P1, R2. **Built**, from the stored records of the filings listener (E13-S1), read only.
+- [x] Each hit of `8k-acquisition` (Item 2.01), `loan-sale-cre` or `note-sale-cre` on a confirmed filer becomes a `bank_disclosed_sale`. The list is `config.sales.filingSearches`, a placeholder.
+- [x] Seller: the bank, by `fdic:CERT`. Buyer: unknown. Asset: unknown. No filing text is stored or fetched; the filing's link is kept for a principal.
+- [x] An Item 2.01 hit can be the bank buying, not selling. The event says so.
+- [x] When a filer mapping is rejected later, its events stay in the ledger, marked `supported: false`, and leave every view and signal. They come back if the mapping is confirmed again.
+
+**E16-S4. Whole-bank acquisitions.** *As a principal, I want every acquisition of a bank with a presence in our metros recorded with its acquirer so that I know who buys here.* P1, R2. **Built**, from `sources/fdic/events.json` (E3-S6), read only.
+- [x] Kinds in `config.sales.acquisitionKinds` (placeholder: merger, assisted merger, failure). An affiliate reorganization (224) is left out, as in `scoring.json`.
+- [x] Seller: the target. When the target failed, the seller is the FDIC as its receiver. Buyer: the acquirer, by FDIC cert. **This is the one buyer list available today.**
+- [x] The asset is the target bank, with its CRE at its last report (thousands of dollars, times 1,000).
+
+**E16-S5. The ledger, its views and its signals.** *As a principal, I want the sale events in one place, with who has sold, who has bought and at what recovery, so that I can use them when choosing whom to approach.* P1, R2. **Built** (`src/sales.mjs`, `outbound sales ...`).
+- [x] `outbound sales build`: the run log, the input field checks (a stored record without a required field fails the build and writes nothing), `validateEvent` on every event, the change log, and `outbound sales verify`.
+- [x] `salesBySeller({ dir })`: for each seller, by the institution that acted, the count by kind, the latest date and the events. This is the **"has sold before"** list. An unknown seller is left out.
+- [x] `knownBuyers({ dir })`: by buyer, counts by kind, property type, metro and quarter.
+- [x] `priceEvidence({ dir })`: CMBS liquidations by property type and metro, with the approximate implied recovery, 1 − Σ loss ÷ Σ balance over the events that have both, and the range. Labelled.
+- [x] `saleSignals({ dir })`: **event** signals by institution key (`fdic:CERT` or `servicer:<slug>`), shaped like `filingSignals`. Each is `{ id, kind: 'event', type: 'sale', source: 'sales', key, role: 'seller', saleKind, tier, date, period, label, link, evidence, firstSeenAt }`. Labels come from fixed templates, with no names. The FDIC as receiver and a CMBS trust get none: they are not institutions we approach.
+- [x] CLI: `outbound sales list [--seller KEY] [--kind K]`, `sales sellers`, `sales buyers`, `sales pricing`.
+- [x] Worker: `sources.fdicsales` is in `JOB_KINDS` and the worker; `sources.edgar` and `sources.fdicsales` rebuild the ledger in the same unit of work (`LOADS.sales`).
+- [ ] The job-kind migration for `sources.fdicsales`, added when this is merged.
+- [ ] Wire `saleSignals` into scoring (`src/score.mjs`), after merge. A principal decides whether "has sold before" adds points, and on which axis.
+- [ ] A line in the worker workflow's schedule for `sources.fdicsales`, once the migration and the FDIC contact are in place.
+
+**E16-S6. The Sales screen.** *As a principal, I want a Sales page so that I can read the ledger without the command line.* P1, R2. **Built** (`web/app/sales/page.jsx`, `web/lib/sales-view.mjs`).
+- [x] Server-rendered from the stored ledger, in the existing style, and linked in the nav. It shows recent events, the sellers who have sold (linked to the bank's candidate page or the servicer's page), the known buyers, and the price evidence under the approximate label.
+
+**E16-S7. Recorded assignments of deeds of trust** (county records). *As a principal, I want each recorded assignment of a commercial deed of trust in our counties recorded as a sale, with the chain to the current holder, so that I see which lenders sell loans and who buys them.* P1, R3.
+- [x] **The shape, with no adapter:** `assignmentEvent` in `src/sales.mjs`. Assignor, assignee, the original deed of trust (recording number, date, original principal, beneficiary), the APN, the recording date, and the chain. Tier `observed`. A test proves the ledger accepts it.
+- [x] **MERS** is a nominee, never a party. "MERS as nominee for X" resolves to X; MERS with no lender named resolves to unknown. The event check refuses MERS as a seller or buyer.
+- [x] **The chain to the current holder** (`chainToCurrentHolder`): oldest assignment first, from the deed's beneficiary. An assignor who is not the holder so far marks a gap. An assignment to MERS with no lender named leaves the holder as it was, marked uncertain. The holder is certain only when every step is known.
+- [ ] The feeder, on the Maricopa Recorder's bulk feed (code AS, `docs/county-playbook.md`) or ATTOM, once the account or trial exists. Names matched to `fdic:CERT` by E6-S1, never guessed.
+- [ ] Commercial only, joined on the APN to the assessor's file.
+
+**E16-S8. Loan-sale listings.** *As a principal, I want loans and pools listed for sale in our metros recorded so that I see the supply, and who sells it when the listing says.* P2, R3.
+- [x] **The shape, with no adapter:** `listingEvent`. Site, listing id, date, title, advisor, property type, metro or county, balance, loan count, status, lien and bid date. The seller is usually unknown; the buyer is always unknown. Tier `observed`. A test proves the ledger accepts it.
+- [ ] The feeders, for listing sites and loan-sale advisors' sale notices, once a principal has read each site's terms (data-sources 2.3).
+
+**Decisions for a principal.**
+
+| # | Decision | Default |
+|---|---|---|
+| D-S1 | May we read the FDIC's closed-sales application (`sales.fdic.gov`) for results and buyers? Its terms and its contents are unchecked. | Announcements only |
+| D-S2 | Does "has sold before" add points, on which axis, and for how long? | Signals only, no points (as for filings) |
+| D-S3 | Which filing searches count as a disclosed sale (`config.sales.filingSearches`)? An Item 2.01 hit may be a purchase. | Item 2.01, loan sale, note sale |
+| D-S4 | Do whole-bank acquisitions after a failure belong in the buyer list beside ordinary mergers? | Yes, with the FDIC as seller |
+| D-S5 | Show the implied recovery to principals at all? It is not a price, and could anchor a bid. | Shown, labelled approximate, by group and per loan |
+| D-S6 | The FDIC request contact (`config.fdic.userAgent`): the firm's name and a monitored business address | Placeholder: the run refuses |
 
 ## 9. Definition of done (every story)
 

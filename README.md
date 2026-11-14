@@ -103,7 +103,7 @@ npm run outbound -- pilot pass --by "Pat Example"        # needs 10 fully review
 npm run outbound -- sources run edgar                    # each CMBS trust's latest SEC filing: loans in the metros, workout codes, servicer
 ```
 
-It writes `sources/edgar/loans.json`, `trusts.json` and `servicers.json`. Every loan and property detail is **context for a principal, never for a message**.
+It writes `sources/edgar/loans.json`, `trusts.json` and `servicers.json`, plus `dispositions.json`: every loan liquidated by disposition or DPO, kept after it leaves the reports (see "Who sells to whom" below). Every loan and property detail is **context for a principal, never for a message**.
 
 ### The SEC filings listener (PRD E13-S1)
 
@@ -145,6 +145,35 @@ What was checked live on 2026-11-13 is written at the top of `src/sources/efts.m
 So every response is matched to its request before it is used. A response with no echo, a search that returns fewer hits than it reports, or a hit that does not match its request fails the run: nothing is written, and the next run covers the same days.
 
 On the platform, the job is `sources.filings`. The worker workflow queues it on weekdays at 23:37 UTC, then verifies it. A `suspect` run fails the job, because the listener's window has moved past it. That schedule stays off until a principal has filled `config.sec.userAgent`, confirmed at least one filer, and set the repository variable `FILINGS_ENABLED` to `true`. Until then the run would fail its own checks every day and hide real failures.
+
+### Who sells to whom (PRD E16)
+
+A lender that has sold loans before is the warmest prospect there is. One ledger, `sales/ledger.json` in the data folder, holds every sale event the stored data shows:
+
+| Kind | From | Seller | Buyer |
+|---|---|---|---|
+| `note_sale_completed`, `dpo`, `disposition` | A CMBS loan in our metros and sectors liquidated (code 3 or 6). Note sale if workout code 5 is in its history | The trust, through its special servicer | unknown |
+| `bank_disclosed_sale` | A confirmed bank filer's 8-K Item 2.01, loan-sale or note-sale hit (the filings listener) | The bank, `fdic:CERT` | unknown |
+| `whole_bank_acquisition` | An FDIC structure event: a bank with a presence in our metros acquired | The target (the FDIC, if it failed) | The acquirer, `fdic:CERT` |
+| `fdic_sale_announced` | An FDIC loan-sale announcement on www.fdic.gov | The FDIC as receiver | unknown |
+
+```bash
+npm run outbound -- sources run fdicsales               # FDIC loan-sale announcements (needs config.fdic.userAgent filled in)
+npm run outbound -- sales build                         # rebuild the ledger from stored data; the edgar and fdicsales runs do it too
+npm run outbound -- sales sellers                       # who has sold before, by the institution that acted
+npm run outbound -- sales buyers                        # known buyers: by kind, property type, metro and quarter
+npm run outbound -- sales pricing                       # CMBS liquidations by property type and metro: APPROXIMATE implied recovery
+npm run outbound -- sales list --seller fdic:12345      # or --kind disposition
+```
+
+- **Nothing is invented.** A buyer no source names is `unknown`. The implied recovery (1 − realized loss ÷ balance before liquidation) is labelled approximate: the loss includes liquidation expenses and advances, so it is never the price.
+- **Gentle on the FDIC.** `robots.txt` first, only the paths it allows, and at most a few requests a minute. The FDIC publishes no buyers on the pages read; its closed-sales application is on `sales.fdic.gov`, which is not read (PRD E16, D-S1).
+- **Kept.** Events are de-duplicated by a stable id and never dropped. One no stored record supports any more (a filer mapping rejected since, say) is marked `supported: false` and left out of the views.
+- `saleSignals({ dir })` in `src/sales.mjs` returns event signals by `fdic:CERT` or `servicer:<slug>`, shaped like `filingSignals`. They are not in scoring yet.
+- Two later sources have their event shape and no adapter: a recorded **assignment** of a deed of trust (with MERS treated as a nominee, and the chain to the current holder), and a **marketed listing**.
+- The web app's **Sales** page shows the same: recent events, sellers who have sold, known buyers, and price evidence.
+
+Property names and addresses are kept in the ledger for a principal. They never go in a log, and a test proves no event reaches the drafter.
 
 ### Checking the scrapers
 
@@ -261,7 +290,7 @@ It stores no message text, and writes an audit line for every decision.
 | `supabase/migrations/` | The platform's tables, access rules and functions. Structure only, no data |
 | `web/` | The principals' web app (Next.js) |
 | `.github/workflows/` | The platform worker's schedule (off until enabled) |
-| `src/` | `guard`, `research`, `draft`, `lint`, `model` (the only file that calls the Anthropic API), `rules`, `store`, `paths`, plus the pipeline: `sources/` (`http`, `runlog`, `fdic`, `edgar`), `metrics`, `score`, `candidates`, `pilot`, and the platform: `uow`, `platform/` (`client`, `worker`, `move`) |
+| `src/` | `guard`, `research`, `draft`, `lint`, `model` (the only file that calls the Anthropic API), `rules`, `store`, `paths`, plus the pipeline: `sources/` (`http`, `runlog`, `fdic`, `edgar`, `fdicsales`), `metrics`, `score`, `candidates`, `sales`, `pilot`, and the platform: `uow`, `platform/` (`client`, `worker`, `move`) |
 | `scripts/sync-site.mjs` | Refreshes `site-snapshot/` from the website repository (see below) |
 | `site-snapshot/` | A copy of the 7 website files the rules depend on, a list of the site's pages, and a record of the commit it came from. Committed. Refresh it; do not edit it. |
 | `docs/` | The plan, the research agenda, and the PRD for the signal pipeline |
@@ -270,7 +299,7 @@ It stores no message text, and writes an audit line for every decision.
 In `$OUTBOUND_DATA_DIR`:
 
 - `senders.json`, `suppression.json`, `accounts/`, `research/`, `facts/`, `briefs/`, `drafts/<account>/`, `touches.jsonl`, `audit.jsonl`;
-- for the pipeline: `sources/` (FDIC data, the run log and the change log), `candidates/` (the latest list and principals' decisions), and `pilot/` (truth sheets, verdicts, the pass).
+- for the pipeline: `sources/` (FDIC data, the run log and the change log), `candidates/` (the latest list and principals' decisions), `sales/` (the sale ledger), and `pilot/` (truth sheets, verdicts, the pass).
 
 ## Changing it
 

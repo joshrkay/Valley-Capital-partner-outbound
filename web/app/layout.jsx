@@ -17,6 +17,7 @@ export default function RootLayout({ children }) {
             <nav aria-label="Main">
               <a href="/candidates">Candidates</a>
               <a href="/servicers">Servicers</a>
+              <a href="/sales">Sales</a>
               <a href="/accounts">Accounts</a>
               <a href="/drafts">Approvals</a>
               <a href="/pilot">Pilot</a>

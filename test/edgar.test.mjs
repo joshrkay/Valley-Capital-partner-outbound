@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { makeDir } from './kit.mjs';
 import { loadRules } from '../src/rules.mjs';
 import { readJson, readJsonl } from '../src/store.mjs';
-import { parseFormIndex, latestByCik, filingsByCik, coFiled, mergePropertyRecords, quartersFor, parseCmbsAssets, decodeEntities, metroIndex, toLoan, loanSignals, specialServicerFromReport, runEdgar, edgarPaths, CMBS_NS } from '../src/sources/edgar.mjs';
+import { parseFormIndex, latestByCik, filingsByCik, coFiled, mergePropertyRecords, quartersFor, parseCmbsAssets, decodeEntities, metroIndex, toLoan, loanSignals, specialServicerFromReport, runEdgar, edgarPaths, CMBS_NS, checkLoanFields } from '../src/sources/edgar.mjs';
 import { getText } from '../src/sources/http.mjs';
 import { fakeSec, FORM_IDX, EX102, NOT_CMBS, REPORT, idxLine } from './edgar-fake.mjs';
 
@@ -69,6 +69,21 @@ test('signals: note sale, special servicing until the loan goes back to the mast
   assert.deepEqual(types(retail), ['maturing'], 'returned to the master servicer after its transfer, so not in special servicing');
   assert.deepEqual(types(mf, { maturityMonths: 6 }).includes('maturing'), false);
   assert.deepEqual(types({ ...mf, paidOff: true }), []);
+});
+
+test('a repeated workout code is kept whole, every listed code signals, and the new fields are optional with a format check', () => {
+  const xml = EX102.replace('<workoutStrategyCode>5</workoutStrategyCode>', '<workoutStrategyCode>2</workoutStrategyCode><workoutStrategyCode>5</workoutStrategyCode>');
+  const [a] = parseCmbsAssets(xml).assets;
+  assert.deepEqual(a.lists.workoutStrategyCode, ['2', '5']);
+  assert.equal(a.fields.workoutStrategyCode, '5', 'the flat fields keep the last one, as before');
+  const loan = toLoan({ asset: a, trust: { cik: '1', name: 'T' }, idx: metroIndex(rules.metros), sectors: rules.buybox.sectors.include, src: {} });
+  assert.deepEqual(loan.workouts.map((w) => w.code), ['2', '5']);
+  assert.deepEqual([loan.liquidationPrepayment, loan.liquidationPrepaymentDate, loan.realizedLossToTrust, loan.originator, loan.originalTermMonths], [null, null, null, null, null], 'absent: null, never a guess');
+  const types = loanSignals({ ...loan, workout: { code: '2', label: 'Foreclosure' } }, { now: NOW }).map((s) => s.type);
+  assert.ok(types.includes('note_sale') && types.includes('foreclosure'), types.join());
+  assert.deepEqual(checkLoanFields({ fields: { liquidationPrepaymentCode: '42', liquidationPrepaymentDate: '2026-10-01', realizedLossToTrustAmount: 'n/a' }, lists: { workoutStrategyCode: ['77'] } }).issues.map((i) => `${i.field}: ${i.problem}`),
+    ['liquidationPrepaymentCode: unknown code', 'workoutStrategyCode: unknown code', 'liquidationPrepaymentDate: not MM-DD-YYYY', 'realizedLossToTrustAmount: not a number']);
+  assert.equal(checkLoanFields({ fields: {}, lists: {} }).issues.length, 0, 'absent is allowed');
 });
 
 test('the special servicer: the reviewed name when it matches, otherwise only the first cell, never a person or their details', () => {

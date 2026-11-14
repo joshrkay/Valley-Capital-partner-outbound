@@ -19,6 +19,7 @@ export const LOADS = Object.freeze({
   draft: [...GUARD, 'accounts/', 'research/', 'facts/', 'drafts/'],
   sources: ['sources/'],
   score: ['sources/', 'candidates/'],
+  sales: ['sources/', 'sales/'],   // the CMBS and FDIC loan-sale pulls rebuild the sale ledger (sales/ledger.json) when they finish
 });
 
 const covers = (prefix, rel) => prefix === '' || rel === prefix || (prefix.endsWith('/') && rel.startsWith(prefix)) || rel.startsWith(`${prefix}/`);

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { engine, loadRules } from './engine.mjs';
 import { visibleCandidates } from './candidates-view.mjs';
 import { sortServicers, loansFor, edgarStatus } from './servicers.mjs';
+import { partyLink, sellerRow } from './sales-view.mjs';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const need = (v, what) => { const s = typeof v === 'string' ? v.trim() : ''; if (!s) throw new Error(`${what} is required.`); return s; };
@@ -197,3 +198,20 @@ export async function servicerDetail(client, name) {
   return { summary, loans: loansFor(snap.docs['sources/edgar/loans.json'] ?? {}, n) };
 }
 export const queueScore = (client, { draftBuybox }) => client.enqueue('score.run', { draftBuybox: !!draftBuybox });
+
+// ---- Who sells to whom (PRD E16) ---------------------------------------------------------------------------------------------------
+// One document, the ledger the engine builds; the views are the engine's own (src/sales.mjs). The events of each seller are left out
+// of the seller table: it shows counts, the latest date, and a link to the bank's candidate page or the servicer's page.
+export async function salesOverview(client, { recent = 50 } = {}) {
+  const sales = await engine('src/sales.mjs');
+  const snap = await client.load(['sales/ledger.json']);
+  const ledger = snap.docs['sales/ledger.json'] ?? null;
+  if (!ledger) return { builtAt: null, counts: null, recent: [], sellers: [], buyers: [], pricing: null };
+  return {
+    builtAt: ledger.builtAt ?? null, runId: ledger.runId ?? null, counts: ledger.counts ?? null,
+    recent: sales.eventsOf(ledger).slice(0, recent),
+    sellers: sales.groupBySeller(ledger).map(sellerRow),
+    buyers: sales.groupBuyers(ledger).map((b) => ({ ...b, link: partyLink(b) })),
+    pricing: sales.pricing(ledger),
+  };
+}

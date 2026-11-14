@@ -7,15 +7,21 @@ import { readJson } from '../store.mjs';
 import { runFdic } from '../sources/fdic.mjs';
 import { runEdgar } from '../sources/edgar.mjs';
 import { runFilings, loadFilingRules } from '../sources/filings.mjs';
+import { runFdicSales } from '../sources/fdicsales.mjs';
+import { buildLedger } from '../sales.mjs';
 import { runScoring } from '../score.mjs';
 import { runBriefer } from '../research.mjs';
 import { runDrafter } from '../draft.mjs';
 import { loadContext } from '../guard.mjs';
 import { researchGate } from '../pilot.mjs';
 
-export const JOB_KINDS = ['sources.fdic', 'sources.edgar', 'sources.filings', 'score.run', 'research.run', 'draft.run'];
+// sources.fdicsales needs the job-kind constraint widened in a migration (supabase/migrations), added when this is merged.
+export const JOB_KINDS = ['sources.fdic', 'sources.edgar', 'sources.filings', 'sources.fdicsales', 'score.run', 'research.run', 'draft.run'];
 const ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const CHANNELS = ['email', 'letter', 'call', 'linkedin_note'];
+
+// Counts only, for a job's stored result.
+const ledgerSummary = (l) => (l ? { outcome: l.outcome, events: l.events ?? null, added: l.added ?? null, unsupported: l.unsupported ?? null, byKind: l.byKind ?? null } : null);
 
 function account(dir, id) {
   if (!ID.test(String(id ?? ''))) throw new Error('The job needs a valid account id (params.account).');
@@ -33,9 +39,19 @@ export async function runJob({ client, job, rules, deps = {} }) {
       const { result } = await client.unitOfWork(LOADS.sources, (dir) => runFdic({ dir, metros: rules.metros, includeHq: !!p.includeHq, fetchImpl: deps.fetchImpl ?? globalThis.fetch }), { retries: 0 });
       return { ok: result.outcome !== 'failed', summary: { outcome: result.outcome, banks: result.banks, latestRepdte: result.latestRepdte, newQuarter: result.newQuarter, missingFields: result.missingFields, changed: result.changed } };
     }
-    case 'sources.edgar': {
-      const { result } = await client.unitOfWork(LOADS.sources, (dir) => runEdgar({ dir, metros: rules.metros, buybox: rules.buybox, scoring: rules.scoring, sec: rules.config.sec, fetchImpl: deps.fetchImpl ?? globalThis.fetch, now: deps.now?.() ?? new Date() }), { retries: 0 });
-      return { ok: result.outcome !== 'failed', summary: { outcome: result.outcome, cmbsTrusts: result.cmbsTrusts, loansRead: result.loansRead, loansKept: result.loansKept, servicers: result.servicers, notes: result.notes, changed: result.changed } };
+    case 'sources.edgar': {   // then the sale ledger is rebuilt, so a liquidation in this month's reports is recorded (PRD E16-S1)
+      const { result } = await client.unitOfWork(LOADS.sales, async (dir) => {
+        const r = await runEdgar({ dir, metros: rules.metros, buybox: rules.buybox, scoring: rules.scoring, sec: rules.config.sec, fetchImpl: deps.fetchImpl ?? globalThis.fetch, now: deps.now?.() ?? new Date() });
+        return { ...r, ledger: r.outcome === 'failed' ? null : buildLedger({ dir, config: rules.config, now: deps.now?.() ?? new Date() }) };
+      }, { retries: 0 });
+      return { ok: result.outcome !== 'failed' && result.ledger?.outcome !== 'failed', summary: { outcome: result.outcome, cmbsTrusts: result.cmbsTrusts, loansRead: result.loansRead, loansKept: result.loansKept, servicers: result.servicers, dispositions: result.dispositions, dispositionsNew: result.dispositionsNew, notes: result.notes, changed: result.changed, ledger: ledgerSummary(result.ledger) } };
+    }
+    case 'sources.fdicsales': {   // FDIC loan-sale announcements (PRD E16-S2); refused while config.fdic.userAgent is a placeholder
+      const { result } = await client.unitOfWork(LOADS.sales, async (dir) => {
+        const r = await runFdicSales({ dir, fdic: rules.config.fdic, personalDomains: rules.config.personalDomains, fetchImpl: deps.fetchImpl ?? globalThis.fetch, now: deps.now?.() ?? new Date(), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
+        return { ...r, ledger: r.outcome === 'failed' ? null : buildLedger({ dir, config: rules.config, now: deps.now?.() ?? new Date() }) };
+      }, { retries: 0 });
+      return { ok: result.outcome !== 'failed' && result.ledger?.outcome !== 'failed', summary: { outcome: result.outcome, listed: result.listed, pagesRead: result.pagesRead, salesNew: result.salesNew, pdfsRead: result.pdfsRead, pdfsUnreadable: result.pdfsUnreadable, matched: result.matched, requests: result.requests, missingFields: result.missingFields, ledger: ledgerSummary(result.ledger) } };
     }
     case 'sources.filings': {   // the SEC filings listener (PRD E13-S1); refused while config.sec.userAgent is a placeholder
       const { result } = await client.unitOfWork(LOADS.sources, (dir) => runFilings({ dir, sec: rules.config.sec, rules: rules.filings ?? loadFilingRules(), since: p.since, fetchImpl: deps.fetchImpl ?? globalThis.fetch, now: deps.now?.() ?? new Date(), ...(deps.sleep ? { sleep: deps.sleep } : {}) }), { retries: 0 });
