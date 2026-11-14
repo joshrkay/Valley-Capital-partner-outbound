@@ -19,7 +19,7 @@ export const LOADS = Object.freeze({
   research: ['accounts/', 'research/', 'facts/', 'briefs/', 'pilot/', 'paper/'],
   draft: [...GUARD, 'accounts/', 'research/', 'facts/', 'drafts/'],
   sources: ['sources/'],
-  score: ['sources/', 'candidates/', 'paper/'],
+  score: ['sources/', 'candidates/', 'paper/', 'sales/'],
   // Call prep and outcomes (PRD E15, src/calls.mjs). calls/, drafts/ and research/ are narrowed to one account by callLoads().
   // outcomes.jsonl is only appended to by a confirmation, so only the report loads it.
   callPrep: [...GUARD, 'accounts/', 'research/', 'drafts/', 'candidates/latest.json', 'paper/', 'calls/'],

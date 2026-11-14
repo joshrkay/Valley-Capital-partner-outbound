@@ -148,6 +148,12 @@ export function buildCard(item, { scoring = {} } = {}) {
     add(`An SEC filing matched a saved search: ${s.label}.`, [s.id, ...(s.evidence ?? [])]);
   }
 
+  // Sales (event signals, E16): this bank has sold before. The label is a fixed template from src/sales.mjs; it names no party.
+  for (const s of (item.signals ?? []).filter((x) => x.rule === 'sale').slice(0, lim.maxSales ?? 2)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(s.date)) || !s.label) continue;
+    add(`It has sold before: ${s.label}.`, [s.id, ...(s.evidence ?? [])]);
+  }
+
   // Timing: the metric signals that fired at this quarter, each from its rule type's template. A threshold signal for a level already stated adds nothing.
   for (const s of (item.signals ?? []).filter((x) => SIGNAL_TYPES.includes(x.rule) && !(x.rule === 'above' && statedLevels.has(x.metric))).slice(0, lim.maxSignals)) {
     const label = METRICS[s.metric]?.label;

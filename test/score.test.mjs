@@ -302,3 +302,18 @@ test('SEC filings: an EVENT signal for a confirmed filer, shown within its windo
   assert.ok(!score(dir).items[0].signals.some((s) => s.rule === 'filing'), 'a rejected filer gives no signal');
   assert.match(validateScoring({ ...scoring(), filings: { windowDays: 0 } }).errors.join('\n'), /filings\.windowDays/);
 });
+
+test('sales: a disclosed sale is an EVENT signal on the seller, shown within its window, stated on the card, adding no points', () => {
+  const dir = world([{ cert: '1', name: 'Alpha Example Bank' }]);
+  const before = score(dir).items[0];
+  const ev = (id, date) => ({ id, kind: 'bank_disclosed_sale', date, seller: { kind: 'bank', key: 'fdic:1', name: 'Alpha Example Bank' }, buyer: { kind: 'unknown', name: 'unknown' },
+    asset: { kind: 'unknown' }, tier: 'reported', filing: { form: '8-K' }, sources: [{ source: 'filings', ids: [id], link: 'https://www.sec.gov/Archives/edgar/data/9900101/x/', date }], firstSeenAt: '2026-11-13T12:00:00Z' });
+  put(dir, 'sales/ledger.json', { events: { 'sale-a': ev('sale-a', '2026-06-01'), 'sale-b': ev('sale-b', '2022-01-15') } });   // the second is older than 1,095 days before NOW
+  const it = score(dir).items[0];
+  const sales = it.signals.filter((s) => s.rule === 'sale');
+  assert.deepEqual(sales.map((s) => s.id), ['sale:sale-a'], 'only sales inside windowDays are shown');
+  assert.equal(sales[0].kind, 'event');
+  assert.deepEqual([it.score, it.axes], [before.score, before.axes], 'sale signals add no points until a principal weights them');
+  assert.match(it.card.text, /It has sold before: An SEC filing disclosed a completed sale or disposition \(8-K, filed 2026-06-01\)\./);
+  assert.match(validateScoring({ ...scoring(), sales: { windowDays: 0 } }).errors.join('\n'), /sales\.windowDays/);
+});
