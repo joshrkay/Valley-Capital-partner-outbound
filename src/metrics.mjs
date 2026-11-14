@@ -29,11 +29,12 @@ export const METRICS = {
 };
 
 // The CRE categories of the paper profile (PRD E6-S6), with the Call Report field for each balance and stage of distress.
-// `null` = no field for that stage in the set pulled (PRD Appendix A). `sectors` = the buy-box sectors that category can contain:
+// `null` = no field for that stage in the set pulled (PRD Appendix A). The construction 30-89 and 90+ fields (P3RECONS, P9RECONS) are pulled
+// since E14-S1 and were checked live as filled (2026-11-14). `sectors` = the buy-box sectors that category can contain:
 // nonfarm nonresidential holds hotel AND retail (and office, industrial and other commercial property), which the data cannot separate.
 export const CATEGORIES = [
   { id: 'construction', label: 'Construction and land development', short: 'Construction and land', balance: 'LNRECONS', sectors: [],
-    stages: { pastDue30to89: null, pastDue90: null, nonaccrual: 'NARECONS', noncurrent: 'NCRECONS', oreo: 'ORECONS', chargeOffsQuarter: 'NTRECONQ' } },
+    stages: { pastDue30to89: 'P3RECONS', pastDue90: 'P9RECONS', nonaccrual: 'NARECONS', noncurrent: 'NCRECONS', oreo: 'ORECONS', chargeOffsQuarter: 'NTRECONQ' } },
   { id: 'multifamily', label: 'Multifamily', short: 'Multifamily', balance: 'LNREMULT', sectors: ['multifamily'],
     stages: { pastDue30to89: 'P3REMULT', pastDue90: 'P9REMULT', nonaccrual: 'NAREMULT', noncurrent: 'NCREMULT', oreo: 'OREMULT', chargeOffsQuarter: 'NTREMULQ' } },
   { id: 'nonfarmNonresidential', label: 'Nonfarm nonresidential (hotel, retail, office and other commercial property, not separable)', short: 'Nonfarm nonresidential', balance: 'LNRENRES', sectors: ['hospitality', 'retail'],

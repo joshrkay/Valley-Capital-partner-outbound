@@ -46,6 +46,36 @@ export const FDIC_FIELDS = Object.freeze({
     // LNCOMRE = CRE loans not secured by real estate; RBC = total risk-based capital; RBCT1J = tier 1 capital;
     // LNATRES = the allowance for credit losses on loans and leases; CBLRIND = 1 when the bank uses the community bank leverage ratio.
     'LNCOMRE', 'RBC', 'RBCT1J', 'LNATRES', 'CBLRIND',
+    // The paper estimate (docs/paper-estimate.md 4.2, E14-S1). Titles are FDIC's own (risview_properties.yaml). Checked live on
+    // 2026-11-14 on 40 to 60 banks with $1-5 billion in assets in our five states, and by count on every bank, for 2022Q4 to 2026Q2:
+    //   Stages by category: P3RECONS and P9RECONS (construction, 30-89 and 90+ days past due; filled for about 1,100 and 200 banks each
+    //   quarter), and the owner-occupied / other split of nonfarm nonresidential stages, P3RENROW, P3RENROT, P9RENROW, P9RENROT,
+    //   NARENROW, NARENROT (each pair adds up to P3RENRES, P9RENRES, NARENRES on all 360 rows checked).
+    //   P3COMRE ("30-89 DAYS P/D-COMMERCIAL RE", no description): on every bank at 2026-06-30 and 2025-12-31 it was above 0 at 47 and 49
+    //   banks, never above LNCOMRE, never above 0 where LNCOMRE is 0, and never equal to the secured CRE 30-89 total. So it is taken as
+    //   the 30-89 stage of LNCOMRE (CRE not secured by real estate). FDIC gives no 90+ or nonaccrual field for that line.
+    'P3RECONS', 'P9RECONS', 'P3RENROW', 'P3RENROT', 'P9RENROW', 'P9RENROT', 'NARENROW', 'NARENROT', 'P3COMRE',
+    //   Loan sizes (RC-C Part II): nonfarm nonresidential loans by ORIGINAL amount, under $100,000, $100,000-250,000, $250,000-1 million
+    //   and all under $1 million, in dollars (thousands) and number of loans. SEMIANNUAL in practice: filled for about 4,100-4,300 banks
+    //   in June and December but only about 950-1,030 in March and September, when most banks send 0, not null (SEMIANNUAL_FIELDS).
+    //   LNRENR4 = LNRENR1 + LNRENR2 + LNRENR3, and the same for counts, on all 200 June/December rows checked.
+    'LNRENR1', 'LNRENR2', 'LNRENR3', 'LNRENR4', 'LNRENR1N', 'LNRENR2N', 'LNRENR3N', 'LNRENR4N',
+    //   Construction split: LNRECNOT (other construction and land) + LNRECNFM (1-4 family construction) = LNRECONS on all 360 rows.
+    'LNRECNOT', 'LNRECNFM',
+    //   Unused commitments for commercial real estate, secured and unsecured: portfolio level only, never split by category.
+    'UCCOMRES', 'UCCOMREU',
+    //   Restructured loans (from 2023, modifications to borrowers in financial difficulty, ASU 2022-02): construction, multifamily,
+    //   nonfarm nonresidential, all other, nonaccrual restructured nonfarm nonresidential, and the total. The split by type is
+    //   SEMIANNUAL in practice like the loan sizes (RSNRES above 0 at about 730-800 banks in June and December, 290-330 in March and
+    //   September), while the total RSLNLTOT is filled every quarter.
+    'RSCONS', 'RSMULT', 'RSNRES', 'RSOTHER', 'NARSNRES', 'RSLNLTOT',
+    //   Loans held for sale: total, and the distressed part (nonaccrual, 90+ and 30-89 days past due). Stocks.
+    'LNLSSALE', 'NALNSALE', 'P9LNSALE', 'P3LNSALE',
+    //   Net gains or losses on loan sales: NETGNSLN is year to date, NTGLLNQ the quarter. Flows, and not CRE-specific.
+    'NETGNSLN', 'NTGLLNQ',
+    //   Remaining maturity or next repricing of all loans and leases except closed-end 1-4 family first liens: 3 months or less, 3-12
+    //   months, 1-3, 3-5, 5-15 and over 15 years. Every quarter; a proxy only, not CRE-specific.
+    'LNOT3LES', 'LNOT3T12', 'LNOT1T3', 'LNOT3T5', 'LNOT5T15', 'LNOTOV15',
   ],
   // The CRE balance 12 quarters before the latest, for the screen's 36-month growth test: one extra quarter, not a wider pull.
   growthBase: ['CERT', 'REPDTE', 'LNRECONS', 'LNREMULT', 'LNRENROT', 'LNCOMRE'],
@@ -75,6 +105,30 @@ const ACQUIRER_REQUIRED = Object.keys(STRUCTURE_CODES).filter((c) => STRUCTURE_C
 // Year-to-date flow fields. Comparing them quarter to quarter is wrong, so they are never requested.
 export const YTD_FLOW_FIELDS = Object.freeze(['NTLNLS', 'NTRECONS', 'NTRENRES', 'NTREMULT']);
 if (FDIC_FIELDS.financials.some((f) => YTD_FLOW_FIELDS.includes(f))) throw new Error('A year-to-date flow field is in the financials field list; use the quarterly (Q) version.');
+
+// Fields most banks report only in June and December (checked live, 2026-11-14: see FDIC_FIELDS.financials). In March and September
+// most banks send 0, not null, so a March or September value of these fields is never used: whatever it holds, it is "not reported".
+// The paper estimate reads them from the latest June or December report and shows that date (src/paper.mjs).
+export const SEMIANNUAL_FIELDS = Object.freeze({
+  loanSizes: ['LNRENR1', 'LNRENR2', 'LNRENR3', 'LNRENR4', 'LNRENR1N', 'LNRENR2N', 'LNRENR3N', 'LNRENR4N'],
+  restructuredByType: ['RSCONS', 'RSMULT', 'RSNRES', 'RSOTHER', 'NARSNRES'],
+});
+export const isSemiannualReport = (repdte) => /^\d{4}(0630|1231)$/.test(String(repdte ?? ''));
+
+// A field check for the semiannual loan-size fields: in a June or December report they should be filled for nearly every bank that
+// holds nonfarm nonresidential loans (about 39 of 40 when checked live). If fewer than half are, FDIC may have renamed or moved them,
+// so the run is marked suspect. March and September are not checked: those reports are allowed to be empty. Counts only.
+export function checkSemiannualFill(rows, { minShare = 0.5 } = {}) {
+  const out = [];
+  const reps = [...new Set(rows.map((r) => String(r.REPDTE)))].filter(isSemiannualReport).sort();
+  for (const rep of reps) {
+    const holders = rows.filter((r) => String(r.REPDTE) === rep && Number(r.LNRENRES) > 0);
+    if (!holders.length) continue;
+    const filled = holders.filter((r) => Number(r.LNRENR4N) > 0 || Number(r.LNRENR4) > 0).length;
+    out.push({ repdte: rep, holders: holders.length, filled, suspect: filled / holders.length < minShare });
+  }
+  return out;
+}
 
 export const fdicPaths = (dir) => {
   const base = join(dir, 'sources', 'fdic');
@@ -525,6 +579,11 @@ export async function runFdic({ dir, metros, includeHq = false, fetchImpl = glob
     if (sod.overOne) { suspect = true; notes.push(`sod: ${sod.overOne} bank(s) with more deposits in the metros than in total; check the county join`); }
     const fin = take('financials', await pullFinancials({ certs: universe, latestRepdte: L, quarters, http, pageSize, chunkSize }), FDIC_FIELDS.financials);
     if (sod.msaMismatches) notes.push(`sod: ${sod.msaMismatches} branch rows had an MSA code different from their county's metro; county was used.`);
+    // The semiannual loan-size fields (E14-S1): filled in June and December; March and September values are never used.
+    for (const s of checkSemiannualFill(fin.rows)) {
+      notes.push(`financials: loan-size fields (semiannual) filled for ${s.filled} of ${s.holders} banks with nonfarm nonresidential loans at ${s.repdte}; March and September values are not used`);
+      if (s.suspect) { suspect = true; notes.push(`financials: the loan-size fields look empty in the ${s.repdte} report (June and December should be filled); FDIC may have changed them`); }
+    }
     // The concentration screen's 36-month growth test needs the CRE balance 12 quarters before the latest: one more quarter, not a wider pull.
     const baseRep = quartersBack(L, 13)[0];
     const base = quarters > 12 ? none() : take('financials-base', await pullGrowthBase({ certs: universe, repdte: baseRep, http, pageSize, chunkSize }), FDIC_FIELDS.growthBase);

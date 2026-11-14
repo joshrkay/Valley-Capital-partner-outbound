@@ -15,10 +15,11 @@ export const LOADS = Object.freeze({
   candidates: ['candidates/', 'accounts/', 'suppression.json'],
   account: ['accounts/'],
   pilot: ['pilot/', 'research/'],
-  research: ['accounts/', 'research/', 'facts/', 'briefs/', 'pilot/'],
+  // paper/: the briefer reads the bank's paper estimate as data (E14-S1). The drafter's list never includes it.
+  research: ['accounts/', 'research/', 'facts/', 'briefs/', 'pilot/', 'paper/'],
   draft: [...GUARD, 'accounts/', 'research/', 'facts/', 'drafts/'],
   sources: ['sources/'],
-  score: ['sources/', 'candidates/'],
+  score: ['sources/', 'candidates/', 'paper/'],
   // Call prep and outcomes (PRD E15, src/calls.mjs). calls/, drafts/ and research/ are narrowed to one account by callLoads().
   // outcomes.jsonl is only appended to by a confirmation, so only the report loads it.
   callPrep: [...GUARD, 'accounts/', 'research/', 'drafts/', 'candidates/latest.json', 'paper/', 'calls/'],

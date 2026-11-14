@@ -106,7 +106,8 @@ test('signals do not fire on flat data, or on history they cannot see', () => {
 });
 
 test('every metric and category reads only fields listed in PRD Appendix A', () => {
-  const appendixA = new Set(['ASSET', 'CB', 'LNLSNET', 'NCLNLS', 'NALNLS', 'P3ASSET', 'P9ASSET', 'LNRECONS', 'LNRENRES', 'LNRENROW', 'LNRENROT', 'LNREMULT', 'NCRECONS', 'NCRENRES', 'NCRENROW', 'NCRENROT', 'NCREMULT', 'NARECONS', 'NARENRES', 'NAREMULT', 'P3RENRES', 'P3REMULT', 'P9RENRES', 'P9REMULT', 'ORE', 'ORECONS', 'ORENRES', 'OREMULT', 'NTLNLSQ', 'NTRECONQ', 'NTRENRSQ', 'NTREMULQ']);
+  const appendixA = new Set(['ASSET', 'CB', 'LNLSNET', 'NCLNLS', 'NALNLS', 'P3ASSET', 'P9ASSET', 'LNRECONS', 'LNRENRES', 'LNRENROW', 'LNRENROT', 'LNREMULT', 'NCRECONS', 'NCRENRES', 'NCRENROW', 'NCRENROT', 'NCREMULT', 'NARECONS', 'NARENRES', 'NAREMULT', 'P3RENRES', 'P3REMULT', 'P9RENRES', 'P9REMULT', 'ORE', 'ORECONS', 'ORENRES', 'OREMULT', 'NTLNLSQ', 'NTRECONQ', 'NTRENRSQ', 'NTREMULQ',
+    'P3RECONS', 'P9RECONS']);   // the construction past-due stages, added to Appendix A with E14-S1
   for (const f of METRIC_FIELDS) assert.ok(appendixA.has(f), `${f} is not in Appendix A`);
   for (const c of CATEGORIES) for (const f of [c.balance, ...Object.values(c.stages).filter(Boolean), ...(c.split ?? []).flatMap((s) => [s.balance, s.noncurrent])]) assert.ok(appendixA.has(f), `${c.id}: ${f} is not in Appendix A`);
   assert.ok(Object.keys(METRICS).includes('mfNoncurrentRatio'), 'multifamily is shown on its own');

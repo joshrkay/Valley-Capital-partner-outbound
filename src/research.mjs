@@ -5,6 +5,7 @@
 import { join } from 'node:path';
 import { callJson, callResearch, newLedger, checkQuote, canonUrl, extractJson, neutralize, estimateCost, addUsage } from './model.mjs';
 import { writeJson, writeText, audit, safeId } from './store.mjs';
+import { readPaper, paperForBriefer } from './paper.mjs';
 
 const TIERS = ['government', 'regulator', 'company', 'press', 'other'];
 const DRAFTABLE_TIERS = ['government', 'regulator', 'company', 'press'];
@@ -29,7 +30,7 @@ export const schemaFor = (kinds) => ({
   },
 });
 
-export function buildPrompt({ account, playbook, playbooks, models, today }) {
+export function buildPrompt({ account, playbook, playbooks, models, today, paper = null }) {
   const cfg = models.research;
   const named = researchMode(account) === 'person';
   const system = `You are a research analyst preparing a briefing for a principal at Valley Capital Partners, a firm that invests in hospitality, multifamily and retail real estate and buys the properties and the loans secured by them, including non-performing notes. The briefing is about one account and, when one is named, one person. Nothing you write is sent to anyone. A person reads it, then decides whether and how to make contact.
@@ -61,7 +62,7 @@ ${JSON.stringify(schemaFor(playbooks.kinds))}`;
   const user = `Today is ${today}.
 
 <dossier>${neutralize({ id: account.id, name: account.name, aliases: account.aliases ?? [], type: account.type, sectors: account.sectors, person: named ? { name: account.person.name, title: account.person?.title } : null, notesFromThePrincipals: account.notes ?? '', alreadyKnown: account.knownFacts ?? [] })}</dossier>
-${pipelineSection(account.pipeline)}
+${pipelineSection(account.pipeline)}${paperSection(paper)}
 <questions account_type="${playbook.label}">${neutralize(playbook.questions)}</questions>
 ${named ? '\nResearch this account and the named person now.' : `
 NO PERSON IS NAMED YET. Research the institution. For the people question, find the people who most likely hold the decision on selling loans of the kind this institution holds (at most three), each recorded as a person finding, with two independent sources where you can find them. Do not choose between them and do not guess a name; a principal will choose. Set person_check.status to "unconfirmed" with the note "no person named".`} Use the question ids as question_id on each finding.`;
@@ -83,6 +84,18 @@ export function pipelineSection(pipeline) {
 <pipeline_context source="FDIC Call Report data, computed and checked in code" period="${String(pipeline.period ?? '').replace(/[^0-9-]/g, '')}">${neutralize(ctx)}</pipeline_context>
 
 The pipeline context is what public Call Report data says about this institution's commercial real estate book: which categories it holds and how distressed each is. Use it to focus. For bank.exposure, look first for the institution's own disclosures about the categories flagged there (credit-quality tables in filings, earnings remarks, investor presentations), including any breakout of hotel or retail loans, which the Call Report does not separate. For bank.intent, look for stated plans to sell, reduce or exit loans in those categories. Do not copy pipeline figures into findings; a finding needs a page you retrieved.
+`;
+}
+
+// PRD E14-S1: the paper estimate (paper/<file>.json) for the bank behind a pipeline account, fenced as data like the pipeline context.
+// It is context for focus only, never a finding, and it never reaches the drafter (src/draft.mjs reads no paper record).
+export function paperSection(paper) {
+  const ctx = paperForBriefer(paper);
+  if (!ctx) return '';
+  return `
+<paper_estimate source="FDIC Call Report data, computed in code: reported values, a deposit proxy and bounds; an estimate, not the loan tape" as_of="${String(paper.asOf ?? '').replace(/[^0-9-]/g, '')}">${neutralize(ctx)}</paper_estimate>
+
+The paper estimate says what this bank reported about its commercial real estate book: balances and stages by category, loan sizes for nonfarm nonresidential loans, held-for-sale balances, and bounds (a low and a high, never a single figure) on how much could fit the buy box. Use its unknowns to aim the research: look for the bank's own disclosures that answer them (for example a breakout of hotel or retail loans, or stated plans to sell loans). Do not copy its figures into findings; a finding needs a page you retrieved.
 `;
 }
 
@@ -209,7 +222,10 @@ export async function runBriefer({ client, dir, account, models, playbooks, now 
   if (!playbook) throw new Error(`No playbook for account type "${account.type}". Types: ${Object.keys(playbooks.types).join(', ')}.`);
   const mode = researchMode(account);
   const today = now.toISOString().slice(0, 10);
-  const { system, user } = buildPrompt({ account, playbook, playbooks, models, today });
+  // The bank's paper estimate, when the account came from the pipeline and scoring has written one. A key that is not a bank key has none.
+  let paper = null;
+  if (account.institutionKey) { try { paper = readPaper({ dir, key: account.institutionKey }); } catch { paper = null; } }
+  const { system, user } = buildPrompt({ account, playbook, playbooks, models, today, paper });
   if (dryRun) return { dryRun: true, system, user, cfg: models.research };
 
   const ledger = newLedger();

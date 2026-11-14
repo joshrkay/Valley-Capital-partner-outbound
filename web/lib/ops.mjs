@@ -9,8 +9,8 @@ import { sortServicers, loansFor, edgarStatus } from './servicers.mjs';
 const today = () => new Date().toISOString().slice(0, 10);
 const need = (v, what) => { const s = typeof v === 'string' ? v.trim() : ''; if (!s) throw new Error(`${what} is required.`); return s; };
 const mods = async () => {
-  const [uow, store, candidates, pilot, guard, draft] = await Promise.all(['src/uow.mjs', 'src/store.mjs', 'src/candidates.mjs', 'src/pilot.mjs', 'src/guard.mjs', 'src/draft.mjs'].map(engine));
-  return { LOADS: uow.LOADS, store, candidates, pilot, guard, draft };
+  const [uow, store, candidates, pilot, guard, draft, paper] = await Promise.all(['src/uow.mjs', 'src/store.mjs', 'src/candidates.mjs', 'src/pilot.mjs', 'src/guard.mjs', 'src/draft.mjs', 'src/paper.mjs'].map(engine));
+  return { LOADS: uow.LOADS, store, candidates, pilot, guard, draft, paper };
 };
 const suppressionIn = (store, dir) => store.readJson(join(dir, 'suppression.json'), { entries: [] }).entries ?? [];
 
@@ -31,13 +31,17 @@ export async function listCandidates(client, { tier, metro } = {}) {
   });
 }
 
+// The candidate, its decision, and its paper estimate (PRD E14-S1): one document, paper/fdic-<CERT>.json, read with the principal's own
+// token like every other document, so row-level security decides. Only that one record is loaded, never the whole paper/ folder.
 export async function candidateDetail(client, key) {
   const item = await client.candidate(need(key, 'A candidate key'));
   if (!item) return null;
-  const snap = await client.load(['suppression.json', 'candidates/decisions.json', 'candidates/aliases.json']);
-  const { candidates } = await mods();
+  const { candidates, paper } = await mods();
+  let rel = null;
+  try { rel = paper.paperRel(key); } catch { rel = null; }   // not a bank key: no record
+  const snap = await client.load(['suppression.json', 'candidates/decisions.json', 'candidates/aliases.json', ...(rel ? [rel] : [])]);
   const suppressed = !!candidates.suppressedBy(item, snap.docs['suppression.json']?.entries ?? [], snap.docs['candidates/aliases.json'] ?? {});
-  return { item, decision: (snap.docs['candidates/decisions.json'] ?? {})[key] ?? null, suppressed };
+  return { item, decision: (snap.docs['candidates/decisions.json'] ?? {})[key] ?? null, suppressed, paper: rel ? snap.docs[rel] ?? null : null };
 }
 
 export async function promote(client, { key, by }) {

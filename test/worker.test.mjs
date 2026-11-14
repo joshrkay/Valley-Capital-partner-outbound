@@ -34,6 +34,7 @@ test('a principal queues the FDIC pull and scoring; the worker runs both and the
   assert.ok(fake.docs.has('sources/fdic/institutions.json'));
   assert.ok(fake.docs.has('candidates/latest.json'));
   assert.ok(fake.candidates.size > 0, 'the projection was filled');
+  assert.ok([...fake.docs.keys()].some((p) => /^paper\/fdic-\d+\.json$/.test(p)), 'score.run writes the paper estimates (E14-S1)');
   const [fdicJob, scoreJob] = fake.jobs;
   assert.equal(fdicJob.result.outcome, 'ok');
   assert.equal(scoreJob.result.provisional, true);

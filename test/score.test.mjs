@@ -16,7 +16,7 @@ const REPS = ['20240930', '20241231', '20250331', '20250630', '20250930', '20251
 const Q = (over = {}) => ({
   ASSET: 3000000, LNLSNET: 2000000, LNRECONS: 100000, LNREMULT: 300000, LNRENRES: 600000, LNRENROW: 200000, LNRENROT: 400000,
   NCRECONS: 2000, NCREMULT: 15000, NCRENRES: 12000, NCRENROW: 3000, NCRENROT: 9000, NARECONS: 1000, NAREMULT: 10000, NARENRES: 8000,
-  P3RENRES: 6000, P3REMULT: 4000, P9RENRES: 2000, P9REMULT: 1000, ORE: 4000, ORECONS: 500, OREMULT: 1000, ORENRES: 1500,
+  P3RENRES: 6000, P3REMULT: 4000, P9RENRES: 2000, P9REMULT: 1000, P3RECONS: 1500, P9RECONS: 300, ORE: 4000, ORECONS: 500, OREMULT: 1000, ORENRES: 1500,
   NTRECONQ: 0, NTREMULQ: 300, NTRENRSQ: 200, NTLNLSQ: 600, ...over,
 });
 const src = (period) => ({ source: 'fdic', endpoint: '/test', query: {}, recordId: 'invented', period, fetchedAt: '2026-11-13T00:00:00Z', runId: 'test-run' });
@@ -165,10 +165,12 @@ test('the paper profile: categories with balances, shares, every stage, directio
   assert.deepEqual(nf.split.map((s) => [s.id, s.balance.field, s.noncurrent.field]), [['ownerOccupied', 'LNRENROW', 'NCRENROW'], ['other', 'LNRENROT', 'NCRENROT']]);
   const cons = p.categories.find((c) => c.id === 'construction');
   assert.equal(cons.fit.buys, false); assert.equal(cons.fit.reason, 'not a buy-box sector');
-  assert.equal(cons.stages.pastDue30to89.field, null); assert.match(cons.stages.pastDue30to89.note, /no field/);
+  // Construction past-due stages are pulled since E14-S1 (P3RECONS, P9RECONS), so every stage of every category now has a field.
+  assert.deepEqual([cons.stages.pastDue30to89.field, cons.stages.pastDue30to89.value, cons.stages.pastDue90.field, cons.stages.pastDue90.value], ['P3RECONS', 1500, 'P9RECONS', 300]);
   for (const c of p.categories) for (const [k, s] of Object.entries(c.stages)) if (s.field) assert.ok(s.repdte === '20260630' && typeof s.value === 'number', `${c.id}.${k}`);
   assert.ok(p.limits.some((l) => /hotel and retail/i.test(l) && /cannot separate/.test(l)), 'says hotel and retail cannot be separated');
-  assert.ok(p.limits.some((l) => /no individual loans, loan sizes, maturities/.test(l)));
+  assert.ok(p.limits.some((l) => /no individual loans or properties/.test(l) && /paper estimate/.test(l)));
+  assert.ok(!p.limits.some((l) => /not in the fields pulled/.test(l)), 'construction past-due stages are pulled now');
   const phx = p.footprint.metros.find((m) => m.cbsa === '38060');
   assert.equal(phx.label, 'Phoenix'); assert.equal(phx.branches.value, 12); assert.equal(phx.depositShare, 0.6);
   assert.deepEqual(phx.deposits, { field: 'DEPSUMBR', repdte: '20260630', value: 600000 });

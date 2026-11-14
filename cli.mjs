@@ -12,6 +12,7 @@ import { suggestFilers, confirmFiler, rejectFiler, filerStatus } from './src/sou
 import { LOADS } from './src/uow.mjs';
 import { runScoring } from './src/score.mjs';
 import { listCandidates, getCandidate, promote, dismiss, snooze } from './src/candidates.mjs';
+import { readPaper, renderPaper, paperPath } from './src/paper.mjs';
 import { loadContext, checkTouch, recordObservedSend, recordEvent, addSuppression, dueList, touchFromAccount } from './src/guard.mjs';
 import { runBriefer } from './src/research.mjs';
 import { runDrafter, approveDraft } from './src/draft.mjs';
@@ -81,6 +82,9 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound candidates promote --key K --by NAME   create the account with the pipeline's research attached; then research it
   outbound candidates dismiss --key K --by NAME --reason TEXT      it returns only if a new signal fires
   outbound candidates snooze  --key K --by NAME --until YYYY-MM-DD
+  outbound paper show --key fdic:CERT [--json]    the paper estimate (PRD E14-S1): what CRE the bank likely holds, from its Call Reports,
+                                                  each number with its tier and date, then the unknowns and the tape request. Written by
+                                                  score run. For principals only: never in a message. --json prints the record itself
 
   Pilot (PRD E1): check the briefer on accounts you already know before it researches any account the pipeline found.
   outbound pilot template --account ID            write a "what is true" sheet to fill in (pilot/ID.truth.json)
@@ -331,6 +335,13 @@ async function main() {
     }
     if (sub === 'dismiss') return out(dismiss({ dir, key: need(flags, 'key'), by: need(flags, 'by'), reason: need(flags, 'reason') }));
     if (sub === 'snooze') return out(snooze({ dir, key: need(flags, 'key'), by: need(flags, 'by'), until: need(flags, 'until') }));
+  }
+
+  if (cmd === 'paper' && sub === 'show') {   // the paper estimate (PRD E14-S1), written by `score run`
+    const key = need(flags, 'key');
+    const rec = readPaper({ dir, key });
+    if (!rec) throw new Error(`No paper estimate for ${key} (${paperPath(dir, key)}). Run: outbound score run`);
+    return out(flags.json ? rec : renderPaper(rec));
   }
 
   if (cmd === 'pilot') {
