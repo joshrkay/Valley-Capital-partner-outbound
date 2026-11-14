@@ -79,6 +79,16 @@ test('DATA RULE: no prospect data file is tracked in git in this repository', ()
   assert.deepEqual(bad, [], 'prospect data must never be committed; it lives in OUTBOUND_DATA_DIR outside the repo');
 });
 
+test('DATA RULE: call briefs, call notes, outcomes and reports (PRD E15) are never tracked in git', () => {
+  let files;
+  try { files = execFileSync('git', ['ls-files'], { cwd: REPO, encoding: 'utf8' }).split('\n').filter(Boolean); } catch { return; }
+  // calls/ and reports/ are data folders at any depth, except as names of code (web routes or src modules ending in .mjs/.jsx/.js).
+  const bad = files.filter((f) => /(^|\/)outcomes\.jsonl$/.test(f)
+    || (/(^|\/)(calls|reports)\//.test(f) && /\.(json|jsonl|md|txt)$/.test(f))
+    || /(^|\/)\d{4}-\d{2}-\d{2}-(prep|notes|followup)\.(json|md)$/.test(f));
+  assert.deepEqual(bad, [], 'call notes, briefs and outcomes are prospect data: they live in OUTBOUND_DATA_DIR and the database only');
+});
+
 test('preferred terms exist for the audiences that have researched vocabulary, and match the terminology guide', () => {
   assert.ok(rules.terminology.prefer.bank.includes('loan sale'));
   assert.ok(rules.terminology.prefer.servicer.includes('note sale'));

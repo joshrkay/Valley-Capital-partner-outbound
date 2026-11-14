@@ -38,6 +38,7 @@
   ],
   "stopEvents": ["reply", "opt_out", "meeting", "handoff"],
   "calls": { "callablePhoneTypes": ["landline"], "hours": [9, 17] },
+  "outcomes": { "_note": "PRD E15-S4, the outcomes report. PLACEHOLDERS. Below minToTune confirmed call outcomes, the report says the counts are too few to tune scoring weights on. leadTimeBucketsDays are the edges of the lead-time groups, from an account's first signal to its first meeting. The report never changes weights; a principal does.", "minToTune": 30, "leadTimeBucketsDays": [30, 90, 180, 365] },
   "personalDomains": [
     "gmail.com", "googlemail.com", "yahoo.com", "ymail.com", "outlook.com", "hotmail.com", "live.com", "msn.com", "aol.com",
     "icloud.com", "me.com", "mac.com", "proton.me", "protonmail.com", "gmx.com", "mail.com", "comcast.net", "verizon.net", "att.net", "sbcglobal.net"
