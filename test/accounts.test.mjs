@@ -235,6 +235,9 @@ test('the contact view: verified, expired, verified for another address, unverif
   assert.equal(contactStatus(a, { config: config(), now: new Date(NOW.getTime() + (days + 1) * 86400000) }).email.state, 'expired');
   const other = structuredClone(a); other.person.email = 'robin2@acmebank.test';
   assert.equal(contactStatus(other, { config: config(), now: NOW }).email.state, 'other_address');
+  // Verified, but the address lost its own source (an account edited by hand): the guard refuses it (EMAIL_UNSOURCED), so the view does too.
+  const bare = structuredClone(a); bare.contact.provenance = bare.contact.provenance.filter((p) => p.field !== 'email');
+  assert.deepEqual([contactStatus(bare, { config: config(), now: NOW }).email.state, /no recorded source/.test(contactStatus(bare, { config: config(), now: NOW }).email.reason)], ['unsourced', true]);
   const s = contactStatus(a, { config: config(), now: NOW });
   assert.match(s.email.reverifyBy, /^\d{4}-\d{2}-\d{2}$/);
   assert.equal(s.fields.name.findingId, 'F1');

@@ -2,11 +2,16 @@
 // own functions run in units of work as the signed-in principal. No network: the MX lookup goes to a fake resolver. Invented data only.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join, dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { fakePostgrest } from '../../test/postgrest-fake.mjs';
 import { platformClient } from '../../src/platform/client.mjs';
 import * as ops from '../lib/ops.mjs';
+import * as ro from '../lib/routes-ops.mjs';
 
 const URL_ = 'https://example-project.supabase.test';
+const WEB = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const MX = async () => [{ exchange: 'mx1.alphabank.test', priority: 10 }];
 const NO_MX = async () => { const e = new Error('queryMx ENOTFOUND'); e.code = 'ENOTFOUND'; throw e; };
 const SITE = { kind: 'institution_site', url: 'https://alphabank.test/leadership' };
@@ -48,9 +53,14 @@ test('forgetting a person from the web: the account\'s name typed to confirm; ev
   await ops.addDomain(client, { id: 'alpha-bank', domain: 'alphabank.test', by: 'Pat', source: SITE });
   await ops.setEmail(client, { id: 'alpha-bank', email: 'morgan@alphabank.test', by: 'Pat', source: SITE });
   await client.flush({ docs: [], lines: [{ path: 'touches.jsonl', line: { type: 'reply', accountId: 'alpha-bank', institution: 'Alpha Bank', date: '2026-11-11', note: 'Morgan Example asked us to call in January' } }] });
+  // The firm knows them (the network), and the account's routes name them (the direct route).
+  seed(fake, 'network/network.json', { version: 1, seq: 1, people: { 'np-1': { id: 'np-1', name: 'Morgan Example', organization: 'Alpha Bank', title: '', relationship: 'met at a conference', knownBy: ['Pat'], introConsent: 'unknown', aliases: [], addedBy: 'Pat', addedAt: '2026-11-01T00:00:00.000Z' } }, firms: {}, memberships: {} });
+  await ro.buildAccountRoutes(client, { id: 'alpha-bank' });
+  assert.match(JSON.stringify(fake.docs.get('routes/alpha-bank.json').body), /Morgan Example/);
   await assert.rejects(ops.forgetPerson(client, { id: 'alpha-bank', by: 'Pat', reason: 'asked to be removed', confirm: 'alpha' }), /type the account's name/);
   const r = await ops.forgetPerson(client, { id: 'alpha-bank', by: 'Pat', reason: 'asked to be removed', confirm: 'Alpha Bank' });
-  assert.equal(r.counts.touches, 1);
+  assert.deepEqual([r.counts.touches, r.counts.routes, r.counts.network], [1, 2, 1]);
+  assert.deepEqual(fake.docs.get('network/network.json').body.people, {});
   const everything = JSON.stringify([...fake.docs.values(), ...fake.lines]);
   assert.doesNotMatch(everything, /morgan/i, 'no document or log line holds the person');
   assert.equal(fake.lines.find((l) => l.path === 'touches.jsonl').line.type, 'reply', 'the reply still stops the sequence');
@@ -59,6 +69,16 @@ test('forgetting a person from the web: the account\'s name typed to confirm; ev
   assert.deepEqual([line.line.accountId, line.line.by, line.by], ['alpha-bank', 'Pat', 'pat@example.test']);
   // Re-adding them is refused by the engine.
   await assert.rejects(ops.setPerson(client, { id: 'alpha-bank', name: 'Morgan Example', by: 'Pat', source: { kind: 'principal_known' } }), /suppressed/);
+});
+
+test('the only form that names the person is the contact section\'s, which carries its source fields; the older one is gone', () => {
+  const src = (f) => readFileSync(join(WEB, 'app', 'accounts', f), 'utf8');
+  const page = src('[id]/page.jsx'), contact = src('[id]/contact.jsx'), actions = src('actions.js');
+  assert.doesNotMatch(page, /setPersonAction|Set person/, 'the account page has no form of its own to name the person');
+  const forms = [...contact.matchAll(/<form action=\{setPersonAction\}[\s\S]*?<\/form>/g)].map((m) => m[0]);
+  assert.equal(forms.length, 1);
+  assert.match(forms[0], /<SourceFields /, 'it records where the name came from');
+  assert.doesNotMatch(actions, /fd\.has\('source'\)/, 'no special case is left for a form without source fields');
 });
 
 test('a database without the redaction migration is refused before anything is scrubbed', async () => {

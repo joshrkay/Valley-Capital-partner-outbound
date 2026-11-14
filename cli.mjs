@@ -60,7 +60,8 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
                                                   address, a confirmed domain, an MX record in DNS, no suppression) and you record
                                                   how you know it. No mail server is contacted. It lasts contacts.json reverifyDays
   outbound account forget-person --account ID --by NAME --reason TEXT --confirm "ACCOUNT NAME" [--name N --email E]
-                                                  a deletion request: removes the person from every record in the data folder, keeps
+                                                  a deletion request: removes the person from every record in the data folder (the
+                                                  routes and the firm's network included: a routes file that names them is rebuilt), keeps
                                                   a hashed suppression entry so they are never contacted or named again, and logs counts
                                                   only. --name/--email: a person no longer on the account
 
@@ -306,7 +307,7 @@ async function main() {
     const a = loadAccount(dir, need(flags, 'account'));
     const st = contactStatus(a, { config: rules.config });
     const label = { name: 'Name', title: 'Title', email: 'Email', phone: 'Phone', mailingAddress: 'Mailing address' };
-    const state = { none: 'none', unverified: 'UNVERIFIED', verified: 'VERIFIED', expired: 'EXPIRED: verify it again', other_address: 'UNVERIFIED: the verification on record is for another address' }[st.email.state];
+    const state = { none: 'none', unverified: 'UNVERIFIED', verified: 'VERIFIED', expired: 'EXPIRED: verify it again', other_address: 'UNVERIFIED: the verification on record is for another address', unsourced: 'UNSOURCED: verified, but the address has no source of its own, so the guard refuses it' }[st.email.state];
     const v = st.email.verification;
     return out([
       `${a.name} (${a.id}). Role: ${st.role.confirmed ? `confirmed by ${st.role.by}` : 'unconfirmed'}.`,
@@ -340,7 +341,7 @@ async function main() {
     return out(`VERIFIED for ${r.account.person.name} at ${r.account.name}, by ${r.account.contact.verification.by} (${r.account.contact.verification.method}). It lasts ${rules.config.contacts?.reverifyDays} days.\n${lines}`);
   }
   if (cmd === 'account' && sub === 'forget-person') {   // a deletion request (PRD E7-S3); the output names no one
-    const r = await forgetInFolder({ dir, id: need(flags, 'account'), by: need(flags, 'by'), reason: need(flags, 'reason'), confirm: opt(flags, 'confirm'), name: opt(flags, 'name'), email: opt(flags, 'email') });
+    const r = await forgetInFolder({ dir, id: need(flags, 'account'), by: need(flags, 'by'), reason: need(flags, 'reason'), confirm: opt(flags, 'confirm'), name: opt(flags, 'name'), email: opt(flags, 'email'), rules });
     return out(`Removed from account ${r.accountId} and every record that held them. A hashed suppression entry keeps them from being contacted or named again.\nFiles or lines changed, by store: ${Object.entries(r.counts).map(([k, n]) => `${k} ${n}`).join(', ')}.\nCopies outside the data folder (a vendor export you saved, your mailbox, notes on paper) are yours to remove.`);
   }
 

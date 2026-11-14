@@ -117,10 +117,8 @@ export function checkTouch(touch, ctx) {
       if ((config.personalDomains ?? []).includes(em.domain)) err('PERSONAL_EMAIL', `${em.domain} is a personal email domain. Business addresses only.`);
       if ((config.roleLocalParts ?? []).includes(em.local)) err('ROLE_EMAIL', `"${em.local}@" is a role address, not a person.`);
     }
-    const unverified = emailUnverified({ address: em ? `${em.local}@${em.domain}` : null, contact, day, reverifyDays: config.contacts?.reverifyDays });
-    if (unverified) err('EMAIL_UNVERIFIED', unverified);
-    // PRD E7-S3: the address itself must be sourced: where it was seen, and who recorded it. A source for another address does not count.
-    if (em && !(contact.provenance ?? []).some((p) => p?.field === 'email' && String(p.value ?? '').toLowerCase() === `${em.local}@${em.domain}`)) err('EMAIL_UNSOURCED', 'The address has no recorded source (where it was seen, and who recorded it). Set it with its source: outbound account set-email.');
+    // PRD E7-S3: verified, and sourced. The one rule (emailCheck) that the contact view and the direct route read too.
+    for (const p of emailCheck({ address: person.email, contact, day, reverifyDays: config.contacts?.reverifyDays }).problems) err(p.code, p.message);
     if (mine.some((t) => t.type === 'bounce')) err('EMAIL_BOUNCED', 'A previous message to this account bounced.');
   }
   if (touch.channel === 'letter' && !person.mailingAddress) err('ADDRESS_MISSING', 'No mailing address on the account for a letter.');
@@ -174,16 +172,36 @@ export function checkTouch(touch, ctx) {
   return { allowed: errors.length === 0, errors, warnings, next };
 }
 
-// Why an address does not count as verified on `day`, or null when it does (PRD E7-S3). Verified means: a principal verified it
-// (src/accounts.mjs verifyEmail, which runs the checks and records how they know it), the verification is for this exact address, and
-// it is no older than contacts.reverifyDays. With no period set, nothing counts as verified: the rule fails closed.
-export function emailUnverified({ address, contact = {}, day, reverifyDays }) {
-  if (contact.emailStatus !== 'verified') return `Email status is "${contact.emailStatus ?? 'unknown'}". Only verified addresses are used.`;
+// The one rule for a verified address (PRD E7-S3). The guard, the contact view (src/accounts.mjs contactStatus) and the direct route to
+// the decision-maker (src/routes.mjs) all read this, so nothing calls an address verified when the guard would refuse it. An address is
+// verified on `day` only when every one of these holds:
+//   - a principal verified it (src/accounts.mjs verifyEmail runs the checks and records how they know it): a status of "verified" AND a
+//     verification record, for this exact address;
+//   - the verification is no older than contacts.reverifyDays. With no period set, nothing counts as verified: the rule fails closed;
+//   - the address has a source of its own in contact.provenance (where it was seen, and who recorded it). A source for another address,
+//     or an entry that names no field, does not count.
+// `problems` holds each rule it breaks, as the guard's code and message: EMAIL_UNVERIFIED (state unverified, other_address or expired)
+// and EMAIL_UNSOURCED (state unsourced). With no valid address, the verification rules are still checked and the source rule is not:
+// the guard reports the missing address itself (EMAIL_MISSING), and the state is "none".
+export function emailCheck({ address, contact = {}, day, reverifyDays }) {
+  const em = emailParts(address);
+  const addr = em ? `${em.local}@${em.domain}` : null;
+  const c = contact && typeof contact === 'object' ? contact : {};
+  const problems = [];
+  const unverified = verificationProblem({ address: addr, contact: c, day, reverifyDays });
+  if (unverified) problems.push({ code: 'EMAIL_UNVERIFIED', ...unverified });
+  if (addr && !(Array.isArray(c.provenance) ? c.provenance : []).some((p) => p?.field === 'email' && String(p.value ?? '').trim().toLowerCase() === addr)) {
+    problems.push({ code: 'EMAIL_UNSOURCED', state: 'unsourced', message: 'The address has no recorded source (where it was seen, and who recorded it). Set it with its source: outbound account set-email.' });
+  }
+  return { address: addr, verified: !!addr && !problems.length, state: !addr ? 'none' : problems[0]?.state ?? 'verified', problems };
+}
+function verificationProblem({ address, contact, day, reverifyDays }) {
+  if (contact.emailStatus !== 'verified') return { state: 'unverified', message: `Email status is "${contact.emailStatus ?? 'unknown'}". Only verified addresses are used.` };
   const v = contact.verification;
-  if (!v || !v.verifiedOn) return 'Email status says verified, but no verification is recorded (who checked it, how and when). Verify it: outbound account verify-email.';
-  if (address && String(v.email ?? '').toLowerCase() !== address) return 'The verification on record is for a different address than the current one. Verify the current address: outbound account verify-email.';
-  if (!(Number.isInteger(reverifyDays) && reverifyDays > 0)) return 'No re-verification period is set (contacts.json reverifyDays), so no address counts as verified.';
-  if (day && daysBetween(day, v.verifiedOn) > reverifyDays) return `The address was verified on ${v.verifiedOn}. A verification lasts ${reverifyDays} days (contacts.json reverifyDays), so it expired on ${addDays(v.verifiedOn, reverifyDays)}. Verify it again: outbound account verify-email.`;
+  if (!v || !v.verifiedOn) return { state: 'unverified', message: 'Email status says verified, but no verification is recorded (who checked it, how and when). Verify it: outbound account verify-email.' };
+  if (address && String(v.email ?? '').toLowerCase() !== address) return { state: 'other_address', message: 'The verification on record is for a different address than the current one. Verify the current address: outbound account verify-email.' };
+  if (!(Number.isInteger(reverifyDays) && reverifyDays > 0)) return { state: 'unverified', message: 'No re-verification period is set (contacts.json reverifyDays), so no address counts as verified.' };
+  if (day && daysBetween(day, v.verifiedOn) > reverifyDays) return { state: 'expired', message: `The address was verified on ${v.verifiedOn}. A verification lasts ${reverifyDays} days (contacts.json reverifyDays), so it expired on ${addDays(v.verifiedOn, reverifyDays)}. Verify it again: outbound account verify-email.` };
   return null;
 }
 

@@ -17,11 +17,9 @@ async function run(fd, fn, ok) {
 // Where a contact detail came from (PRD E7-S3): the form's source kind, brief finding, page, vendor and date seen.
 const sourceOf = (fd) => ({ kind: field(fd, 'source'), findingId: field(fd, 'finding'), url: field(fd, 'url'), vendor: field(fd, 'vendor'), seenOn: field(fd, 'seen') });
 
-// A form with no source fields at all (the older one in "The person" panel) is told where to go, rather than given command-line flags.
-export const setPersonAction = async (fd) => run(fd, (ctx, id) => {
-  if (!fd.has('source')) throw new Error('Naming the person needs a source (PRD E7-S3): where the name came from. Use the "Name the person" form under Contact details.');
-  return ops.setPerson(ctx.client, { id, name: field(fd, 'name'), title: field(fd, 'title'), by: ctx.principal.name, source: sourceOf(fd) });
-}, 'Person recorded with its source. Their role is unconfirmed until a principal confirms it.');
+// The contact section's "Name the person" form, the only one that names a person: it always carries its source fields (PRD E7-S3).
+export const setPersonAction = async (fd) => run(fd, (ctx, id) => ops.setPerson(ctx.client, { id, name: field(fd, 'name'), title: field(fd, 'title'), by: ctx.principal.name, source: sourceOf(fd) }),
+  'Person recorded with its source. Their role is unconfirmed until a principal confirms it.');
 export const confirmRoleAction = async (fd) => run(fd, (ctx, id) => ops.confirmRole(ctx.client, { id, by: ctx.principal.name }), 'Role confirmed.');
 export const queueResearchAction = async (fd) => run(fd, (ctx, id) => ops.queueResearch(ctx.client, { id }), 'Research queued. The worker runs it; the brief appears here when it is done.');
 // Calls (PRD E15). Saving notes and confirming run as the signed-in principal; the brief and the reading of the notes are queued.

@@ -13,6 +13,8 @@ import { forgetPerson, forgetInFolder } from '../src/forget.mjs';
 import { setPerson, setEmail } from '../src/accounts.mjs';
 import { checkTouch, loadContext } from '../src/guard.mjs';
 import { approveDraft } from '../src/draft.mjs';
+import { addPerson, addMembership } from '../src/network.mjs';
+import { buildRoutes, chooseRoute, renderRoutes } from '../src/routes.mjs';
 
 const rules = loadRules();
 const NOW = new Date('2026-11-14T12:00:00Z');
@@ -149,8 +151,8 @@ test('forgetting a person removes them from every store that can hold them', () 
   const line = readJsonl(join(dir, 'audit.jsonl')).filter((l) => l.type === 'person_forgotten');
   assert.equal(line.length, 1);
   assert.deepEqual([line[0].accountId, line[0].by, line[0].at], [ID, 'Pat Example', NOW.toISOString()]);
-  assert.deepEqual(Object.keys(line[0].counts).sort(), ['accounts', 'briefs', 'calls', 'contacts', 'drafts', 'facts', 'outcomes', 'pilot', 'research', 'suppression', 'touches']);
-  assert.deepEqual(line[0].counts, { accounts: 2, research: 1, facts: 1, briefs: 1, drafts: 4, calls: 5, pilot: 2, touches: 1, outcomes: 0, suppression: 1, contacts: 1 });
+  assert.deepEqual(Object.keys(line[0].counts).sort(), ['accounts', 'briefs', 'calls', 'contacts', 'drafts', 'facts', 'network', 'outcomes', 'pilot', 'research', 'routes', 'suppression', 'touches']);
+  assert.deepEqual(line[0].counts, { accounts: 2, research: 1, facts: 1, briefs: 1, drafts: 4, calls: 5, pilot: 2, touches: 1, outcomes: 0, suppression: 1, contacts: 1, routes: 0, network: 0 });
   assert.deepEqual(r.counts, line[0].counts);
   assert.doesNotMatch(JSON.stringify(line[0]), /jordan|sample|acmebank|removed\./i);
 });
@@ -204,6 +206,70 @@ test('a person no longer on the account is forgotten by name and address, and th
   assert.equal(readJson(join(dir, 'accounts', `${ID}.json`)).person.name, 'Robin Lee');
 });
 
+// The routes (PRD E17) hold lender-side names, and the firm's network can hold the same person if the firm knows them. A second bank's
+// director is the same Jordan Sample, of Acme, so a route there goes through the network entry; both banks have a chosen route.
+function seedRoutes() {
+  const dir = seed();
+  const res = readJson(join(dir, 'research', `${ID}.json`));
+  const named = (f, entities) => ({ ...f, entities });
+  res.findings = [named(res.findings[0], [{ type: 'person', name: 'Jordan Sample', affiliation: '', role: 'Chief Credit Officer' }]), named(res.findings[1], []), named(res.findings[2], [{ type: 'person', name: 'Robin Lee', affiliation: '', role: 'Head of Special Assets' }]),
+    { ...finding('F4', 'relationship', 'Jordan Sample spoke at the Example Lenders Forum.', 'Speakers: Jordan Sample, Acme Community Bank. Example Lenders Forum spring meeting', 'https://forum.example.test/speakers'), question_id: 'bank.memberships',
+      entities: [{ type: 'person', name: 'Jordan Sample', affiliation: 'Acme Community Bank', role: 'speaker' }, { type: 'association', name: 'Example Lenders Forum', affiliation: '', role: '' }] }];
+  put(dir, `research/${ID}.json`, res);
+  put(dir, 'accounts/beta-bank.json', account({ id: 'beta-bank', name: 'Beta Example Bank', aliases: [], institutionKey: 'fdic:77777', domains: [], person: { name: '', title: '', email: '' }, contact: { emailStatus: 'unverified', roleConfirmed: false, provenance: [] } }));
+  put(dir, 'research/beta-bank.json', { account: 'beta-bank', date: '2026-11-10', mode: 'institution', findings: [{ ...finding('F1', 'person', 'Jordan Sample of Acme Community Bank is a director.', 'Jordan Sample, Director; Chief Credit Officer of Acme Community Bank', 'https://betabank.test/board'), question_id: 'bank.board',
+    entities: [{ type: 'person', name: 'Jordan Sample', affiliation: 'Acme Community Bank', role: 'Director' }] }] });
+  addPerson({ dir, name: 'Jordan Sample', organization: 'Acme Community Bank, N.A.', relationship: 'met at a conference', knownBy: 'Pat Example', introConsent: 'yes', by: 'Pat Example', now: NOW });   // np-1: them
+  addPerson({ dir, name: 'Casey Example', organization: 'Example Grove Partners', relationship: 'co-investor', knownBy: 'Pat Example', by: 'Pat Example', now: NOW });   // np-2: someone else
+  addMembership({ dir, association: 'Example Lenders Forum', principal: 'Pat Example', by: 'Pat Example', now: NOW });   // nm-3
+  const acme = buildRoutes({ dir, id: ID, rules, now: NOW, env: {} });
+  const beta = buildRoutes({ dir, id: 'beta-bank', rules, now: NOW, env: {} });
+  assert.deepEqual(acme.routes.map((r) => [r.type, r.bridge?.id ?? null]), [['board', 'np-1'], ['forum', 'nm-3'], ['direct', null]]);
+  chooseRoute({ dir, id: ID, routeId: acme.routes[0].id, by: 'Pat Example', rules, now: NOW, env: {} });
+  chooseRoute({ dir, id: 'beta-bank', routeId: beta.routes.find((r) => r.bridge?.id === 'np-1').id, by: 'Pat Example', rules, now: NOW, env: {} });
+  return dir;
+}
+
+test('a deletion request reaches routes/ and network/: the person leaves every routes file and the network, and a choice that used them goes', async () => {
+  const a = seedRoutes(), b = seedRoutes();
+  const r = await forgetInFolder({ dir: a, id: ID, by: 'Pat Example', reason: 'Jordan Sample asked by email to be removed.', confirm: CONFIRM, now: NOW });
+  const stored = everything(a).filter(([f]) => /^(routes|network)\//.test(f));
+  assert.deepEqual(stored.map(([f]) => f).sort(), ['network/network.json', 'routes/acme-bank.json', 'routes/acme-bank.md', 'routes/beta-bank.json', 'routes/beta-bank.md']);
+  for (const [f, text] of stored) assert.doesNotMatch(text, /jordan|acmebank\.test\/team/i, `${f} still holds them`);
+  const net = readJson(join(a, 'network', 'network.json'));
+  assert.deepEqual([Object.keys(net.people), Object.keys(net.memberships)], [['np-2'], ['nm-3']], 'their entry goes; someone else\'s and the membership stay');
+  const acme = readJson(join(a, 'routes', `${ID}.json`));
+  assert.equal(acme.chosen, null);
+  assert.match(acme.choiceRemoved.reason, /deletion request|network entry it used was removed/);
+  assert.deepEqual(acme.routes.map((x) => [x.type, x.target.kind]), [['forum', 'institution'], ['direct', 'candidates']], 'rebuilt from the scrubbed research');
+  assert.deepEqual(acme.routes.at(-1).target.names, ['Robin Lee'], 'the other candidate stays');
+  const beta = readJson(join(a, 'routes', 'beta-bank.json'));
+  assert.deepEqual([beta.chosen, beta.routes.some((x) => x.bridge?.id === 'np-1'), !!beta.choiceRemoved], [null, false, true]);
+  // One audit line with the counts per store, routes and network included. No name, no address.
+  const line = readJsonl(join(a, 'audit.jsonl')).filter((l) => l.type === 'person_forgotten');
+  assert.equal(line.length, 1);
+  assert.deepEqual([line[0].counts.routes, line[0].counts.network], [4, 1], 'two routes files, json and md each; the network document');
+  assert.deepEqual(r.counts, line[0].counts);
+  assert.doesNotMatch(JSON.stringify(readJsonl(join(a, 'audit.jsonl'))), /jordan|sample|acmebank/i, 'no audit line names them');
+  // The unit of work above loaded only LOADS.forget; run straight on a data folder, the deletion stores the same thing.
+  forgetPerson({ dir: b, id: ID, by: 'Pat Example', reason: 'Jordan Sample asked by email to be removed.', confirm: CONFIRM, now: NOW });
+  assert.deepEqual(snapshotFromDir(b, ['routes/', 'network/']), snapshotFromDir(a, ['routes/', 'network/']));
+});
+
+test('a routes file whose account is gone is redacted, not rebuilt; an error in routes.json stops the deletion before anything changes', () => {
+  const bad = structuredClone(rules); bad.routes.order.types = ['board'];
+  const before = seedRoutes();
+  assert.throws(() => forget(before, { rules: bad }), /routes.json has errors.*Nothing was changed/s);
+  assert.equal(readJson(join(before, 'accounts', `${ID}.json`)).person.name, 'Jordan Sample', 'nothing changed');
+  const dir = seedRoutes();
+  const rec = readJson(join(dir, 'routes', `${ID}.json`));
+  put(dir, 'routes/gone-bank.json', { ...rec, account: 'gone-bank' });
+  put(dir, 'routes/gone-bank.md', renderRoutes({ ...rec, account: 'gone-bank' }));
+  forget(dir);
+  for (const f of ['gone-bank.json', 'gone-bank.md']) assert.doesNotMatch(readFileSync(join(dir, 'routes', f), 'utf8'), /jordan/i, f);
+  assert.match(readFileSync(join(dir, 'routes', 'gone-bank.md'), 'utf8'), /^# Routes to the decision-maker: Acme Community Bank/);
+});
+
 test('the command line\'s run (a unit of work over the folder) and the platform\'s (LOADS.forget) store the same thing', async () => {
   const a = seed(), b = seed();
   const ra = await forgetInFolder({ dir: a, id: ID, by: 'Pat Example', reason: 'asked', confirm: CONFIRM, now: NOW });
@@ -220,5 +286,5 @@ test('the command line\'s run (a unit of work over the folder) and the platform\
     assert.deepEqual(Object.keys(x.new).sort(), Object.keys(x.old).sort());
     for (const k of Object.keys(x.old)) if (x.new[k] !== x.old[k]) { assert.equal(x.new[k], '[removed]'); assert.ok(!['type', 'accountId', 'institution', 'date', 'id', 'ref'].includes(k), k); }
   }
-  for (const p of ['accounts/', 'research/', 'facts/', 'briefs/', 'drafts/', 'calls/', 'pilot/', 'contacts/', 'suppression.json', 'touches.jsonl', 'outcomes.jsonl']) assert.ok(LOADS.forget.includes(p), p);
+  for (const p of ['accounts/', 'research/', 'facts/', 'briefs/', 'drafts/', 'calls/', 'pilot/', 'contacts/', 'routes/', 'network/', 'suppression.json', 'touches.jsonl', 'outcomes.jsonl']) assert.ok(LOADS.forget.includes(p), p);
 });

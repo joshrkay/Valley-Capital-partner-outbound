@@ -11,7 +11,7 @@
 import { join } from 'node:path';
 import { promises as dnsPromises } from 'node:dns';
 import { readJson, writeJson, listFiles, audit, safeId } from './store.mjs';
-import { normName, nameTokens, suppressedEmail, suppressedPerson, emailUnverified } from './guard.mjs';
+import { normName, nameTokens, suppressedEmail, suppressedPerson, emailCheck } from './guard.mjs';
 import { vendorPassed, vendorSlug } from './vendors.mjs';
 
 const DAY = 86400000;
@@ -290,22 +290,21 @@ export function sourceLabel(src) {
   return `${what}${src.url ? ` (${src.url})` : ''}${src.seenOn || src.date ? `, seen ${src.seenOn ?? src.date}` : ''}${src.by || src.confirmedBy ? `, set by ${src.by ?? src.confirmedBy}` : ''}`;
 }
 
-// The address's state: none, unverified, verified, expired, or other_address (the verification on record is for another address).
+// The address's state, by the guard's own rule (src/guard.mjs emailCheck): none, unverified, verified, expired, other_address (the
+// verification on record is for another address) or unsourced (verified, but the address has no source of its own, so the guard refuses
+// it all the same).
 export function contactStatus(account, { config = {}, now = new Date() } = {}) {
   const p = account?.person ?? {};
   const c = account?.contact ?? {};
   const address = lower(p.email);
   const days = config.contacts?.reverifyDays;
   const v = c.verification ?? null;
-  const today = ymd(now);
   const reverifyBy = v?.verifiedOn && Number.isInteger(days) ? addDays(v.verifiedOn, days) : null;
   let state = 'none'; let reason = null;
   if (address) {
-    reason = emailUnverified({ address, contact: c, day: today, reverifyDays: days });
-    if (!reason) state = 'verified';
-    else if (c.emailStatus === 'verified' && v?.verifiedOn && lower(v.email) !== address) state = 'other_address';
-    else if (c.emailStatus === 'verified' && reverifyBy && today > reverifyBy) state = 'expired';
-    else state = 'unverified';
+    const check = emailCheck({ address, contact: c, day: ymd(now), reverifyDays: days });
+    state = check.state === 'none' ? 'unverified' : check.state;   // an address that is not well formed is never verified
+    reason = check.problems[0]?.message ?? (check.verified ? null : 'The address is not a valid email address.');
   }
   const src = (f) => (c.provenance ?? []).filter((x) => x?.field === f).at(-1) ?? null;
   return {

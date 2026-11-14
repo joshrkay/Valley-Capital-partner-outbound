@@ -9,12 +9,13 @@ import { execFileSync } from 'node:child_process';
 import { REPO, put } from './kit.mjs';
 import { rules, ID, KEY, NOW, BY, FINDINGS, ACCOUNT, finding, world } from './routes-kit.mjs';
 import { readJson, readJsonl } from '../src/store.mjs';
-import { addPerson, addFirm, readNetwork } from '../src/network.mjs';
+import { addPerson, addFirm, addMembership, readNetwork } from '../src/network.mjs';
 import { loadContext, checkTouch, touchFromAccount } from '../src/guard.mjs';
-import { buildRoutes, readRoutes, chooseRoute, removeNetworkEntry, counselEvent, validateCounselEvent, validateRoutesRules, routesPaths, routesLoads, emailState, ROUTE_TYPES } from '../src/routes.mjs';
+import { buildRoutes, readRoutes, chooseRoute, removeNetworkEntry, counselEvent, validateCounselEvent, validateRoutesRules, routesPaths, routesLoads, ROUTE_TYPES } from '../src/routes.mjs';
 import { LOADS, withUnitOfWork, snapshotFromDir, applyPlanToDir } from '../src/uow.mjs';
 
 const R = () => structuredClone(rules);
+const DAY = NOW.toISOString().slice(0, 10);
 const build = (dir, o = {}) => buildRoutes({ dir, id: ID, rules: o.rules ?? rules, now: o.now ?? NOW, env: {}, ...(o.counselFeeders ? { counselFeeders: o.counselFeeders } : {}) });
 const byType = (rec, type) => rec.routes.filter((r) => r.type === type);
 const audits = (dir) => readJsonl(join(dir, 'audit.jsonl'));
@@ -95,7 +96,7 @@ test('a person matched on name and organization keeps the evidence tier; a same-
   const off = R(); off.routes.matching.personNameOnly = false;
   const dropped = build(dir, { rules: off });
   assert.ok(!dropped.routes.some((r) => r.bridge?.id === 'np-6'));
-  assert.equal(dropped.leftOut.nameOnly, 2, 'two findings name Jordan Sample');
+  assert.equal(dropped.leftOut.nameOnly, 1, 'one officer finding names Jordan Sample; the speaker list (F5) gives a forum target, never a board route');
 });
 
 test('a firm matches a network firm or a network person\'s organization; a colleague at a director\'s firm is inferred', () => {
@@ -232,7 +233,7 @@ test('the order comes from routes.json, and the same inputs give the same routes
 test('the direct route is always listed, with its status from the existing prerequisites', () => {
   const ready = build(world()).routes.find((r) => r.type === 'direct');
   assert.deepEqual([ready.status.personNamed, ready.status.roleConfirmed, ready.status.email.verified, ready.status.ready], [true, true, true, true]);
-  assert.deepEqual(ready.evidence.findings.map((f) => f.id), ['F1', 'F5']);
+  assert.deepEqual(ready.evidence.findings.map((f) => f.id), ['F1'], 'bank.people only: the speaker list (F5) is a forum route\'s evidence');
   assert.equal(ready.tier, 'reported');
 
   const none = build(world({ account: ACCOUNT({ person: { name: '', title: '' }, contact: { roleConfirmed: false } }) })).routes.find((r) => r.type === 'direct');
@@ -245,15 +246,103 @@ test('the direct route is always listed, with its status from the existing prere
   assert.deepEqual(bare.map((r) => [r.type, r.target.kind, r.target.names.length, r.tier]), [['direct', 'candidates', 0, 'inferred']]);
 });
 
-test('the address status is read defensively while email verification is built beside this (E7-S3)', () => {
-  const base = ACCOUNT().person;
-  assert.deepEqual(emailState({ person: base, contact: { emailStatus: 'verified' } }), { present: true, status: 'verified', verified: true });
-  assert.deepEqual(emailState({ person: base, contact: { email: { status: 'verified', address: 'x@acmebank.test' } } }), { present: true, status: 'verified', verified: true });
-  assert.deepEqual(emailState({ person: base, contact: { verification: { email: { status: 'risky' } } } }), { present: true, status: 'risky', verified: false });
-  assert.deepEqual(emailState({ person: { name: 'x' }, contact: { emailStatus: 'verified' } }), { present: false, status: 'verified', verified: false });
-  assert.deepEqual(emailState({ person: base, contact: { email: 'not an object' } }), { present: true, status: 'unknown', verified: false });
-  assert.deepEqual(emailState({}), { present: false, status: 'unknown', verified: false });
-  assert.deepEqual(emailState({ person: null, contact: null }), { present: false, status: 'unknown', verified: false });
+test('the direct route calls an address verified only when the guard would (E7-S3): expired, verified for an old address, or unsourced is not', () => {
+  const guardCodes = (dir) => checkTouch(touchFromAccount(readJson(join(dir, 'accounts', `${ID}.json`)), { channel: 'email', step: 1, date: DAY, sender: 'pat' }), loadContext({ dir, config: rules.config, env: {} })).errors.map((e) => e.code);
+  const c = ACCOUNT().contact;
+  const cases = [
+    ['expired', { verification: { ...c.verification, verifiedOn: '2026-03-01' } }, 'EMAIL_UNVERIFIED'],   // 258 days before; contacts.json reverifyDays is 180
+    ['other_address', { verification: { ...c.verification, email: 'jordan.old@acmebank.test' } }, 'EMAIL_UNVERIFIED'],
+    ['unsourced', { provenance: c.provenance.filter((p) => p.field !== 'email') }, 'EMAIL_UNSOURCED'],
+    ['unverified', { verification: null }, 'EMAIL_UNVERIFIED'],   // "verified", with no record of who checked it, how or when
+    ['unverified', { emailStatus: undefined, email: { status: 'verified', address: 'jordan@acmebank.test' }, verification: null }, 'EMAIL_UNVERIFIED'],   // a status the guard does not read
+  ];
+  for (const [state, over, code] of cases) {
+    const dir = world({ account: ACCOUNT({ contact: { ...c, ...over } }) });
+    assert.ok(guardCodes(dir).includes(code), `${state}: the guard refuses it with ${code}`);
+    const direct = build(dir).routes.find((r) => r.type === 'direct');
+    assert.deepEqual([direct.status.email.verified, direct.status.email.status, direct.status.ready], [false, state, false], state);
+    assert.ok(direct.status.missing.includes(code), `${state}: ${direct.status.missing}`);
+    assert.doesNotMatch(direct.reasoning, /address is verified/);
+    const { checklist } = chooseRoute({ dir, id: ID, routeId: 'r-direct', by: BY, rules, now: NOW, env: {} });
+    assert.ok(checklist.ask.some((x) => /outbound account (verify-email|set-email) --account/.test(x)), `${state}: ${checklist.ask.join(' | ')}`);
+    assert.doesNotMatch(readFileSync(routesPaths(dir, ID).md, 'utf8'), /Ready\./, state);
+  }
+  // When the guard lets an email to the address through, and only then, the direct route says it is verified.
+  const ok = world();
+  assert.ok(!guardCodes(ok).some((x) => x.startsWith('EMAIL_')), guardCodes(ok).join());
+  const direct = build(ok).routes.find((r) => r.type === 'direct');
+  assert.deepEqual([direct.status.email.verified, direct.status.email.status, direct.status.ready], [true, 'verified', true]);
+});
+
+// ---- Review findings on the matching (PR #8) ------------------------------------------------------------------------------------
+test('a person a membership finding names is a forum target, never a board route: a speaker list is no evidence of a director or officer', () => {
+  const dir = world({ findings: FINDINGS.filter((f) => f.id !== 'F1') });   // only F5, a speaker list, names Jordan Sample
+  addPerson({ dir, name: 'Jordan Sample', organization: 'Acme Community Bank', knownBy: 'Lee Example', by: BY, now: NOW });   // np-6
+  const rec = build(dir);
+  assert.ok(!rec.routes.concat(rec.held).some((r) => r.type === 'board' && r.bridge?.id === 'np-6'), 'a board route from a speaker list');
+  for (const r of byType(rec, 'board')) for (const f of r.evidence.findings) assert.ok(['bank.people', 'bank.board'].includes(f.question), `${r.id} cites ${f.question}`);
+  assert.deepEqual(byType(rec, 'forum').map((r) => [r.target.name, r.bridge.id]), [['Jordan Sample', 'nm-4']], 'the speaker is still the forum route\'s target');
+});
+
+test('a forum route pairs an association only with people its finding ties to it: one association per finding, and the bank\'s own people', () => {
+  // "The bank belongs to one association; its officer spoke at another": nothing says which association the officer appears with.
+  const two = finding({ id: 'F5', question_id: 'bank.memberships', kind: 'relationship', claim: 'The bank is a member of one association, and its officer spoke at another\'s conference.',
+    quote: 'Acme Community Bank is a member of the Example State Bankers Association. Jordan Sample spoke at the CRE Finance Council Annual Conference', source_url: 'https://esba.example.test/news', published: '2026-10', contextOnlyTopic: true,
+    entities: [{ type: 'association', name: 'Example State Bankers Association', affiliation: '', role: 'member' }, { type: 'person', name: 'Jordan Sample', affiliation: '', role: 'speaker' }, { type: 'association', name: 'CRE Finance Council', affiliation: '', role: '' }] });
+  const dir = world({ findings: [...FINDINGS.filter((f) => !['F5', 'F6'].includes(f.id)), two] });
+  addMembership({ dir, association: 'Example State Bankers Association', principal: BY, by: BY, now: NOW });   // nm-6
+  const rec = build(dir);
+  assert.deepEqual(byType(rec, 'forum').map((r) => [r.target.name, r.bridge.id]), [], 'a finding that names two associations cannot say who belongs to which');
+  assert.equal(rec.leftOut.multiAssociation, 1);
+  assert.match(readFileSync(routesPaths(dir, ID).md, 'utf8'), /name more than one association: 1/);
+  // One association, and a speaker list that also names someone from another bank: only the bank's own people are its targets.
+  const mixed = finding({ id: 'F5', question_id: 'bank.memberships', kind: 'relationship', claim: 'Two bankers spoke at the CRE Finance Council annual conference.',
+    quote: 'Speakers: Jordan Sample, Acme Community Bank; Drew Otherperson, Other Example Bank. CRE Finance Council Annual Conference', source_url: 'https://events.example.test/crefc-annual/speakers', published: '', contextOnlyTopic: true,
+    entities: [{ type: 'person', name: 'Jordan Sample', affiliation: 'Acme Community Bank', role: 'speaker' }, { type: 'person', name: 'Drew Otherperson', affiliation: 'Other Example Bank', role: 'speaker' }, { type: 'association', name: 'CRE Finance Council', affiliation: '', role: '' }] });
+  const d2 = world({ findings: [...FINDINGS.filter((f) => f.id !== 'F5'), mixed] });
+  const r2 = build(d2);
+  assert.deepEqual(byType(r2, 'forum').map((r) => r.target.name), ['Jordan Sample']);
+  assert.equal(r2.leftOut.peopleElsewhere, 1);
+});
+
+test('the direct route\'s evidence for a named person is the bank\'s own people findings only, never a speaker list or a court filing', () => {
+  const dir = world({ findings: FINDINGS.filter((f) => f.id !== 'F1') });   // F5, a speaker list, still names Jordan Sample
+  const direct = build(dir).routes.find((r) => r.type === 'direct');
+  assert.deepEqual([direct.evidence.findings, direct.tier, direct.current, direct.asOf], [[], 'inferred', false, null]);
+  const d2 = world({ account: ACCOUNT({ person: { ...ACCOUNT().person, name: 'Riley Counsel' } }) });   // F3, a court filing, names Riley Counsel as the lender's attorney
+  assert.deepEqual(build(d2).routes.find((r) => r.type === 'direct').evidence.findings, []);
+});
+
+test('choosing the direct route rebuilds it from the account as it is now, not as the build stored it', () => {
+  const dir = world();
+  assert.equal(build(dir).routes.find((r) => r.type === 'direct').status.ready, true);
+  // A principal names someone else: their role is unconfirmed and they have no address yet.
+  put(dir, `accounts/${ID}.json`, ACCOUNT({ person: { name: 'Robin Newperson', title: 'Head of Special Assets', email: '', phone: '', phoneType: '', timezone: '', mailingAddress: '' },
+    contact: { emailStatus: 'unverified', roleConfirmed: false, provenance: [{ field: 'name', value: 'Robin Newperson', kind: 'principal_known', seenOn: '2026-11-13', by: BY, at: '2026-11-13T12:00:00.000Z' }], verification: null } }));
+  const { route, checklist } = chooseRoute({ dir, id: ID, routeId: 'r-direct', by: BY, rules, now: NOW, env: {} });
+  assert.deepEqual([route.target.name, route.status.roleConfirmed, route.status.ready], ['Robin Newperson', false, false]);
+  assert.ok(checklist.ask.some((x) => /confirm-role/.test(x)) && checklist.ask.some((x) => /set-email/.test(x)), checklist.ask.join(' | '));
+  const stored = readJson(routesPaths(dir, ID).json);
+  assert.deepEqual([stored.routes.find((r) => r.type === 'direct').target.name, stored.chosen.routeId], ['Robin Newperson', 'r-direct'], 'the stored direct route is the one the checklist was made from');
+  assert.doesNotMatch(readFileSync(routesPaths(dir, ID).md, 'utf8'), /Jordan Sample is named for this account/);
+});
+
+test('every set-person command a checklist names works on the command line: it carries a source, as E7-S3 requires', () => {
+  const dir = world({ account: ACCOUNT({ person: { name: '', title: '' }, contact: { roleConfirmed: false, provenance: [] } }) });
+  const rec = build(dir);
+  const env = { ...process.env, OUTBOUND_DATA_DIR: dir };
+  const fill = { '--name': null, '--by': BY, '--finding': 'F1' };
+  const run = (text, name) => {
+    const m = /outbound account set-person ((?:--[a-z-]+ \S+ ?)+)/.exec(text ?? '');
+    assert.ok(m, `no set-person command in: ${text}`);
+    const pairs = m[1].trim().split(/\s+/);
+    const args = pairs.map((v, i) => { const flag = pairs[i - 1]; const val = v.replace(/[,.)]+$/, ''); return i % 2 && Object.hasOwn(fill, flag) && /^[A-Z]+$/.test(val) ? (fill[flag] ?? name) : val; });
+    return execFileSync(process.execPath, [join(REPO, 'cli.mjs'), 'account', 'set-person', ...args], { env, encoding: 'utf8', stdio: 'pipe' });
+  };
+  const direct = chooseRoute({ dir, id: ID, routeId: 'r-direct', by: BY, rules, now: NOW, env: {} }).checklist;
+  assert.match(run(direct.ask.find((x) => /set-person/.test(x)), 'Jordan Sample'), /Person set for Acme Community Bank: Jordan Sample/);
+  const warm = chooseRoute({ dir, id: ID, routeId: byType(rec, 'board')[0].id, by: BY, rules, now: NOW, env: {} }).checklist;
+  assert.match(run(warm.after.find((x) => /set-person/.test(x)), 'Robin Newperson'), /Person set for Acme Community Bank: Robin Newperson/);
 });
 
 test('the guard\'s view is shown: an opt-out at the bank, and a conversation already under way', () => {
