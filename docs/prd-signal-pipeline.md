@@ -182,6 +182,7 @@ Rules that apply everywhere:
 | E14 The paper estimate | R2 | P0 | E3, E4, E6 |
 | E15 Call prep and outcomes | R2 | P0 (S1, S2), P1 (S3, S4) | E1, E7, E12; E14 if present |
 | E16 Who sells to whom | R2 | P1 | E3, E4, E12, E13 |
+| E17 to E21 | Now to R3 | P0 to P2 | See `docs/prd-next-five.md` |
 
 ---
 
@@ -1021,6 +1022,8 @@ Rules across the epic:
 - Harm: opt-outs, complaints, bounce rate, and messages that should not have gone. The target for the last is 0.
 
 ## 11. Open questions
+
+Q19 to Q27, for epics E17 to E21, are in `docs/prd-next-five.md`, section 4.
 
 | # | Question | Who answers | Blocks | Default meanwhile |
 |---|---|---|---|---|
