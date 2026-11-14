@@ -155,3 +155,11 @@ test('the fifth migration adds the weekly triage (PRD E6-S5) and keeps every ear
   assert.match(j, /^\d+$/);
   must(as('service_role', SERVICE, `update jobs set status = 'done' where id = ${j}`));
 });
+
+test('the sixth migration adds the FDIC loan-sale pull (PRD E16) and keeps every earlier kind', { skip }, () => {
+  const constraint = must(psql(`select pg_get_constraintdef(oid) from pg_constraint where conname = 'jobs_kind_check'`));
+  for (const kind of ['sources.fdic', 'sources.edgar', 'sources.filings', 'sources.fdicsales', 'score.run', 'triage.run', 'research.run', 'draft.run', 'call.prep', 'call.extract']) assert.ok(constraint.includes(`'${kind}'`), `${kind} is missing from ${constraint}`);
+  const j = must(as('authenticated', PAT, `select enqueue_job('sources.fdicsales')`));
+  assert.match(j, /^\d+$/);
+  must(as('service_role', SERVICE, `update jobs set status = 'done' where id = ${j}`));
+});
