@@ -446,10 +446,11 @@ test('the worker runs call.prep and call.extract; their results hold codes and c
   assert.match(noModel.jobs[0].result.error, /call prep needs ANTHROPIC_API_KEY/);
 });
 
-test('the newest migration lists every job kind the worker runs, and is later than every other migration', () => {
+test('the newest migration that sets the job kinds lists every kind the worker runs', () => {
+  // Migrations run in filename order, so the last one to set jobs_kind_check decides which kinds the database accepts.
   const files = readdirSync(join(REPO, 'supabase', 'migrations')).sort();
-  const last = files.at(-1);
-  assert.equal(last, '20261114120000_jobs_calls.sql');
+  const last = files.filter((f) => /jobs_kind_check/.test(readFileSync(join(REPO, 'supabase', 'migrations', f), 'utf8'))).at(-1);
+  assert.ok(last, 'a migration sets jobs_kind_check');
   const sql = readFileSync(join(REPO, 'supabase', 'migrations', last), 'utf8');
   const kinds = [...sql.match(/check \(kind in \(([^)]*)\)\)/)[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
   assert.deepEqual([...kinds].sort(), [...JOB_KINDS].sort());

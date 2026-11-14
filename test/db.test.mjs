@@ -147,3 +147,11 @@ test('only the reading grants Supabase gives by default survive: no API role can
     where table_schema = 'public' and table_name = 'documents' and grantee in ('anon', 'authenticated')`));
   assert.equal(out, 'authenticated:SELECT');
 });
+
+test('the fifth migration adds the weekly triage (PRD E6-S5) and keeps every earlier kind', { skip }, () => {
+  const constraint = must(psql(`select pg_get_constraintdef(oid) from pg_constraint where conname = 'jobs_kind_check'`));
+  for (const kind of ['sources.fdic', 'sources.edgar', 'sources.filings', 'score.run', 'triage.run', 'research.run', 'draft.run', 'call.prep', 'call.extract']) assert.ok(constraint.includes(`'${kind}'`), `${kind} is missing from ${constraint}`);
+  const j = must(as('authenticated', PAT, `select enqueue_job('triage.run')`));
+  assert.match(j, /^\d+$/);
+  must(as('service_role', SERVICE, `update jobs set status = 'done' where id = ${j}`));
+});
