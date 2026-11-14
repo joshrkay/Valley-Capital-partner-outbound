@@ -22,6 +22,18 @@
     "reportHeadBytes": 131072,
     "knownSpecialServicers": ["LNR Partners", "Midland Loan Services", "Rialto Capital Advisors", "CWCapital Asset Management", "K-Star Asset Management", "KeyBank National Association", "Argentic Services Company", "Torchlight Loan Services", "National Cooperative Bank", "C-IV Asset Management"]
   },
+  "fdic": {
+    "_note": "FDIC loan-sale announcements on www.fdic.gov (PRD E16-S2, outbound sources run fdicsales). Gentle by design: requests are at least minIntervalMs apart (20 s, so three a minute), or further if robots.txt sets a longer Crawl-delay, and only paths robots.txt allows are read. At most maxEvents sale pages per run; an announcement PDF is read once, when it is new or its link changes, and at most maxPdfBytes of it. userAgent is a [CONFIRM] placeholder until a principal fills it: the firm's name and a monitored BUSINESS contact, e.g. \"Firm Name ops@firm-domain\". The run refuses while it is a placeholder, and refuses an email address at a personal domain (personalDomains below).",
+    "userAgent": "[CONFIRM: firm name and a monitored business contact for FDIC requests; no personal email]",
+    "minIntervalMs": 20000,
+    "maxEvents": 12,
+    "maxPdfBytes": 5000000
+  },
+  "sales": {
+    "_note": "The who-sells-to-whom ledger (PRD E16, outbound sales build). filingSearches: the saved searches in filings.json whose hit on a bank's filing counts as a disclosed sale (8-K Item 2.01, a completed acquisition or disposition of assets, may also be the bank BUYING: the event says so). acquisitionKinds: the FDIC structure-event kinds that count as a whole-bank acquisition; affiliate-reorganization (224, inside one holding company) is left out, as in scoring.json. Both lists are PLACEHOLDERS for a principal to review.",
+    "filingSearches": ["8k-acquisition", "loan-sale-cre", "note-sale-cre"],
+    "acquisitionKinds": ["merger", "assisted-merger", "failure"]
+  },
   "caps": {
     "firstTouchesPerSenderPerWeek": 15,
     "emailsPerSenderPerDay": 20,
@@ -38,6 +50,7 @@
   ],
   "stopEvents": ["reply", "opt_out", "meeting", "handoff"],
   "calls": { "callablePhoneTypes": ["landline"], "hours": [9, 17] },
+  "outcomes": { "_note": "PRD E15-S4, the outcomes report. PLACEHOLDERS. Below minToTune confirmed call outcomes, the report says the counts are too few to tune scoring weights on. leadTimeBucketsDays are the edges of the lead-time groups, from an account's first signal to its first meeting. The report never changes weights; a principal does.", "minToTune": 30, "leadTimeBucketsDays": [30, 90, 180, 365] },
   "personalDomains": [
     "gmail.com", "googlemail.com", "yahoo.com", "ymail.com", "outlook.com", "hotmail.com", "live.com", "msn.com", "aol.com",
     "icloud.com", "me.com", "mac.com", "proton.me", "protonmail.com", "gmx.com", "mail.com", "comcast.net", "verizon.net", "att.net", "sbcglobal.net"

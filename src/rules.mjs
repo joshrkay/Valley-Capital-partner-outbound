@@ -38,6 +38,7 @@ export function loadRules(root = REPO) {
     metros: o('metros.json'),
     buybox: o('buybox.json'),
     scoring: o('scoring.json'),
+    triage: o('triage.json'),
     desk: json(join(site, 'desk/lint.json')),
     bankAvoid: siteRules.rules.find((r) => r.scope === '/banks/')?.avoid ?? [],
     pages: sitePages(site),

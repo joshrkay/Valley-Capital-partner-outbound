@@ -15,10 +15,24 @@ export const LOADS = Object.freeze({
   candidates: ['candidates/', 'accounts/', 'suppression.json'],
   account: ['accounts/'],
   pilot: ['pilot/', 'research/'],
-  research: ['accounts/', 'research/', 'facts/', 'briefs/', 'pilot/'],
+  // paper/: the briefer reads the bank's paper estimate as data (E14-S1). The drafter's list never includes it.
+  research: ['accounts/', 'research/', 'facts/', 'briefs/', 'pilot/', 'paper/'],
   draft: [...GUARD, 'accounts/', 'research/', 'facts/', 'drafts/'],
   sources: ['sources/'],
-  score: ['sources/', 'candidates/'],
+  score: ['sources/', 'candidates/', 'paper/', 'sales/'],
+  // Call prep and outcomes (PRD E15, src/calls.mjs). calls/, drafts/ and research/ are narrowed to one account by callLoads().
+  // A confirmation reads outcomes.jsonl (one short line per confirmed call) to finish an interrupted one without writing a line twice.
+  callPrep: [...GUARD, 'accounts/', 'research/', 'drafts/', 'candidates/latest.json', 'paper/', 'calls/'],
+  callNotes: ['accounts/', 'calls/'],
+  callExtract: ['accounts/', 'calls/'],
+  callConfirm: [...GUARD, 'accounts/', 'calls/', 'paper/', 'outcomes.jsonl'],
+  outcomes: ['outcomes.jsonl', 'reports/'],
+  // The weekly triage (src/triage.mjs): the candidate list and decisions, accounts, the guard's log and suppression list, the run log, the
+  // few source files it reads, and its own snapshot. The day's two output files are added per run (triageLoads), so past triages are
+  // never loaded. No research or drafting action loads triage/, so the triage never reaches a brief or a message.
+  triage: ['candidates/', 'accounts/', 'suppression.json', 'touches.jsonl', 'sources/runs.jsonl', 'sources/fdic/state.json', 'sources/fdic/failed.json',
+    'sources/edgar/loans.json', 'sources/edgar/filings.json', 'sources/edgar/filers.json', 'triage/state.json'],
+  sales: ['sources/', 'sales/'],   // the CMBS and FDIC loan-sale pulls rebuild the sale ledger (sales/ledger.json) when they finish
 });
 
 const covers = (prefix, rel) => prefix === '' || rel === prefix || (prefix.endsWith('/') && rel.startsWith(prefix)) || rel.startsWith(`${prefix}/`);
@@ -74,15 +88,18 @@ export function memoryBackend({ docs = {}, texts = {}, logs = {}, versions = {},
   };
 }
 
-// Reads a data folder into a snapshot: for tests, and for copying a folder into the platform (E12-S6). Every file starts at version 0.
-export function snapshotFromDir(dir) {
+// Reads a data folder into a snapshot: for tests, for copying a folder into the platform (E12-S6), and for running an action on a folder
+// as a unit of work (the command line's call confirmation). `prefixes` (as in LOADS) limits it to what the action loads; the default is
+// everything. Every file starts at version 0.
+export function snapshotFromDir(dir, prefixes = ['']) {
   const snap = { docs: {}, texts: {}, logs: {}, versions: {} };
   if (!existsSync(dir)) return snap;
+  const into = (r) => prefixes.some((p) => covers(p, r) || p.startsWith(`${r}/`));   // a folder that holds, or is inside, a prefix
   const walk = (abs, rel) => {
     for (const name of readdirSync(abs).sort()) {
       const a = join(abs, name), r = rel ? `${rel}/${name}` : name;
-      if (statSync(a).isDirectory()) { walk(a, r); continue; }
-      if (/\.tmp-\d+$/.test(name)) continue;   // a write in progress
+      if (statSync(a).isDirectory()) { if (into(r)) walk(a, r); continue; }
+      if (/\.tmp-\d+$/.test(name) || !prefixes.some((p) => covers(p, r))) continue;   // a write in progress, or not loaded
       const raw = readFileSync(a, 'utf8');
       const k = kindOf(r);
       if (k === 'json') snap.docs[r] = JSON.parse(raw);

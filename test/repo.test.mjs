@@ -67,7 +67,7 @@ test('DATA RULE: no prospect data file is tracked in git in this repository', ()
   // The data-folder names are checked for data formats only: web/app/accounts/page.jsx is a route, not an account.
   const dataFormat = (f) => /(\.(json|jsonl|md|txt)|\/[^/.]+)$/.test(f);
   const bad = files.filter((f) => /(^|\/)(suppression\.json|touches\.jsonl|audit\.jsonl|senders\.json|runs\.jsonl|changes\.jsonl|KILL|\.env)$/.test(f)
-    || (dataFormat(f) && /(^|\/)(accounts|research|briefs|drafts|facts|data|candidates|pilot)\//.test(f))
+    || (dataFormat(f) && /(^|\/)(accounts|research|briefs|drafts|facts|data|candidates|pilot|paper|triage|sales)\//.test(f))
     || /^sources\//.test(f));
   // Database dumps and spreadsheet exports are how prospect data most often leaks. Invented test fixtures may use them under test/fixtures/.
   // Schema SQL is allowed in supabase/migrations/ and test/sql/; a seed file, or SQL anywhere else, is not.
@@ -77,6 +77,16 @@ test('DATA RULE: no prospect data file is tracked in git in this repository', ()
   // Migrations hold structure only: no email address (a principal's or a prospect's) may appear in them.
   for (const f of files.filter((x) => x.startsWith('supabase/'))) if (/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(readFileSync(join(REPO, f), 'utf8'))) bad.push(`${f} (contains an email address)`);
   assert.deepEqual(bad, [], 'prospect data must never be committed; it lives in OUTBOUND_DATA_DIR outside the repo');
+});
+
+test('DATA RULE: call briefs, call notes, outcomes and reports (PRD E15) are never tracked in git', () => {
+  let files;
+  try { files = execFileSync('git', ['ls-files'], { cwd: REPO, encoding: 'utf8' }).split('\n').filter(Boolean); } catch { return; }
+  // calls/ and reports/ are data folders at any depth, except as names of code (web routes or src modules ending in .mjs/.jsx/.js).
+  const bad = files.filter((f) => /(^|\/)outcomes\.jsonl$/.test(f)
+    || (/(^|\/)(calls|reports)\//.test(f) && /\.(json|jsonl|md|txt)$/.test(f))
+    || /(^|\/)\d{4}-\d{2}-\d{2}-(prep|notes|followup)\.(json|md)$/.test(f));
+  assert.deepEqual(bad, [], 'call notes, briefs and outcomes are prospect data: they live in OUTBOUND_DATA_DIR and the database only');
 });
 
 test('preferred terms exist for the audiences that have researched vocabulary, and match the terminology guide', () => {

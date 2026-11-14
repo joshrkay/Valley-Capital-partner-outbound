@@ -58,7 +58,9 @@ export function assertSourced(record) {
 
 // Merges `incoming` over `existing`. A field that already had a different value is an amendment: it is logged with the old and new
 // value so nothing silently changes under a score. New fields are inserts, not changes. `_source` is replaced, never diffed.
-export function upsertWithChanges(existing, incoming, { key, runId, dir, now = new Date() }) {
+// `contextFields` hold asset-level context (property names and addresses): a change to one is logged by field name only, never its value.
+export const CONTEXT_ONLY_VALUE = '[context only: not logged]';
+export function upsertWithChanges(existing, incoming, { key, runId, dir, now = new Date(), contextFields = [] }) {
   assertSourced(incoming);
   if (!existing) return { record: { ...incoming }, changed: 0 };
   let changed = 0;
@@ -66,7 +68,8 @@ export function upsertWithChanges(existing, incoming, { key, runId, dir, now = n
     if (field === '_source') continue;
     const old = existing[field];
     if (old === undefined || JSON.stringify(old) === JSON.stringify(value)) continue;
-    appendJsonl(CHANGES(dir), scrub({ runId, key, field, old, new: value, at: now.toISOString() }));
+    const hide = contextFields.includes(field);
+    appendJsonl(CHANGES(dir), scrub({ runId, key, field, old: hide ? CONTEXT_ONLY_VALUE : old, new: hide ? CONTEXT_ONLY_VALUE : value, at: now.toISOString() }));
     changed++;
   }
   return { record: { ...existing, ...incoming }, changed };

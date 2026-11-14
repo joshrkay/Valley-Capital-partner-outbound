@@ -5,12 +5,13 @@ import { join } from 'node:path';
 import { engine, loadRules } from './engine.mjs';
 import { visibleCandidates } from './candidates-view.mjs';
 import { sortServicers, loansFor, edgarStatus } from './servicers.mjs';
+import { partyLink, sellerRow } from './sales-view.mjs';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const need = (v, what) => { const s = typeof v === 'string' ? v.trim() : ''; if (!s) throw new Error(`${what} is required.`); return s; };
 const mods = async () => {
-  const [uow, store, candidates, pilot, guard, draft] = await Promise.all(['src/uow.mjs', 'src/store.mjs', 'src/candidates.mjs', 'src/pilot.mjs', 'src/guard.mjs', 'src/draft.mjs'].map(engine));
-  return { LOADS: uow.LOADS, store, candidates, pilot, guard, draft };
+  const [uow, store, candidates, pilot, guard, draft, paper] = await Promise.all(['src/uow.mjs', 'src/store.mjs', 'src/candidates.mjs', 'src/pilot.mjs', 'src/guard.mjs', 'src/draft.mjs', 'src/paper.mjs'].map(engine));
+  return { LOADS: uow.LOADS, store, candidates, pilot, guard, draft, paper };
 };
 const suppressionIn = (store, dir) => store.readJson(join(dir, 'suppression.json'), { entries: [] }).entries ?? [];
 
@@ -31,13 +32,17 @@ export async function listCandidates(client, { tier, metro } = {}) {
   });
 }
 
+// The candidate, its decision, and its paper estimate (PRD E14-S1): one document, paper/fdic-<CERT>.json, read with the principal's own
+// token like every other document, so row-level security decides. Only that one record is loaded, never the whole paper/ folder.
 export async function candidateDetail(client, key) {
   const item = await client.candidate(need(key, 'A candidate key'));
   if (!item) return null;
-  const snap = await client.load(['suppression.json', 'candidates/decisions.json', 'candidates/aliases.json']);
-  const { candidates } = await mods();
+  const { candidates, paper } = await mods();
+  let rel = null;
+  try { rel = paper.paperRel(key); } catch { rel = null; }   // not a bank key: no record
+  const snap = await client.load(['suppression.json', 'candidates/decisions.json', 'candidates/aliases.json', ...(rel ? [rel] : [])]);
   const suppressed = !!candidates.suppressedBy(item, snap.docs['suppression.json']?.entries ?? [], snap.docs['candidates/aliases.json'] ?? {});
-  return { item, decision: (snap.docs['candidates/decisions.json'] ?? {})[key] ?? null, suppressed };
+  return { item, decision: (snap.docs['candidates/decisions.json'] ?? {})[key] ?? null, suppressed, paper: rel ? snap.docs[rel] ?? null : null };
 }
 
 export async function promote(client, { key, by }) {
@@ -114,6 +119,42 @@ export async function queueDraft(client, { id, channel, step }) {
   const n = Number(step);
   if (!Number.isInteger(n) || n < 1) throw new Error('The step must be a whole number, 1 or more.');
   return client.enqueue('draft.run', { account: need(id, 'An account id'), channel: ch, step: n });
+}
+
+// ---- Calls (PRD E15) ------------------------------------------------------------------------------------------------------------
+// The call brief and reading the notes are model work, so they are queued. Saving the notes, confirming and rejecting are quick, and run
+// the engine's own functions (src/calls.mjs) in a unit of work as the signed-in principal. A job's parameters never hold note text.
+export async function accountCalls(client, id) {
+  const [{ store }, calls] = await Promise.all([mods(), engine('src/calls.mjs')]);
+  store.safeId(need(id, 'An account id'));
+  const { result } = await client.unitOfWork([`accounts/${id}.json`, `calls/${id}/`], (dir) => calls.listCalls({ dir, id }));
+  return { ...result, latestBrief: result.briefs[0] ?? null, pending: result.proposals.filter((p) => p.status === 'pending'), latestFollowUp: result.followUps[0] ?? null };
+}
+
+export async function queueCallPrep(client, { id, date }) {
+  const [{ store }, calls] = await Promise.all([mods(), engine('src/calls.mjs')]);
+  store.safeId(need(id, 'An account id'));
+  return client.enqueue('call.prep', { account: id, date: calls.needDate(typeof date === 'string' && date.trim() ? date.trim() : today()) });
+}
+
+export async function logCallNotes(client, { id, date, notes, by }) {
+  const calls = await engine('src/calls.mjs');
+  const day = calls.needDate(need(date, 'The call date'));
+  await client.unitOfWork(calls.callLoads('callNotes', need(id, 'An account id')), (dir) => calls.saveNotes({ dir, id, date: day, notes, by }));
+  return client.enqueue('call.extract', { account: id, date: day, by });
+}
+
+export async function confirmCall(client, { id, proposal, by }) {
+  const calls = await engine('src/calls.mjs');
+  const rules = await loadRules();
+  const { result } = await client.unitOfWork(calls.callLoads('callConfirm', need(id, 'An account id')), (dir) => calls.confirmProposal({ dir, id, proposalId: need(proposal, 'A proposal'), by, rules }));
+  return result;
+}
+
+export async function rejectCall(client, { id, proposal, by, reason }) {
+  const calls = await engine('src/calls.mjs');
+  const { result } = await client.unitOfWork(calls.callLoads('callExtract', need(id, 'An account id')), (dir) => calls.rejectProposal({ dir, id, proposalId: need(proposal, 'A proposal'), by, reason: typeof reason === 'string' ? reason : '' }));
+  return result;
 }
 
 // ---- Drafts -------------------------------------------------------------------------------------------------------------------
@@ -197,3 +238,32 @@ export async function servicerDetail(client, name) {
   return { summary, loans: loansFor(snap.docs['sources/edgar/loans.json'] ?? {}, n) };
 }
 export const queueScore = (client, { draftBuybox }) => client.enqueue('score.run', { draftBuybox: !!draftBuybox });
+
+// ---- The weekly triage (PRD E6-S5) -------------------------------------------------------------------------------------------------
+// The stored triage for `date`, or the latest: the snapshot (triage/state.json) names the latest date, and only that day's record is
+// loaded. Internal, for the principals; the worker's triage.run job writes it, and it is never sent anywhere.
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+export async function latestTriage(client, { date } = {}) {
+  let d = typeof date === 'string' && DATE.test(date) ? date : null;
+  if (!d) d = (await client.load(['triage/state.json'])).docs['triage/state.json']?.date ?? null;
+  if (typeof d !== 'string' || !DATE.test(d)) return null;
+  return (await client.load([`triage/${d}.json`])).docs[`triage/${d}.json`] ?? null;
+}
+export const queueTriage = (client) => client.enqueue('triage.run', {});
+
+// ---- Who sells to whom (PRD E16) ---------------------------------------------------------------------------------------------------
+// One document, the ledger the engine builds; the views are the engine's own (src/sales.mjs). The events of each seller are left out
+// of the seller table: it shows counts, the latest date, and a link to the bank's candidate page or the servicer's page.
+export async function salesOverview(client, { recent = 50 } = {}) {
+  const sales = await engine('src/sales.mjs');
+  const snap = await client.load(['sales/ledger.json']);
+  const ledger = snap.docs['sales/ledger.json'] ?? null;
+  if (!ledger) return { builtAt: null, counts: null, recent: [], sellers: [], buyers: [], pricing: null };
+  return {
+    builtAt: ledger.builtAt ?? null, runId: ledger.runId ?? null, counts: ledger.counts ?? null,
+    recent: sales.eventsOf(ledger).slice(0, recent),
+    sellers: sales.groupBySeller(ledger).map(sellerRow),
+    buyers: sales.groupBuyers(ledger).map((b) => ({ ...b, link: partyLink(b) })),
+    pricing: sales.pricing(ledger),
+  };
+}

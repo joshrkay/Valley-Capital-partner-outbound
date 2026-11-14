@@ -9,6 +9,8 @@ import { METRICS, CATEGORIES, SIGNAL_TYPES, computeMetrics, detectSignals, perio
   computeConcentration, detectConcentrationSignals, detectStructureSignals, addMonths, CONCENTRATION_TESTS, CONCENTRATION_NOTE, STRUCTURE_SIGNAL_KINDS } from './metrics.mjs';
 import { buildCard } from './candidates.mjs';
 import { filingSignals } from './sources/filings.mjs';
+import { saleSignals } from './sales.mjs';
+import { buildPaper, paperPath } from './paper.mjs';
 
 const PLACEHOLDER = /\[confirm/i;
 const SECTORS = ['hospitality', 'multifamily', 'retail'];
@@ -103,6 +105,8 @@ export function validateScoring(scoring) {
   }
   const fw = scoring.failedBanks?.windowQuarters;
   if (fw !== undefined && !(Number.isInteger(fw) && fw >= 1)) errors.push('failedBanks.windowQuarters must be a whole number of 1 or more');
+  const lw = scoring.sales?.windowDays;
+  if (lw !== undefined && !(Number.isInteger(lw) && lw >= 1)) errors.push('sales.windowDays must be a whole number of 1 or more');
   const sw = scoring.filings?.windowDays;
   if (sw !== undefined && !(Number.isInteger(sw) && sw >= 1)) errors.push('filings.windowDays must be a whole number of 1 or more');
   return { ok: !errors.length, errors };
@@ -131,9 +135,8 @@ const inBuyboxMetros = (footprint, buybox, institution) => (buybox.metros ?? [])
 // ---- The paper profile (E6-S6) --------------------------------------------------------------------------------------------------
 export const PROFILE_LIMITS = [
   'Hotel and retail loans are inside nonfarm nonresidential, together with office, industrial and other commercial property; Call Report data cannot separate them.',
-  'Call Report data gives balances and stages of distress by category. It shows no individual loans, loan sizes, maturities or properties.',
+  'Call Report data gives balances and stages of distress by category. It shows no individual loans or properties. Its loan sizes (nonfarm nonresidential only, by original amount) and maturities (all loans, not CRE-specific) are in the paper estimate.',
   'Branches and deposits show where a bank takes deposits, not exactly where it lends. They are a proxy for its lending footprint.',
-  'Construction loans 30 to 89 and 90 or more days past due are not in the fields pulled; noncurrent and nonaccrual are.',
 ];
 
 const direction = (from, to, threshold) => (from === null || to === null ? 'unknown' : to - from > threshold ? 'rising' : from - to > threshold ? 'falling' : 'flat');
@@ -319,9 +322,19 @@ export function detectFilingSignals({ signals = [], windowDays = 180, asOf = nul
     .map((s) => ({ ...s, rule: 'filing' }));
 }
 
+// Sale signals (E16) are event signals from the sale ledger: shown while the sale's date is within windowDays of asOf. With no asOf
+// every one is kept. They carry rule 'sale' for the card, and add no points.
+export function detectSaleSignals({ signals = [], windowDays = 1095, asOf = null }) {
+  const day = (d) => Date.parse(`${d}T00:00:00Z`);
+  return signals
+    .filter((s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s.date)))
+    .filter((s) => !asOf || (day(s.date) <= day(asOf) && (day(asOf) - day(s.date)) / 86400000 <= windowDays))
+    .map((s) => ({ ...s, rule: 'sale' }));
+}
+
 // Scores one bank. Deterministic: no clock, no randomness, no model. `events` are the stored structure events where this bank is the
 // acquirer; `asOf` (YYYY-MM-DD) is the scoring date that decides which event signals are still in their window.
-export function scoreBank({ cert, institution = {}, footprint = {}, financials, scoring, buybox, metros, latestRepdte, events = [], filings = [], asOf = null }) {
+export function scoreBank({ cert, institution = {}, footprint = {}, financials, scoring, buybox, metros, latestRepdte, events = [], filings = [], sales = [], asOf = null }) {
   const fin = financials ?? { CERT: cert, quarters: {} };
   const series = computeMetrics(fin);
   const latestQ = series.quarters.at(-1) ?? null;
@@ -331,6 +344,7 @@ export function scoreBank({ cert, institution = {}, footprint = {}, financials, 
     ...detectConcentrationSignals(computeConcentration(fin), scoring.concentration?.signals ?? [], String(cert)),
     ...detectStructureSignals({ cert: String(cert), events, rules: scoring.structureEvents?.signals ?? [], asOf }),
     ...detectFilingSignals({ signals: filings, windowDays: scoring.filings?.windowDays ?? 180, asOf }),
+    ...detectSaleSignals({ signals: sales, windowDays: scoring.sales?.windowDays ?? 1095, asOf }),
   ];
   const profile = buildProfile({ financials: fin, footprint, institution, buybox, metros, scoring });
   const components = (scoring.components ?? []).map((c) => component(c, { series, latestQ, profile }));
@@ -387,11 +401,24 @@ export function runScoring({ dir, buybox, scoring, metros, now = new Date(), all
   const eventsBy = new Map();
   for (const e of Object.values(readJson(join(base, 'events.json'), {}))) if (e?.acquirerCert) { const k = String(e.acquirerCert); if (!eventsBy.has(k)) eventsBy.set(k, []); eventsBy.get(k).push(e); }
   const filingsBy = filingSignals({ dir });   // {} until the SEC listener has run for a confirmed filer
-  const items = certs.map((cert) => scoreBank({ cert, institution: institutions[cert] ?? {}, footprint: footprints[cert] ?? {}, financials: fin.get(cert) ?? null, scoring, buybox, metros, latestRepdte, events: eventsBy.get(cert) ?? [], filings: filingsBy[`fdic:${cert}`] ?? [], asOf })).sort(byScore);
+  const salesBy = saleSignals({ dir });       // {} until the sale ledger has been built
+  const items = certs.map((cert) => scoreBank({ cert, institution: institutions[cert] ?? {}, footprint: footprints[cert] ?? {}, financials: fin.get(cert) ?? null, scoring, buybox, metros, latestRepdte, events: eventsBy.get(cert) ?? [], filings: filingsBy[`fdic:${cert}`] ?? [], sales: salesBy[`fdic:${cert}`] ?? [], asOf })).sort(byScore);
   const failedBanks = listFailedBanks({ failed: readJson(join(base, 'failed.json'), {}), scoring, metros, asOf });
   const runId = `score-${now.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')}`;
   const out = { runId, scoredAt: now.toISOString(), asOf, latestRepdte, buyboxHash: contentHash(buybox), scoringHash: contentHash(scoring), provisional: vb.placeholders.length > 0, placeholders: vb.placeholders, items, failedBanks };
   writeJson(join(dir, 'candidates', 'latest.json'), out);
-  audit(dir, { type: 'scoring_run', runId, banks: items.length, tierA: items.filter((i) => i.tier === 'A').length, tierB: items.filter((i) => i.tier === 'B').length, provisional: out.provisional, latestRepdte });
+  // The paper estimate (E14-S1): one record per scored bank, paper/fdic-<CERT>.json, built from the same inputs. A record is for the
+  // principals and the briefer only; the drafter's load list (src/uow.mjs, LOADS.draft) does not include paper/.
+  // A record whose content is unchanged since the last run is not rewritten (its runId then names the run that last changed it), so a
+  // routine re-score does not send every record to the platform again.
+  const sameContent = (a, b) => { const c = (r) => contentHash({ ...r, runId: null, scoredAt: null }); return !!a && c(a) === c(b); };
+  let paperWritten = 0;
+  for (const it of items) {
+    const path = paperPath(dir, it.key);
+    const rec = buildPaper({ cert: it.cert, name: it.name, financials: fin.get(it.cert) ?? null, footprint: footprints[it.cert] ?? {}, events: eventsBy.get(it.cert) ?? [],
+      filings: filingsBy[it.key] ?? [], buybox, placeholders: vb.placeholders, metros, runId, scoredAt: out.scoredAt });
+    if (!sameContent(readJson(path, null), rec)) { writeJson(path, rec); paperWritten++; }
+  }
+  audit(dir, { type: 'scoring_run', runId, banks: items.length, tierA: items.filter((i) => i.tier === 'A').length, tierB: items.filter((i) => i.tier === 'B').length, provisional: out.provisional, latestRepdte, paperRecords: items.length, paperWritten });
   return out;
 }

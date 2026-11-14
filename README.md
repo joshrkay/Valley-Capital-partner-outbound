@@ -30,7 +30,9 @@ Start with `docs/prd-signal-pipeline.md` for the pipeline, and `docs/research-ag
   - deploying the platform (E12-S7);
   - Gmail drafts and reply detection (E9);
   - quarterly nurture (E10);
-  - the referral mapper, meeting prep and the reporter.
+  - the referral mapper;
+  - meeting prep beyond the call brief (event lists, who to meet, and a drafted follow-up email: PRD E15-S3 gives a checklist today);
+  - the weekly reporter (the outcomes report, PRD E15-S4, is its first part).
 
   The briefer reads the open web; it cannot do what needs a data feed.
 
@@ -86,6 +88,21 @@ Behind a proxy, Node's built-in `fetch` needs `NODE_USE_ENV_PROXY=1` (Node 22.21
 
 Every signal says whether it is a state signal (recomputed while the condition holds) or an event signal (a dated change, kept).
 
+**The paper estimate** (PRD E14-S1, `docs/paper-estimate.md`): what CRE each bank likely holds, from its Call Reports. Each scoring run writes one record per bank, `paper/fdic-<CERT>.json` in the data folder. Every number carries its unit (dollars, converted from FDIC's thousands; a count; or a share), as-of date, tier (reported, observed or inferred), sources (field, file, report date) and method.
+
+```bash
+npm run outbound -- paper show --key fdic:12345          # summary, then Q1 to Q8, each number with its tier and date; --json for the record
+```
+
+- **Q1:** investor CRE (the 2006 guidance definition) and owner-occupied, by category, with the stages FDIC reports for each. A stage it does not report says "not reported", never zero. Charge-offs are flows, for the quarter and the year to date. Restructured loans by type carry the 2023 series break (ASU 2022-02). Unused commitments are shown once, for the whole book. The eight-quarter trend is net change, never "new lending", and a quarter with an acquisition is withheld.
+- **Q3:** the deposit share by metro, labelled a proxy, not loans. **Q5:** maturity and repricing buckets, for all loans, not CRE-specific.
+- **Q4:** nonfarm nonresidential loan sizes. **These fields are semiannual:** most banks fill them only in June and December and send 0 in March and September. A March or September value is never used, whatever it holds; the latest June or December report is used, and its date is shown. The restructured split by type behaves the same way (checked live, November 14, 2026).
+- **Q6:** seller evidence, as a dated list: held-for-sale balances, loan-sale gains (not CRE-specific), SEC filing signals and acquisitions.
+- **Q7: bounds only.** For each buy-box sector, an upper bound of min(sᵢ) × book and a lower bound of max(0, Σsᵢ − (k − 1)) × book, from the category, metro and size shares. Never a product of shares, and no base figure. Hotel and retail sit inside nonfarm nonresidential, so their share runs from 0 to all of it. While the buy box has placeholders, the record is marked provisional.
+- **Q8:** the unknowns, generated from the gaps, and the standard tape request.
+
+The web app shows it on the candidate page. The briefer receives it as fenced data; **the drafter receives nothing from it**, and its unit of work cannot load `paper/` (`test/handoff.test.mjs`).
+
 **Before the briefer researches any bank the pipeline found, it passes a pilot** on 10 accounts the principals already know (PRD E1):
 
 ```bash
@@ -103,7 +120,7 @@ npm run outbound -- pilot pass --by "Pat Example"        # needs 10 fully review
 npm run outbound -- sources run edgar                    # each CMBS trust's latest SEC filing: loans in the metros, workout codes, servicer
 ```
 
-It writes `sources/edgar/loans.json`, `trusts.json` and `servicers.json`. Every loan and property detail is **context for a principal, never for a message**.
+It writes `sources/edgar/loans.json`, `trusts.json` and `servicers.json`, plus `dispositions.json`: every loan liquidated by disposition or DPO, kept after it leaves the reports (see "Who sells to whom" below). Every loan and property detail is **context for a principal, never for a message**.
 
 ### The SEC filings listener (PRD E13-S1)
 
@@ -145,6 +162,74 @@ What was checked live on 2026-11-13 is written at the top of `src/sources/efts.m
 So every response is matched to its request before it is used. A response with no echo, a search that returns fewer hits than it reports, or a hit that does not match its request fails the run: nothing is written, and the next run covers the same days.
 
 On the platform, the job is `sources.filings`. The worker workflow queues it on weekdays at 23:37 UTC, then verifies it. A `suspect` run fails the job, because the listener's window has moved past it. That schedule stays off until a principal has filled `config.sec.userAgent`, confirmed at least one filer, and set the repository variable `FILINGS_ENABLED` to `true`. Until then the run would fail its own checks every day and hide real failures.
+
+### Calls: the brief before, the outcome after (PRD E15)
+
+When the person who decides on loan sales agrees to talk:
+
+```bash
+npm run outbound -- call prep --account acme-bank --date 2026-11-17     # a one-page call brief, checked in code
+npm run outbound -- call log --account acme-bank --date 2026-11-17 --by "Pat Example" --notes notes.txt   # or --notes - for stdin
+npm run outbound -- call confirm --account acme-bank --proposal <PID> --by "Pat Example"
+npm run outbound -- outcomes report                                     # which signals led to conversations
+```
+
+- **The brief** (`calls/<id>/<date>-prep.md`) is written by one model call from fixed inputs, each with an id: the account, the research, the signals and card, the paper estimate if there is one, the touch history, the approved claims and the playbook. Code checks that every cited id exists, every number is in the inputs, every claim is approved and quoted word for word, and no estimate is stated as a fact. A brief that fails says **NOT USABLE** first. An unconfirmed role is a warning at the top.
+- **The notes** stay in `calls/<id>/`, for principals only. A model turns them into a proposal: outcome codes from a fixed list, objections, commitments, a follow-up date, and the people mentioned. **Nothing is recorded until a principal confirms it.** Confirming records a guard `meeting` event (which ends the sequence), a line in `outcomes.jsonl` linked to the account's origin signals, and the outcome on the account. People named in the notes are never added; a principal uses `account set-person`.
+- **The follow-up** is a checklist of what was agreed (`calls/<id>/<date>-followup.md`). No email is drafted: after a meeting the guard refuses every touch, and the drafter only writes from the briefer's facts. PRD E15-S3 says why.
+- **The report** (`reports/outcomes-<date>.json`) counts confirmed outcomes by signal type, tier and lead time. It uses no model and never changes the weights.
+
+On the platform, the account page does the same: queue a brief, paste notes, confirm or reject.
+
+### The weekly triage (PRD E6-S5)
+
+Every Monday, one page of what changed since the last triage, across every source, for the firm's principals only. It is never sent to anyone and never given to the drafter.
+
+```bash
+npm run outbound -- triage run                           # compare with the last triage; writes triage/<date>.json and .md in the data folder
+npm run outbound -- triage run --since 2026-11-01        # start the window on a day instead
+npm run outbound -- triage show                          # print the latest; --date YYYY-MM-DD for an earlier one
+```
+
+- **Grouped by institution**, each with one line of reasoning from a fixed template. No model is used, and the same inputs give the same triage.
+  - **Act now:** a CMBS note sale, a failure in our metros (the FDIC sells), an SEC loan-sale or held-for-sale filing, a move to Tier A, or a Tier A bank crossing the concentration screen.
+  - **Watch:** every other new signal, Tier B movements, state signals that turned on or off, and drop-outs.
+  - **Already in conversation:** a reply, meeting or handoff in `touches.jsonl`. Shown apart, with the latest touch date.
+- **Left out, and counted:** opted-out and suppressed institutions (never listed), and snoozed or dismissed candidates until they come back.
+- **It compares with a snapshot,** `triage/state.json`: each candidate's tier and signals, and every event seen. The first run has none and says "first triage, no comparison".
+- **Also shown:** where we are in the calendar (the next quarter-end, the review window, the next FDIC quarter and CMBS cycle), and source health (failed or suspect runs, stale sources, stale scoring).
+- **The rules** are in `triage.json`, every value a placeholder for a principal to review.
+
+On the platform, the job is `triage.run`. The worker workflow queues it every Monday after the FDIC check and a scoring run, and the web app shows the latest on its **This week** page.
+
+### Who sells to whom (PRD E16)
+
+A lender that has sold loans before is the warmest prospect there is. One ledger, `sales/ledger.json` in the data folder, holds every sale event the stored data shows:
+
+| Kind | From | Seller | Buyer |
+|---|---|---|---|
+| `note_sale_completed`, `dpo`, `disposition` | A CMBS loan in our metros and sectors liquidated (code 3 or 6). Note sale if workout code 5 is in its history | The trust, through its special servicer | unknown |
+| `bank_disclosed_sale` | A confirmed bank filer's 8-K Item 2.01, loan-sale or note-sale hit (the filings listener) | The bank, `fdic:CERT` | unknown |
+| `whole_bank_acquisition` | An FDIC structure event: a bank with a presence in our metros acquired | The target (the FDIC, if it failed) | The acquirer, `fdic:CERT` |
+| `fdic_sale_announced` | An FDIC loan-sale announcement on www.fdic.gov | The FDIC as receiver | unknown |
+
+```bash
+npm run outbound -- sources run fdicsales               # FDIC loan-sale announcements (needs config.fdic.userAgent filled in)
+npm run outbound -- sales build                         # rebuild the ledger from stored data; the edgar and fdicsales runs do it too
+npm run outbound -- sales sellers                       # who has sold before, by the institution that acted
+npm run outbound -- sales buyers                        # known buyers: by kind, property type, metro and quarter
+npm run outbound -- sales pricing                       # CMBS liquidations by property type and metro: APPROXIMATE implied recovery
+npm run outbound -- sales list --seller fdic:12345      # or --kind disposition
+```
+
+- **Nothing is invented.** A buyer no source names is `unknown`. The implied recovery (1 − realized loss ÷ balance before liquidation) is labelled approximate: the loss includes liquidation expenses and advances, so it is never the price.
+- **Gentle on the FDIC.** `robots.txt` first, only the paths it allows, and at most a few requests a minute. The FDIC publishes no buyers on the pages read; its closed-sales application is on `sales.fdic.gov`, which is not read (PRD E16, D-S1).
+- **Kept.** Events are de-duplicated by a stable id and never dropped. One no stored record supports any more (a filer mapping rejected since, say) is marked `supported: false` and left out of the views.
+- `saleSignals({ dir })` in `src/sales.mjs` returns event signals by `fdic:CERT` or `servicer:<slug>`, shaped like `filingSignals`. They are not in scoring yet.
+- Two later sources have their event shape and no adapter: a recorded **assignment** of a deed of trust (with MERS treated as a nominee, and the chain to the current holder), and a **marketed listing**.
+- The web app's **Sales** page shows the same: recent events, sellers who have sold, known buyers, and price evidence.
+
+Property names and addresses are kept in the ledger for a principal. They never go in a log, and a test proves no event reaches the drafter.
 
 ### Checking the scrapers
 
@@ -193,12 +278,12 @@ OUTBOUND_TEST_PG="host=/tmp/pg port=5432 user=postgres" npm run test:db    # the
 # Operators and the worker use the service key (never in the web app):
 export SUPABASE_URL=https://<project>.supabase.co SUPABASE_SERVICE_ROLE_KEY=...
 npm run outbound -- platform push --from ~/valley-outbound-data           # copy a data folder in (safe to re-run)
-npm run outbound -- enqueue sources.fdic                                  # or sources.edgar, score.run --draft-buybox, research.run --account ID
+npm run outbound -- enqueue sources.fdic                                  # or sources.edgar, score.run --draft-buybox, triage.run, research.run --account ID
 npm run outbound -- worker --max 20                                       # run queued jobs; prints ids and outcomes only
 npm run outbound -- platform pull --to ~/valley-outbound-backup           # a full copy back out, to a new folder
 ```
 
-- **Worker schedule:** `.github/workflows/platform-worker.yml` runs the worker hourly on weekdays and queues the weekly FDIC check. It is off until the repository variable `PLATFORM_ENABLED` is `true`. It needs the Actions secrets `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` and `ANTHROPIC_API_KEY`.
+- **Worker schedule:** `.github/workflows/platform-worker.yml` runs the worker hourly on weekdays and queues the weekly FDIC check, then scoring and the weekly triage. The Monday scoring uses `--draft-buybox` unless the repository variable `SCORING_STRICT` is `true`. It is off until the repository variable `PLATFORM_ENABLED` is `true`. It needs the Actions secrets `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` and `ANTHROPIC_API_KEY`.
 - **The web app:** see `web/README.md` for local development, the Supabase Auth settings (sign-ups off, invite principals) and Vercel.
 
 ## What each agent does, and how
@@ -258,10 +343,11 @@ It stores no message text, and writes an audit line for every decision.
 | `metros.json` | The six target metros by CBSA code, with counties from the Census 2023 delineation |
 | `buybox.json` | What the firm buys. `[CONFIRM]` fields block scoring until a principal fills them |
 | `scoring.json` | Score components (distress, fit, timing), signal rules, tier cuts and the CMBS maturity window; every number a placeholder |
+| `triage.json` | The weekly triage: the window, what counts as act now and watch, the calendar settings and staleness limits; every value a placeholder |
 | `supabase/migrations/` | The platform's tables, access rules and functions. Structure only, no data |
 | `web/` | The principals' web app (Next.js) |
 | `.github/workflows/` | The platform worker's schedule (off until enabled) |
-| `src/` | `guard`, `research`, `draft`, `lint`, `model` (the only file that calls the Anthropic API), `rules`, `store`, `paths`, plus the pipeline: `sources/` (`http`, `runlog`, `fdic`, `edgar`), `metrics`, `score`, `candidates`, `pilot`, and the platform: `uow`, `platform/` (`client`, `worker`, `move`) |
+| `src/` | `guard`, `research`, `draft`, `lint`, `model` (the only file that calls the Anthropic API), `rules`, `store`, `paths`, plus the pipeline: `sources/` (`http`, `runlog`, `fdic`, `edgar`, `fdicsales`), `metrics`, `score`, `paper` (the paper estimate), `candidates`, `triage`, `sales`, `pilot`, call prep and outcomes: `calls`, `outcomes`, and the platform: `uow`, `platform/` (`client`, `worker`, `move`) |
 | `scripts/sync-site.mjs` | Refreshes `site-snapshot/` from the website repository (see below) |
 | `site-snapshot/` | A copy of the 7 website files the rules depend on, a list of the site's pages, and a record of the commit it came from. Committed. Refresh it; do not edit it. |
 | `docs/` | The plan, the research agenda, and the PRD for the signal pipeline |
@@ -270,7 +356,8 @@ It stores no message text, and writes an audit line for every decision.
 In `$OUTBOUND_DATA_DIR`:
 
 - `senders.json`, `suppression.json`, `accounts/`, `research/`, `facts/`, `briefs/`, `drafts/<account>/`, `touches.jsonl`, `audit.jsonl`;
-- for the pipeline: `sources/` (FDIC data, the run log and the change log), `candidates/` (the latest list and principals' decisions), and `pilot/` (truth sheets, verdicts, the pass).
+- for the pipeline: `sources/` (FDIC data, the run log and the change log), `candidates/` (the latest list and principals' decisions), `paper/` (one paper estimate per bank), `sales/` (the sale ledger), `triage/` (each week's triage and its snapshot), and `pilot/` (truth sheets, verdicts, the pass).
+- for calls: `calls/<account>/` (call briefs, notes, proposals and follow-ups), `outcomes.jsonl` (confirmed outcomes) and `reports/`.
 
 ## Changing it
 

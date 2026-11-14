@@ -52,7 +52,7 @@ Checked live on November 14, 2026, on 40 banks with $1–5 billion in assets in 
 | `LNRENR1`–`LNRENR4`, `LNRENR1N`–`LNRENR4N` | Nonfarm nonresidential loans by **original** amount: under $100,000, $100,000–250,000, $250,000–1 million, and all under $1 million. Dollars (thousands) and **number of loans** (Call Report RC-C Part II). | Filled for about 39 of 40 in **June and December**, but only 12 of 40 in March. Treat as semiannual and use the latest June or December. |
 | `LNRECNOT`, `LNRECNFM` | Construction split: other construction and land, and 1-to-4 family construction | Every quarter |
 | `UCCOMRES`, `UCCOMREU` | Unused commitments for CRE, secured and unsecured: the construction draws still to come | Every quarter (unsecured often zero) |
-| `RSMULT`, `RSCONS`, `RSOTHER`, `NARSNRES`, `RSLNLTOT` | Restructured or modified loans, by type, and nonaccrual restructured nonfarm nonresidential | Filled in 2025–26. The 2023 accounting change (ASU 2022-02, from "troubled debt restructurings" to "modifications to borrowers in financial difficulty") likely **breaks the series**. Unconfirmed; mark the break. |
+| `RSMULT`, `RSCONS`, `RSNRES`, `RSOTHER`, `NARSNRES`, `RSLNLTOT` | Restructured or modified loans, by type (`RSNRES` is nonfarm nonresidential, added in E14-S1), and nonaccrual restructured nonfarm nonresidential | Filled in 2025–26. The 2023 accounting change (ASU 2022-02, from "troubled debt restructurings" to "modifications to borrowers in financial difficulty") likely **breaks the series**. Unconfirmed; mark the break. **The split by type is semiannual too** (Checked, November 14, on every bank: `RSNRES` above 0 at about 730–800 banks in June and December, 290–330 in March and September; on 60 sample banks `RSLNLTOT` equals the 1-4 family part plus `RSLNLS` for all 60 in June and December, but for only 38–44 in March and September). The total `RSLNLTOT` is filled every quarter. |
 | `LNLSSALE`, `NALNSALE`, `P9LNSALE` | Loans held for sale: total, nonaccrual and 90+ past due | Total for about half the banks; the distressed part is rare. When present, it is the strongest seller signal. |
 | `NETGNSLN`, `NTGLLNQ` | Net gains or losses on loan sales: year to date and the quarter | About 25 of 40. **Not CRE-specific**: mostly residential mortgage sales. Use only as "this bank sells loans". |
 | `LNOT1T3`, `LNOT3T5`, `LNOT5T15`, `LNOTOV15` (and shorter buckets if present) | Remaining maturity or next repricing of all loans except 1-to-4 family first liens | Every quarter. A **proxy only**: it includes C&I and other loans, not just CRE. |
@@ -81,12 +81,14 @@ Checked live on November 14, 2026, on 40 banks with $1–5 billion in assets in 
   | Multifamily | `LNREMULT` | `P3REMULT` | `P9REMULT` | `NAREMULT` |
   | Nonfarm nonresidential, other | `LNRENROT` | `P3RENROT` | `P9RENROT` | `NARENROT` |
   | Nonfarm nonresidential, owner-occupied | `LNRENROW` | `P3RENROW` | `P9RENROW` | `NARENROW` |
-  | CRE not secured by real estate | `LNCOMRE` | `P3COMRE`? | not reported | not reported |
+  | CRE not secured by real estate | `LNCOMRE` | `P3COMRE` | not reported | not reported |
 
-  - The two construction past-due fields are in FDIC's definitions but **not pulled today** (`src/metrics.mjs`). E14-S1 adds them and checks live that they are filled.
-  - `P3COMRE` is titled "30-89 days past due, commercial RE", and whether it is the not-secured line is Unconfirmed. Until that is checked, the not-secured line shows its balance only.
+  - The two construction past-due fields are pulled since E14-S1 and are filled (Checked, November 14: above 0 at about 1,030–1,130 banks for `P3RECONS` and 170–200 for `P9RECONS`, every quarter; `P3RECONS` never above `LNRECONS` on the 360 sample rows). The paper profile shows them too.
+  - The owner-occupied and other stages (`P3RENROW`, `P3RENROT`, `P9RENROW`, `P9RENROT`, `NARENROW`, `NARENROT`) add up to the nonfarm nonresidential totals on all 360 rows checked.
+  - `P3COMRE` is titled "30-89 days past due, commercial RE", with no description. **Checked** on every bank at June 30, 2026 (4,313 banks) and December 31, 2025 (4,411): it is above 0 at 47 and 49 banks, never above `LNCOMRE`, never above 0 where `LNCOMRE` is 0, and never equal to the secured CRE 30–89 total. It is filled every quarter, small banks included. So it is taken as the not-secured line's 30–89 stage, with that note on the page. FDIC's title is still all it says.
+  - Not pulled, and open: FDIC also lists `NCCOMRE` ("NC COMMERCIAL RE/COMMERCIAL RE"), which behaves like a noncurrent amount for the same line (present for all 880 banks with `LNCOMRE`, never above it), and `NTCOMRE`, its net charge-offs, year to date only.
 - **Charge-offs are flows, not a stage.** They are shown separately: for the quarter, and for the year to date. They are never added to, or shown as part of, the outstanding balance.
-- Each category has eight quarters of trend, and restructured balances by type, with the 2023 break marked.
+- Each category has eight quarters of trend, and restructured balances by type, with the 2023 break marked. These are the latest eight quarters on file: the stored financials keep every quarter ever pulled, and older ones are not shown. The quarter before the window is read on its own, for the first quarter's net change.
 - **Unused commitments are portfolio-level only.** `UCCOMRES` (secured) and `UCCOMREU` (unsecured) are not split by category, so they are shown once for the whole CRE book, never per category.
 
 **Q2. Property types.** Tried in order:
@@ -136,6 +138,8 @@ A mix is never inferred from fewer than 5 observed loans: show the loans, not a 
   2. **Bounds, from reported breakdowns.** For each buy-box condition *i*, let *sᵢ* be the share of the book that meets it.
      - **Upper bound:** the smallest *sᵢ*, times the book.
      - **Lower bound:** max(0, Σ *sᵢ* − (k − 1)), times the book, for k conditions. It is often zero, and the page says so.
+     - **Every condition the buy box restricts counts**, measured or not. One the data cannot measure enters as anywhere from none to all of the book, [0, 1], so while any is unmeasured the lower bound is 0. Today the Call Report measures none of status, lien or exclusions, and no size for multifamily. A dimension that allows everything (every size, every status, any lien, no exclusions) is not a condition. One still a placeholder may restrict, so it counts. The record lists the unknown conditions (`unknownConditions`), and the page says they are why the floor is 0.
+     - **Each condition names its tier.** Reported only for a direct, same-period Call Report share, such as multifamily against the CRE book. Inferred for the deposit share (a proxy for where the loans are), for hotel and retail (known only to lie between 0 and the nonfarm nonresidential share), and for a June or December size mix applied to a later quarter's balance. The bounds take the weakest tier of their measured conditions.
   3. **No base figure** until a dependence model has been calibrated against real tapes (E14-S6). Until then the page shows the observed figure and the two bounds.
 - **Edge statements:** chosen only from approved claims in `claims.json` that match the profile. These are for the principal, not the message.
 
@@ -212,10 +216,10 @@ It shows **no bid or price**. See D-P1.
 
 ## 8. Build phases (stories)
 
-**E14-S1. The reported layer** (P0; data in hand).
-- [ ] Add the fields in 4.2 to the FDIC pull, with field checks. The semiannual fields are allowed to be null in March and September.
-- [ ] Add `P3RECONS` and `P9RECONS`, check live that they are filled, and check what `P3COMRE` measures.
-- [ ] Compute:
+**E14-S1. The reported layer** (P0; data in hand). **Built** (`src/paper.mjs`, `src/score.mjs`, `src/sources/fdic.mjs`, `outbound paper show`, the candidate page).
+- [x] Add the fields in 4.2 to the FDIC pull, with field checks. The semiannual fields are allowed to be null in March and September. Every field is checked like the others (a key absent from any row fails the run); in addition a June or December report with the loan-size fields empty for most banks marks the run suspect.
+- [x] Add `P3RECONS` and `P9RECONS`, check live that they are filled, and check what `P3COMRE` measures (5.Q1).
+- [x] Compute:
   - Q1, with per-category stages, flows apart, and commitments at portfolio level;
   - the Q3 proxy;
   - Q4 for nonfarm nonresidential;
@@ -223,12 +227,19 @@ It shows **no bid or price**. See D-P1.
   - Q6 from FDIC and SEC data;
   - Q7 as bounds only;
   - the unknowns, and the tape request.
-- [ ] Store each candidate's record (`paper/<key>.json`), and show it on the candidate page.
-- [ ] Tests:
+- [x] Store each candidate's record (`paper/fdic-<CERT>.json`: a colon is not a safe file name), and show it on the candidate page. The scoring run writes one for every bank it scores, and skips one whose content has not changed.
+- [x] Tests:
   - units and as-of dates;
   - the 2023 break is marked;
   - nothing reaches the drafter;
   - every value has a tier and sources.
+- Deferred or open from S1:
+  - The holding-company roll-up (checklist 5, D-P5): the record is per charter and says so.
+  - Edge statements from `claims.json` (5.Q7) and the observed in-box figure: Q7 shows bounds only.
+  - `NCCOMRE` and `NTCOMRE` (above), and the owner-occupied and other charge-offs, which FDIC gives only year to date (`NTRENROW`, `NTRENROT`): shown as "not pulled".
+  - The buy box's statuses, lien and exclusions are not used in the bounds: which Call Report stage counts as which status is a principal's decision (D-P3).
+  - The date each value was read (checklist 8, amendments) stays in the FDIC files (`_source.fetchedAt`); the record cites the file and the report date. The CECL break is not marked: the record holds no allowance figure.
+  - Servicer mode (section 6).
 
 **E14-S2. The CMBS overlay** (P1).
 - [ ] Market stress and comparables by property type and metro: delinquency, special servicing, DSCR and occupancy distributions.

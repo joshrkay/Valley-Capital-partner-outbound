@@ -41,6 +41,7 @@ test('parity: the FDIC pull and scoring store the same records on both backends'
   const { plan } = await parity({ prefixes: [...LOADS.sources, ...LOADS.score], fn: pullAndScore });
   assert.ok(plan.docs.some((d) => d.path === 'sources/fdic/institutions.json'));
   assert.ok(plan.docs.some((d) => d.path === 'candidates/latest.json'));
+  assert.ok(plan.docs.some((d) => d.path === 'paper/fdic-101.json'), 'scoring writes the paper estimate (E14-S1)');
   assert.ok(plan.lines.some((l) => l.path === 'sources/runs.jsonl'));
 });
 

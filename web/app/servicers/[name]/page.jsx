@@ -31,7 +31,7 @@ export default async function Servicer({ params }) {
               <dt>Rate</dt><dd title={`reportPeriodInterestRatePercentage · ${src}`}>{pct(l.rate, 3)}</dd>
               <dt>Maturity</dt><dd title={`maturityDate · ${src}`}>{l.maturity ?? '–'}{l.postModificationMaturity ? ` (after modification: ${l.postModificationMaturity})` : ''}</dd>
               <dt>Payment status</dt><dd title={`paymentStatusLoanCode · ${src}`}>{l.paymentStatus ? `${l.paymentStatus.label} (${l.paymentStatus.code})` : '–'}</dd>
-              <dt>Workout</dt><dd title={`workoutStrategyCode · ${src}`}>{l.workout ? `${l.workout.label} (${l.workout.code})` : '–'}</dd>
+              <dt>Workout</dt><dd title={`workoutStrategyCode · ${src}`}>{(l.workouts?.length ? l.workouts : l.workout ? [l.workout] : []).map((w) => `${w.label} (${w.code})`).join(', ') || '–'}</dd>
               <dt>Special servicing</dt><dd title={`mostRecentSpecialServicerTransferDate · ${src}`}>{l.specialServicingSince ? `since ${l.specialServicingSince}${l.returnedToMasterOn ? `, returned ${l.returnedToMasterOn}` : ''}` : '–'}</dd>
               <dt>Primary servicer</dt><dd title={`primaryServicerName · ${src}`}>{l.primaryServicer ?? '–'}</dd>
             </dl>

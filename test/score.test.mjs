@@ -16,7 +16,7 @@ const REPS = ['20240930', '20241231', '20250331', '20250630', '20250930', '20251
 const Q = (over = {}) => ({
   ASSET: 3000000, LNLSNET: 2000000, LNRECONS: 100000, LNREMULT: 300000, LNRENRES: 600000, LNRENROW: 200000, LNRENROT: 400000,
   NCRECONS: 2000, NCREMULT: 15000, NCRENRES: 12000, NCRENROW: 3000, NCRENROT: 9000, NARECONS: 1000, NAREMULT: 10000, NARENRES: 8000,
-  P3RENRES: 6000, P3REMULT: 4000, P9RENRES: 2000, P9REMULT: 1000, ORE: 4000, ORECONS: 500, OREMULT: 1000, ORENRES: 1500,
+  P3RENRES: 6000, P3REMULT: 4000, P9RENRES: 2000, P9REMULT: 1000, P3RECONS: 1500, P9RECONS: 300, ORE: 4000, ORECONS: 500, OREMULT: 1000, ORENRES: 1500,
   NTRECONQ: 0, NTREMULQ: 300, NTRENRSQ: 200, NTLNLSQ: 600, ...over,
 });
 const src = (period) => ({ source: 'fdic', endpoint: '/test', query: {}, recordId: 'invented', period, fetchedAt: '2026-11-13T00:00:00Z', runId: 'test-run' });
@@ -165,10 +165,12 @@ test('the paper profile: categories with balances, shares, every stage, directio
   assert.deepEqual(nf.split.map((s) => [s.id, s.balance.field, s.noncurrent.field]), [['ownerOccupied', 'LNRENROW', 'NCRENROW'], ['other', 'LNRENROT', 'NCRENROT']]);
   const cons = p.categories.find((c) => c.id === 'construction');
   assert.equal(cons.fit.buys, false); assert.equal(cons.fit.reason, 'not a buy-box sector');
-  assert.equal(cons.stages.pastDue30to89.field, null); assert.match(cons.stages.pastDue30to89.note, /no field/);
+  // Construction past-due stages are pulled since E14-S1 (P3RECONS, P9RECONS), so every stage of every category now has a field.
+  assert.deepEqual([cons.stages.pastDue30to89.field, cons.stages.pastDue30to89.value, cons.stages.pastDue90.field, cons.stages.pastDue90.value], ['P3RECONS', 1500, 'P9RECONS', 300]);
   for (const c of p.categories) for (const [k, s] of Object.entries(c.stages)) if (s.field) assert.ok(s.repdte === '20260630' && typeof s.value === 'number', `${c.id}.${k}`);
   assert.ok(p.limits.some((l) => /hotel and retail/i.test(l) && /cannot separate/.test(l)), 'says hotel and retail cannot be separated');
-  assert.ok(p.limits.some((l) => /no individual loans, loan sizes, maturities/.test(l)));
+  assert.ok(p.limits.some((l) => /no individual loans or properties/.test(l) && /paper estimate/.test(l)));
+  assert.ok(!p.limits.some((l) => /not in the fields pulled/.test(l)), 'construction past-due stages are pulled now');
   const phx = p.footprint.metros.find((m) => m.cbsa === '38060');
   assert.equal(phx.label, 'Phoenix'); assert.equal(phx.branches.value, 12); assert.equal(phx.depositShare, 0.6);
   assert.deepEqual(phx.deposits, { field: 'DEPSUMBR', repdte: '20260630', value: 600000 });
@@ -299,4 +301,19 @@ test('SEC filings: an EVENT signal for a confirmed filer, shown within its windo
   rejectFiler({ dir, bank: 'fdic:1', cik: '9900101', by: 'Pat Example', reason: 'not this bank', now: NOW });
   assert.ok(!score(dir).items[0].signals.some((s) => s.rule === 'filing'), 'a rejected filer gives no signal');
   assert.match(validateScoring({ ...scoring(), filings: { windowDays: 0 } }).errors.join('\n'), /filings\.windowDays/);
+});
+
+test('sales: a disclosed sale is an EVENT signal on the seller, shown within its window, stated on the card, adding no points', () => {
+  const dir = world([{ cert: '1', name: 'Alpha Example Bank' }]);
+  const before = score(dir).items[0];
+  const ev = (id, date) => ({ id, kind: 'bank_disclosed_sale', date, seller: { kind: 'bank', key: 'fdic:1', name: 'Alpha Example Bank' }, buyer: { kind: 'unknown', name: 'unknown' },
+    asset: { kind: 'unknown' }, tier: 'reported', filing: { form: '8-K' }, sources: [{ source: 'filings', ids: [id], link: 'https://www.sec.gov/Archives/edgar/data/9900101/x/', date }], firstSeenAt: '2026-11-13T12:00:00Z' });
+  put(dir, 'sales/ledger.json', { events: { 'sale-a': ev('sale-a', '2026-06-01'), 'sale-b': ev('sale-b', '2022-01-15') } });   // the second is older than 1,095 days before NOW
+  const it = score(dir).items[0];
+  const sales = it.signals.filter((s) => s.rule === 'sale');
+  assert.deepEqual(sales.map((s) => s.id), ['sale:sale-a'], 'only sales inside windowDays are shown');
+  assert.equal(sales[0].kind, 'event');
+  assert.deepEqual([it.score, it.axes], [before.score, before.axes], 'sale signals add no points until a principal weights them');
+  assert.match(it.card.text, /It has sold before: An SEC filing disclosed a completed sale or disposition \(8-K, filed 2026-06-01\)\./);
+  assert.match(validateScoring({ ...scoring(), sales: { windowDays: 0 } }).errors.join('\n'), /sales\.windowDays/);
 });

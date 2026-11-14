@@ -19,7 +19,7 @@ The goal is a chain. A weak link breaks it:
 | 5. **The person** | Who decides whether that paper is sold? | The briefer, sourced, confirmed by a principal | E1, E7 |
 | 6. **The message** | What does a short, accurate first touch say? | The drafter: approved claims only, matched to the paper's sector, checked in code | Existing agent 3, E6-S8 |
 | 7. **The send** | How does it reach them without burning the name? | A principal's own mailbox, caps, stop on reply | E9 |
-| 8. **Learning** | Which signals led to conversations and loan tapes? | Outcomes linked back to signals | Goal 5, E11 |
+| 8. **Learning** | Which signals led to conversations and loan tapes? | Outcomes linked back to signals | Goal 5, E11, E15 |
 
 **What public data can and cannot say about the paper.** It should be read honestly, so no one over-trusts it:
 
@@ -180,6 +180,8 @@ Rules that apply everywhere:
 | E12 Platform foundation | R2 | P0 | E1–E6 (built) |
 | E13 Event listeners | R2 | P1 | E2, E3, E12 |
 | E14 The paper estimate | R2 | P0 | E3, E4, E6 |
+| E15 Call prep and outcomes | R2 | P0 (S1, S2), P1 (S3, S4) | E1, E7, E12; E14 if present |
+| E16 Who sells to whom | R2 | P1 | E3, E4, E12, E13 |
 
 ---
 
@@ -479,9 +481,44 @@ Every adapter (E3–E5) is built on this shared framework.
 - [ ] Suppressed institutions, including aliases and affiliates in `suppression.json`, never appear as candidates. A test covers it.
 - [ ] No code path creates an account without a principal's name on it. A test covers it.
 
-**E6-S5. Weekly digest.** *As a principal, I want one weekly summary so that I don't have to remember to look.* P1, R2.
-- [ ] It lists new candidates, tier changes, a newly published FDIC quarter, and runs that failed or look suspect.
-- [ ] It is written to the data folder. How it is delivered to the principal is an open question (Q13). It goes only to the firm's own people, never to a prospect.
+**E6-S5. Weekly triage.** *As a principal, I want one triage every Monday of what changed across every source, grouped by institution and sorted into act now, watch and already in conversation, so that I know where to spend the week without having to remember to look.* P1, R2. **Built** (`src/triage.mjs`, `triage.json`, `outbound triage run|show`, worker job `triage.run`, the web app's **This week** page). Tested on invented data; not yet run on the live data folder.
+- [x] **Rules** live in `triage.json`, committed, with no prospect data. Every value is a placeholder with a `_note`: the window, what counts as act now and as watch, the in-conversation and opt-out events, the order within a category, the calendar settings, and when a source counts as stale.
+- [x] **Code only, no model.** Every sentence comes from a fixed template filled with computed values. The same inputs give the same triage, byte for byte (a test).
+- [x] **It compares with the previous triage's snapshot,** `triage/state.json`: each candidate's tier and signal ids, and every event seen.
+  - The first run has no snapshot and says "first triage, no comparison". It reports only events dated in the window, plus baseline counts.
+  - A second run on the same day compares with the same snapshot as the first, so re-running Monday's triage does not empty it.
+- [x] **The window** runs from the last triage, or from `--since DATE`, or over the last 7 days (placeholder). Both edges are in.
+  - With a snapshot, an event is new when the snapshot has not seen it, so an event FDIC indexed late is still caught, with a note saying so.
+  - An event dated more than 90 days back (placeholder) is never new, so a backfill does not flood the list.
+- [x] **What it finds:**
+  - new candidates, and candidates that dropped out;
+  - tier changes;
+  - state signals that turned on or off, compared by type, so a new quarter alone changes nothing;
+  - new SEC filings, by `firstSeenAt`;
+  - acquisitions;
+  - failures in our metros, with the FDIC as the seller;
+  - CMBS loans newly coded for a note sale (workout code 5) or newly in special servicing, with their servicer;
+  - a newly published FDIC quarter;
+  - source runs in the window that failed or look suspect.
+- [x] **Act now:** a CMBS note sale; a failure in our metros; an SEC filing that matched a loan-sale or held-for-sale search; a move to Tier A, new or from Tier B; a Tier A bank crossing the concentration screen. It applies only at an institution that is not in conversation, suppressed, opted out, dismissed or snoozed. A bank that fails a hard filter is listed under watch instead.
+- [x] **Watch:** other SEC filings, acquisitions, CMBS loans newly in special servicing, a new Tier B candidate, a move down to Tier B, state signals that turned on or off, and candidates that dropped out.
+- [x] **Already in conversation:** an institution with a reply, meeting or handoff in `touches.jsonl`. It is shown apart, with its latest touch date and the week's findings, and is never act now. A hand-picked account counts too.
+- [x] **Left out, and counted:**
+  - Opt-outs are matched by institution key or name and left out of every list, so neither the person nor the institution is surfaced again.
+  - Suppressed institutions are left out the same way.
+  - Snoozed candidates stay out until the snooze ends. Dismissed ones stay out until a new signal fires after the dismissal (E6-S4).
+- [x] **Each item** carries the institution key and name, the category, a one-line reason, the signal or event ids and their dates, and links: the candidate or account page, the servicer page, the SEC filing index and the FDIC loan-sale page. Items are sorted by category, then strength, then date.
+- [x] **System health:** failed and suspect runs in the window; sources whose last ok run is older than a limit (placeholders: FDIC 8 days, CMBS 35, SEC filings 4); scoring that is stale or behind the FDIC data.
+- [x] **The calendar:** the next quarter-end and the days until it; whether the review window is open (placeholder: 6 weeks before the quarter-end); when the next FDIC quarter is expected (placeholder lag: 60 days); when the next CMBS reporting cycle lands (placeholder: the 15th). Like E10-S1, it decides **when** a principal looks, never what a message says. The triage never feeds the drafter or the briefer: a test checks their load lists and their code.
+- [x] **Output:** `triage/<date>.json` and `.md` in the data folder, the updated snapshot, and an audit line with counts only. The data-rule test also refuses a tracked `triage/` file.
+- [x] **Surfaces:**
+  - `outbound triage run [--since D]` and `outbound triage show [--date D]`;
+  - worker job `triage.run`, whose result holds counts only. Its unit of work loads the snapshot and the day's two files, never past triages;
+  - every Monday the workflow queues it after the FDIC check and a scoring run. Scoring uses `--draft-buybox` (a PROVISIONAL list while the buy box has placeholders) unless the repository variable `SCORING_STRICT` is `true`;
+  - the web app's **This week** page (`/triage`), first in the nav, server-rendered from the stored record.
+- [ ] The database's job-kind list gains `triage.run` in the merge migration. This change adds no migration. Until it lands, `enqueue triage.run` is refused, and the Monday queue step fails with it.
+- [ ] Delivery beyond the data folder and the web app is still Q13. It goes only to the firm's principals, never to a prospect.
+- [ ] A principal reviews `triage.json`: the act-now rules, the window, the calendar settings and the staleness limits.
 
 **E6-S6. The paper profile.** *As a principal, I want to see what paper an institution likely holds, how distressed each part of it is, and where it lends, so that I approach it knowing what it probably has to sell.* P0, R1.
 - [ ] Each candidate carries a profile, computed in code. For each CRE category (construction, multifamily, nonfarm nonresidential, with owner-occupied and other shown separately where the fields allow), it shows:
@@ -652,8 +689,8 @@ Every adapter (E3–E5) is built on this shared framework.
 
 **E12-S4. The worker.** *As a principal, I want to start research, drafting, data pulls and scoring from the web and have them run in the background so that a ten-minute research run never times out a page.* P0, R2. **Built** (`src/platform/worker.mjs`, `.github/workflows/platform-worker.yml`).
 - [ ] `outbound worker --once` claims the oldest queued job (skip-locked) and runs the same function the command line runs, in a unit of work. It records the result and frees the job.
-- [ ] Job kinds: `sources.fdic`, `score.run`, `research.run`, `draft.run`.
-- [x] A scheduled GitHub Actions workflow runs the worker hourly on weekdays (12:17 to 23:17 UTC) and queues the weekly FDIC check on Mondays (E11-S1). Logs carry job ids, kinds and outcomes only. Keys live in Actions secrets. It is off until the repository variable `PLATFORM_ENABLED` is `true`.
+- [ ] Job kinds: `sources.fdic`, `score.run`, `research.run`, `draft.run`, and `triage.run` (E6-S5).
+- [x] A scheduled GitHub Actions workflow runs the worker hourly on weekdays (12:17 to 23:17 UTC) and queues the weekly FDIC check on Mondays (E11-S1), then scoring and the weekly triage (E6-S5). Logs carry job ids, kinds and outcomes only. Keys live in Actions secrets. It is off until the repository variable `PLATFORM_ENABLED` is `true`.
 - [ ] **Known limit:** a job queued from the web waits up to an hour for the next run. A "run now" trigger from the app needs a GitHub token on the server (P1).
 - [ ] The kill switch, a `KILL` document or the config flag, stops every job that could create a draft or touch a mailbox.
 
@@ -738,7 +775,221 @@ Some sources report a dated change rather than a state: a filing, a notice, an o
 
 ### E14. The paper estimate
 
-*As a principal, I want one page per candidate that estimates what CRE the lender holds — how much, which property types, where, what sizes, when it matures, whether the lender already sells, and how much fits our buy box — with every number tiered as reported, observed or inferred, so that I go into the first call knowing the paper.* The design, the critical-detail checklist and stories E14-S1 to S6 are in `docs/paper-estimate.md`. P0 for E14-S1 (data in hand), R2.
+*As a principal, I want one page per candidate that estimates what CRE the lender holds — how much, which property types, where, what sizes, when it matures, whether the lender already sells, and how much fits our buy box — with every number tiered as reported, observed or inferred, so that I go into the first call knowing the paper.* The design, the critical-detail checklist and stories E14-S1 to S6 are in `docs/paper-estimate.md`. P0 for E14-S1 (data in hand), R2. **E14-S1, the reported layer, is built** (`src/paper.mjs`; `outbound paper show`; the candidate page); what it defers is listed under the story.
+
+### E15. Call prep and outcomes
+
+When the person who decides on loan sales agrees to talk, a principal needs a one-page brief before the call. After it, the outcome is recorded and linked back to the signals that started the account. That link is the learning loop of Goal 5: which signals lead to conversations, confidentiality agreements and loan tapes. **Built** (`src/calls.mjs`, `src/outcomes.mjs`, `outbound call ...`, `outbound outcomes report`, worker jobs `call.prep` and `call.extract`, the account page).
+
+Rules across the epic:
+- The brief and the notes are for principals only. They live in the data folder (`calls/<account>/`) and the database, never in the repository.
+- Nothing a model extracts is recorded until a principal confirms it. Nothing is sent.
+- The research and the paper estimate never reach the drafter (section 0). `test/calls-handoff.test.mjs` proves it.
+- Logs and job results carry codes, counts and ids. They never carry a prospect's name or note text.
+
+**E15-S1. The call brief.** *As a principal, I want a one-page brief before a call so that I know who I am speaking with, why now, what they likely hold, and what I may and may not say.* P0, R2. **Built.**
+- [x] `outbound call prep --account ID [--date YYYY-MM-DD]`, and the worker job `call.prep`. `--dry-run` shows the request and spends nothing.
+- [x] One model call (`callJson`, a strict JSON schema, its own entry `callPrep` in `models.json`). It has no tools. It writes from these inputs only, each with an id:
+  - the account: the person, and whether the role is confirmed;
+  - the latest research brief: every finding, the risk screen, the person check and the gaps;
+  - the signals and the "why now" card from the candidate record, or the account's `pipeline` block when the bank is no longer listed;
+  - the paper profile, and the paper estimate (`paper/<key>.json`, E14) when it exists;
+  - the touch history: each step sent, with its approved subject and claims, and any reply, meeting or opt-out, including from another contact at the bank;
+  - earlier confirmed calls;
+  - the approved claims for the account's audience and sector;
+  - the playbook questions, and the fixed rules of section 7.
+- [x] Sections:
+  1. Who you are speaking with.
+  2. Why now.
+  3. What they likely hold.
+  4. What they may want, and likely objections.
+  5. Questions to ask.
+  6. What we can say.
+  7. What not to say.
+  8. Next-step options.
+
+  Then the sources cited, by id.
+- [x] Code writes these parts, not the model:
+  - the warnings at the top: no person named, **the role unconfirmed**, a risk screen of wait or do not approach, an opt-out, a suppression;
+  - the tier and as-of date of each line in section 3;
+  - the approved claims' own wording in section 6;
+  - the paper estimate's tape-request list in section 5;
+  - the fixed rules of section 7: never quote their own distress figures back to them, the drafter's voice rules, and the bank's own words from the site's terminology rules;
+  - the list of sources cited.
+- [x] **Code checks it.** Every item must cite an input. Any failure marks the brief **not usable**:
+
+  | Check | Fails when |
+  |---|---|
+  | `CITE_MISSING`, `CITE_UNKNOWN` | An item cites nothing, or cites an id that is not among the inputs |
+  | `NUMBER_NOT_IN_INPUTS` | A number in the brief does not appear in the inputs. Numbers are compared as numbers, so 6.10% equals 6.1. |
+  | `CLAIM_UNKNOWN`, `CLAIM_UNAPPROVED`, `CLAIM_WRONG_AUDIENCE`, `CLAIM_WRONG_SECTOR`, `CLAIM_NOT_WORD_FOR_WORD` | A claim in section 6 is not an approved claim for this bank and sector, quoted word for word |
+  | `TIER_UPGRADED`, `ESTIMATE_AS_FACT`, `HOLDINGS_UNSOURCED` | A holding is labelled stronger than the weakest tier it cites, an inferred value is not called an estimate, or a holding rests on neither the paper estimate nor the profile |
+  | `FIRM_STATEMENT` | A response, question or next step says something about the firm outside the approved claims (`terminology.json` `claimPhrases`) |
+  | `ROLE_OVERSTATED` | Section 1 calls the role confirmed when no principal has confirmed it |
+
+  A number that is in the inputs, but not in the inputs its item cites, is a warning.
+- [x] One repair round, as the drafter has. A brief that still fails is saved as `not_usable`. Its Markdown opens with "NOT USABLE" and the reasons, before the brief itself. The command exits 1, and the web page shows the same. It is never shown as if fine.
+- [x] Stored in the data folder: `calls/<accountId>/<date>-prep.json` (the record) and `.md` (to read).
+- [ ] The paper estimate is read defensively until E14-S1 lands. The file is `paper/<key>.json`, or the same with the key's colon written as `-` or `_`, since a platform document path cannot hold a colon. A value is any object with a tier (reported, observed or inferred) and a value, or a low and a high. The tape request is a list under a key that starts `tapeRequest`. Align both with E14-S1 when it merges.
+- [ ] The first live run, with a key, read against a call a principal has already had.
+
+**E15-S2. Recording the call.** *As a principal, I want to paste my notes after a call and confirm what they say so that the outcome is on record and linked to the signals that started the account.* P0, R2. **Built.**
+- [x] `outbound call log --account ID --date D --by NAME --notes FILE` (or `-` for stdin). The notes are saved to `calls/<id>/<date>-notes.md`, for principals only. Then a model call (`models.json` `callExtract`) turns them into a **proposal**. On the platform, saving is a quick action, and reading the notes is the job `call.extract`.
+- [x] **Only a call that has happened is recorded.** A call date later than today (UTC) is refused when the notes are saved, and again at confirmation, since the guard stops on any meeting whatever its date. Call prep still takes a future date.
+- [x] **A proposal matches its notes.** Each proposal keeps a digest of the notes it was read from. New notes for a date mark that date's pending proposals `superseded`, and a proposal whose notes no longer match cannot be confirmed.
+- [x] The proposal holds:
+  - outcome codes from a fixed list: `held`, `nda_requested`, `nda_signed`, `tape_promised`, `tape_received`, `not_selling_now` (with a when, if stated), `wrong_person` (with a referral, if any), `interested_later`, `pricing_discussed`, `declined`;
+  - objections;
+  - commitments: who (us, them, both or unclear) does what, and by when;
+  - a follow-up date;
+  - the people mentioned.
+- [x] Code checks the proposal for the principal. Each code and objection carries a quote, which is looked for in the notes. Dates must be real dates. A missing `held` is flagged. The findings are shown; they do not block a principal.
+- [x] **It is recorded nowhere until a principal confirms it.** Until then only the notes and the pending proposal exist. `outbound call confirm --account ID --proposal PID --by NAME`:
+  - records a guard event of type `meeting`, which stops the automated sequence (the existing rule);
+  - appends a line to `outcomes.jsonl`: the account, `institutionKey`, `originSignals` with their types, the first signal's date, the tier, the call date, the codes, counts and the confirmer;
+  - adds the outcome, with its details, to the account (`outcomes`);
+  - writes the follow-up checklist (E15-S3).
+- [x] **A confirmation that stops partway is finished by running it again.** It is keyed to the proposal id: the outcome on the account and the line in `outcomes.jsonl` carry it as their id, and the meeting event carries `ref: call:<id>`. A rerun writes only what is missing, as the first run confirmed it, and never a second meeting or line. On the platform it is one transaction. The command line stages it in a unit of work over the folder and writes nothing until every step has run. It then writes the outcome on the account first, which locks the date. The proposal is written last, so it reads pending until the rest is written. Meanwhile it cannot be rejected, and `call list` marks it unfinished.
+- [x] One confirmed outcome per call date. A confirmed or rejected proposal cannot be confirmed. A confirmed call's notes are not replaced. `outbound call reject` and `outbound call list` complete the set.
+- [x] **People named in the notes are never added automatically.** They stay on the proposal and the outcome as "unconfirmed, from call notes". A principal adds one through `account set-person`, then `account confirm-role` (E7).
+- [x] Logs carry counts only. Audit lines and job results hold codes, counts and ids, never a name or note text. The outcome line holds no name either. A test checks both.
+- [ ] A principal can correct a proposal before confirming it. Today they reject it and log the notes again.
+- [ ] A meeting recorded by hand (`guard event --type meeting`) has no outcome, so the report does not count it.
+
+**E15-S3. The follow-up.** *As a principal, I want what was agreed on the call turned into a follow-up so that nothing promised is forgotten.* P1, R2. **Built as a checklist. The email is deferred.**
+- [x] On confirmation, a checklist is written to `calls/<id>/<date>-followup.md` and `.json`, and shown on the account page. Its facts are only what was agreed:
+  - each commitment, with who and by when;
+  - the follow-up date;
+  - the approved claim that matches, word for word: `nda-first` when they asked for a confidentiality agreement, `no-obligation` when pricing came up;
+  - the paper estimate's tape-request list, when a tape was promised.
+- [x] It shows the guard's view: the hard stops (an opt-out, a suppression, a bounce, the kill switch), and that the sequence is over. Nothing is drafted or sent.
+- [ ] **The follow-up email is deferred.** The drafter cannot take a post-call context without changing its rules:
+  - The guard ends the sequence on a meeting (`SEQUENCE_STOPPED`). `runDrafter` refuses before any model call, and `approveDraft` refuses too. A post-call email would need a new exception to the stop rule.
+  - The drafter writes only from the briefer's cleared facts, and every personal line must cite one. What was agreed on a call is not one.
+  - Its steps come from `config.sequence`. A follow-up is not a step.
+
+  So the principal writes the follow-up from their own mailbox, with the checklist. A test proves the stop rule still holds after a call.
+- [ ] **A decision for a principal.** The guard has no record type for a principal's own message after a meeting. Recorded with `guard record`, it is logged with the violation `SEQUENCE_STOPPED`. That is right for the sequence, but it reads as a broken rule. One option: a `correspondence` record that the guard logs outside the sequence, still under the kill switch, suppression and opt-out. A post-call email could then go through the drafter with the agreed facts as its only facts. Not built.
+
+**E15-S4. What led to conversations.** *As a principal, I want to see which signals led to conversations, confidentiality agreements and tapes so that the score can be tuned on outcomes, not guesses.* P1, R2. **Built.**
+- [x] `outbound outcomes report [--since D]`. Deterministic, with no model. It reads confirmed outcomes only (`outcomes.jsonl`). `--since` chooses which calls are counted. An account's first signal and first held call still come from all its confirmed calls, so the window never moves its lead time.
+- [x] For each group it counts the accounts, the confirmed calls, and the accounts that reached each outcome code:
+  - by the signal types in `originSignals`. An account started by several types counts once under each. An account picked by hand has its own row.
+  - by tier;
+  - by lead time, from the account's first signal date to its first `held` call, in buckets set in `config.json` (placeholders: 30, 90, 180 and 365 days).
+- [x] Written to `reports/outcomes-<date>.json`, and printed.
+- [x] With fewer than `config.outcomes.minToTune` confirmed outcomes (placeholder: 30), it says the counts are too few to tune weights on.
+- [x] **It never changes weights.** A test checks that it writes only its report, and that `scoring.json` is unchanged.
+- [ ] A principal sets `minToTune` and the buckets.
+
+**Plumbing.**
+- [x] Migration `20261114120000_jobs_calls.sql` adds `call.prep` and `call.extract` to `jobs_kind_check`, with every earlier kind. `test/db.test.mjs` runs it on Postgres 16, and `test/postgrest-fake.mjs` knows the kinds. A test checks that the newest migration lists exactly the worker's kinds.
+- [x] Units of work (`src/uow.mjs`, `LOADS`): `callPrep`, `callNotes`, `callExtract`, `callConfirm` and `outcomes`, each narrowed to one account's folders. `callConfirm` also reads `outcomes.jsonl`, to finish an interrupted confirmation without a second line.
+- [x] **Web**, on the account page, through `web/lib/ops.mjs` and the principal's session:
+  - the latest call brief, marked NOT USABLE with its reasons when a check failed;
+  - a form to paste notes, which saves them as the principal and queues `call.extract`;
+  - each pending proposal, with confirm and reject;
+  - the confirmed outcomes, and the follow-up checklist.
+- [x] `test/calls-handoff.test.mjs` proves, end to end, that the research and the paper estimate never reach the drafter, and that the follow-up carries only what was agreed.
+- [ ] The outcomes report on the web (the Status screen). The command line has it.
+
+### E16. Who sells to whom
+
+**Why.** A lender that has sold loans before is the warmest prospect there is. The known buyers show who the firm competes with. Completed sales give price evidence. Today those facts are spread over four sources, or not kept at all: a CMBS loan that is liquidated drops out of the next month's report.
+
+**The design, in one paragraph.** One **sale ledger**, `sales/ledger.json` in the data folder, holds every sale event any source shows. Each event has a stable id, so a rebuild never counts one twice. `outbound sales build` rebuilds it from stored data only; nothing in the build fetches. The CMBS run and the FDIC loan-sale run rebuild it when they finish. Each source is a **feeder**: a function from stored records to events. Later sources plug in as feeders, and two of them already have their event shape. The ledger answers three questions for a principal: who has sold, who has bought, and at what recovery. It never answers them in a message.
+
+**The event.** Built in `src/sales.mjs`; `validateEvent` checks each one before it enters the ledger.
+- `id`, `kind` and `date` (YYYY-MM-DD).
+- `seller` and `buyer`: `{ kind, key?, name }`. The kinds are `bank` (key `fdic:CERT`), `servicer` (key `servicer:<slug>`), `trust` (key `cmbs-trust:CIK`), `fdic` (key `fdic-receiver`), `other` (a named party that is none of these, such as a fund that took an assignment), and `unknown`. A CMBS trust's seller carries `via`: the special servicer that acted for it.
+- `asset`: `{ kind: loan | pool | bank | unknown, propertyType, metro or county, balance }`, in dollars, with `balanceBasis` saying where the balance came from.
+- `priceEvidence` (CMBS only, optional).
+- `tier`: `reported` (the seller or a regulator reported it) or `observed` (built from a record we can see), as in `docs/paper-estimate.md`, section 3.
+- `sources`: `[{ source, ids, link, date }]`.
+- `firstSeenAt`, `supported`, and a `_source` block for the build.
+
+**Rules.**
+- No invented facts. A buyer no source names is `unknown`, and the check refuses an event that names one for a kind whose sources never do. Only a whole-bank deal and a recorded assignment can name a buyer.
+- An implied recovery is labelled approximate and carries `isPrice: false`. The check refuses one without the label.
+- Property names and addresses are kept in the ledger for a principal. They never go in the run log. In the change log, a change to them is recorded by field name only.
+- Every event is context for a principal only. A test proves no event, signal, label, party, property, price or source reaches the drafter.
+
+**E16-S1. CMBS completed dispositions.** *As a principal, I want every CMBS loan in our metros and sectors that is liquidated recorded as a sale, with its servicer and its loss, so that I know which special servicers sell and at what recovery.* P1, R2. **Built** (`src/sources/edgar.mjs`, `sources/edgar/dispositions.json`).
+- [x] The adapter stores, on each loan: `liquidationPrepaymentCode` (item 2(i)(1), with the schema's 11 meanings), `liquidationPrepaymentDate`, `realizedLossToTrustAmount`, the full `workoutStrategyCode` list (the schema lets it repeat; the old parser kept only the last), `originatorName`, `originationDate`, `originalLoanAmount`, `originalTermLoanNumber`, and `reportPeriodBeginningScheduleLoanBalanceAmount`.
+- [x] A field check counts how many kept loans lack each of these optional fields (`state.json` `fieldCoverage`, and the run log's `nullCounts`). A value that is present but malformed is a run note.
+- [x] Each loan keeps a **workout history**: every code it has shown, with the first period seen, carried from run to run.
+- [x] A curtailment (codes 1, 10 and 11) is a partial payment. The loan keeps its signals. Before, any liquidation code silenced them.
+- [x] A kept loan whose report shows code **3** (disposition) or **6** (DPO) is written to `dispositions.json` and kept for good. The loan leaves the next report, so the month that carries the code is the only chance to see it.
+- [x] Kind: `note_sale_completed` if workout code 5 (note sale) is in the loan's history or current report; else `dpo` for code 6; else `disposition`. A disposition may be an REO sale or a foreclosure, and the event says so.
+- [x] Seller: the trust, through its special servicer, by firm name. Buyer: unknown.
+- [x] Price evidence: the balance before liquidation, the realized loss, and an implied recovery = 1 − loss ÷ balance.
+  - The balance is the report's beginning scheduled balance: the realized loss is defined against it (item 2(h)). Without it, the previous report's ending balance is used, and the event says which.
+  - The magnitude of the loss is used, because filers differ on its sign; a negative figure is flagged. A missing loss or balance gives no value, with the reason. A zero loss gives 1, and says so.
+  - Labelled approximate: the loss is net of liquidation expenses and can include advances. It is never shown as the price.
+- [ ] Check live, on a few trusts, how often each field is filled, and which sign filers use for the loss. The coverage counts are in each run's state. *(Not run yet: the live SEC request was not permitted in the session that built this.)*
+
+**E16-S2. FDIC loan-sale announcements.** *As a principal, I want each FDIC loan sale recorded, with its dates, the failed banks behind it and the pools, so that I see the FDIC's sales as they are announced.* P1, R2. **Built** (`src/sources/fdicsales.mjs`, `outbound sources run fdicsales`, worker job `sources.fdicsales`).
+- [x] **Checked live on 2026-11-14** (nine requests to www.fdic.gov, a few a minute at most):
+  - `robots.txt` allows `/asset-sales/` and sets `Crawl-delay: 1`.
+  - The loan-sales page lists the current sales under "Loan Sales Event(s)". Each links a sale page under `/asset-sales/events/`.
+  - A sale page has an Event Date field, a Key Dates table (row labels vary), a sentence naming the receivership with the loan count and UPB, portfolio paragraphs, the loan-sale advisor's firm name, and then named contacts with phone numbers and email addresses.
+  - The announcement PDF is FlateDecode text in simple fonts. Node's zlib reads it, with no new dependency. Its first lines give the announcement date, which the page does not.
+- [x] **Results and buyers: not published where we can read them.** The loan-sales page links "FDIC Closed Loan Sales" (January 2010 on), an application on `sales.fdic.gov`. This environment's network refused that host. `/asset-sales/historical-sales` links the same application and lists no results itself. So only announcements are recorded, and every buyer is unknown.
+- [x] Per sale: the id and name, the event and key dates (due diligence, calculation date, bid deadline, closing), the receiverships, the loan count and UPB, the portfolio and pool sentences, the data's as-of date, the advisor's firm name, and the PDF link. The announcement date comes from the PDF when its text can be read; a PDF that cannot be read is kept as a link only.
+- [x] Each receivership is matched to `sources/fdic/failed.json` by name (legal suffixes ignored) and state, and by city when two banks share a name. Two candidates leave it unmatched, with both listed. Nothing is guessed.
+- [x] **Gentle.** `robots.txt` is read first, and only paths it allows are read; a `robots.txt` that cannot be read stops the run. Requests are at least `config.fdic.minIntervalMs` apart (placeholder 20 seconds, so three a minute), or the Crawl-delay if longer. At most `maxEvents` sale pages a run. A PDF is read once, when it is new or its link changes.
+- [x] `config.fdic.userAgent` is a placeholder; the run refuses while it is one, and refuses an email address at a personal domain.
+- [x] The contacts block is cut off before anything is parsed. A test proves no person, phone number or email address is stored.
+- [x] E2: a fake shaped like the real pages (`test/fdicsales-fake.mjs`), the run log, a field check (a sale page without its id, dates or receivership fails the run and writes nothing), the change log, and `outbound sources verify fdicsales` (fresh, every listed sale stored, every record sourced and free of contacts).
+- [ ] Ask whether the closed-sales application may be read, and whether it names buyers (D-S1). If it does, results become events with the buyer named.
+
+**E16-S3. Sales banks disclose to the SEC.** *As a principal, I want a bank's filing that reports a completed sale or disposition recorded as a sale so that a bank that sells is on the "has sold" list.* P1, R2. **Built**, from the stored records of the filings listener (E13-S1), read only.
+- [x] Each hit of `8k-acquisition` (Item 2.01), `loan-sale-cre` or `note-sale-cre` on a confirmed filer becomes a `bank_disclosed_sale`. The list is `config.sales.filingSearches`, a placeholder.
+- [x] Seller: the bank, by `fdic:CERT`. Buyer: unknown. Asset: unknown. No filing text is stored or fetched; the filing's link is kept for a principal.
+- [x] An Item 2.01 hit can be the bank buying, not selling. The event says so.
+- [x] When a filer mapping is rejected later, its events stay in the ledger, marked `supported: false`, and leave every view and signal. They come back if the mapping is confirmed again.
+
+**E16-S4. Whole-bank acquisitions.** *As a principal, I want every acquisition of a bank with a presence in our metros recorded with its acquirer so that I know who buys here.* P1, R2. **Built**, from `sources/fdic/events.json` (E3-S6), read only.
+- [x] Kinds in `config.sales.acquisitionKinds` (placeholder: merger, assisted merger, failure). An affiliate reorganization (224) is left out, as in `scoring.json`.
+- [x] Seller: the target. When the target failed, the seller is the FDIC as its receiver. Buyer: the acquirer, by FDIC cert. **This is the one buyer list available today.**
+- [x] The asset is the target bank, with its CRE at its last report (thousands of dollars, times 1,000).
+
+**E16-S5. The ledger, its views and its signals.** *As a principal, I want the sale events in one place, with who has sold, who has bought and at what recovery, so that I can use them when choosing whom to approach.* P1, R2. **Built** (`src/sales.mjs`, `outbound sales ...`).
+- [x] `outbound sales build`: the run log, the input field checks (a stored record without a required field fails the build and writes nothing), `validateEvent` on every event, the change log, and `outbound sales verify`.
+- [x] `salesBySeller({ dir })`: for each seller, by the institution that acted, the count by kind, the latest date and the events. This is the **"has sold before"** list. An unknown seller is left out.
+- [x] `knownBuyers({ dir })`: by buyer, counts by kind, property type, metro and quarter.
+- [x] `priceEvidence({ dir })`: CMBS liquidations by property type and metro, with the approximate implied recovery, 1 − Σ loss ÷ Σ balance over the events that have both, and the range. Labelled.
+- [x] `saleSignals({ dir })`: **event** signals by institution key (`fdic:CERT` or `servicer:<slug>`), shaped like `filingSignals`. Each is `{ id, kind: 'event', type: 'sale', source: 'sales', key, role: 'seller', saleKind, tier, date, period, label, link, evidence, firstSeenAt }`. Labels come from fixed templates, with no names. The FDIC as receiver and a CMBS trust get none: they are not institutions we approach.
+- [x] CLI: `outbound sales list [--seller KEY] [--kind K]`, `sales sellers`, `sales buyers`, `sales pricing`.
+- [x] Worker: `sources.fdicsales` is in `JOB_KINDS` and the worker; `sources.edgar` and `sources.fdicsales` rebuild the ledger in the same unit of work (`LOADS.sales`).
+- [ ] The job-kind migration for `sources.fdicsales`, added when this is merged.
+- [ ] Wire `saleSignals` into scoring (`src/score.mjs`), after merge. A principal decides whether "has sold before" adds points, and on which axis.
+- [ ] A line in the worker workflow's schedule for `sources.fdicsales`, once the migration and the FDIC contact are in place.
+
+**E16-S6. The Sales screen.** *As a principal, I want a Sales page so that I can read the ledger without the command line.* P1, R2. **Built** (`web/app/sales/page.jsx`, `web/lib/sales-view.mjs`).
+- [x] Server-rendered from the stored ledger, in the existing style, and linked in the nav. It shows recent events, the sellers who have sold (linked to the bank's candidate page or the servicer's page), the known buyers, and the price evidence under the approximate label.
+
+**E16-S7. Recorded assignments of deeds of trust** (county records). *As a principal, I want each recorded assignment of a commercial deed of trust in our counties recorded as a sale, with the chain to the current holder, so that I see which lenders sell loans and who buys them.* P1, R3.
+- [x] **The shape, with no adapter:** `assignmentEvent` in `src/sales.mjs`. Assignor, assignee, the original deed of trust (recording number, date, original principal, beneficiary), the APN, the recording date, and the chain. Tier `observed`. A test proves the ledger accepts it.
+- [x] **MERS** is a nominee, never a party. "MERS as nominee for X" resolves to X; MERS with no lender named resolves to unknown. The event check refuses MERS as a seller or buyer.
+- [x] **The chain to the current holder** (`chainToCurrentHolder`): oldest assignment first, from the deed's beneficiary. An assignor who is not the holder so far marks a gap. An assignment to MERS with no lender named leaves the holder as it was, marked uncertain. The holder is certain only when every step is known.
+- [ ] The feeder, on the Maricopa Recorder's bulk feed (code AS, `docs/county-playbook.md`) or ATTOM, once the account or trial exists. Names matched to `fdic:CERT` by E6-S1, never guessed.
+- [ ] Commercial only, joined on the APN to the assessor's file.
+
+**E16-S8. Loan-sale listings.** *As a principal, I want loans and pools listed for sale in our metros recorded so that I see the supply, and who sells it when the listing says.* P2, R3.
+- [x] **The shape, with no adapter:** `listingEvent`. Site, listing id, date, title, advisor, property type, metro or county, balance, loan count, status, lien and bid date. The seller is usually unknown; the buyer is always unknown. Tier `observed`. A test proves the ledger accepts it.
+- [ ] The feeders, for listing sites and loan-sale advisors' sale notices, once a principal has read each site's terms (data-sources 2.3).
+
+**Decisions for a principal.**
+
+| # | Decision | Default |
+|---|---|---|
+| D-S1 | May we read the FDIC's closed-sales application (`sales.fdic.gov`) for results and buyers? Its terms and its contents are unchecked. | Announcements only |
+| D-S2 | Does "has sold before" add points, on which axis, and for how long? | Signals only, no points (as for filings) |
+| D-S3 | Which filing searches count as a disclosed sale (`config.sales.filingSearches`)? An Item 2.01 hit may be a purchase. | Item 2.01, loan sale, note sale |
+| D-S4 | Do whole-bank acquisitions after a failure belong in the buyer list beside ordinary mergers? | Yes, with the FDIC as seller |
+| D-S5 | Show the implied recovery to principals at all? It is not a price, and could anchor a bid. | Shown, labelled approximate, by group and per loan |
+| D-S6 | The FDIC request contact (`config.fdic.userAgent`): the firm's name and a monitored business address | Placeholder: the run refuses |
 
 ## 9. Definition of done (every story)
 
@@ -785,7 +1036,7 @@ Some sources report a dated change rather than a state: a filing, a notice, an o
 | Q10 | More than one entity using this? | Principals | E8-S1 | **Decided:** principals of one firm only; no partner workspaces or outside customers |
 | Q11 | Which contact name and email go in the SEC User-Agent? | Principals | E4 | E4 waits |
 | Q12 | Is the buy box confidential (data folder) or a rule file (committed)? | Principals | none | Committed |
-| Q13 | How is the weekly digest delivered to the principal? | Principals | E6-S5 | A file in the data folder |
+| Q13 | How is the weekly triage delivered to the principal? | Principals | E6-S5 | A file in the data folder, and the web app's This week page |
 | Q14 | Which Supabase organization and project? Is the existing connection the firm's? | Principals | E8 | E8 waits |
 | Q15 | Is the sending mailbox on Google Workspace, and can an administrator approve API access? | Principals | E9 | E9 waits |
 | Q16 | Channel and state rules, privacy notice, deletion process (research agenda G1) | Counsel | R2 sending | Nothing sends before counsel |
@@ -855,6 +1106,21 @@ Base `https://api.fdic.gov/banks`. Titles are FDIC's own, from `risview_properti
 | `NTRECONQ` | CONSTRUCTION RE LN NET-CHG-QTR | Quarterly CRE charge-offs |
 | `NTRENRSQ` | NONFARM NONRES RE LN NET-CHG-QTR | Quarterly CRE charge-offs |
 | `NTREMULQ` | MULTIFAMILY RE LN NET-CHG-QTR | Quarterly CRE charge-offs |
+
+**Added for the paper estimate (E14-S1, checked live November 14, 2026).** Titles are FDIC's own. Details and live results are in `docs/paper-estimate.md` 4.2 and the comments in `src/sources/fdic.mjs`.
+
+| Field | FDIC title | Used for |
+|---|---|---|
+| `P3RECONS` / `P9RECONS` | 30-89 / 90+ DAYS P/D-RE*CONSTRUCTION | Construction stages (now also in the paper profile) |
+| `P3RENROW`, `P3RENROT`, `P9RENROW`, `P9RENROT`, `NARENROW`, `NARENROT` | 30-89 / 90+ / NONACCRUAL, OWN-OCC and OTHER NONFARM NONRES | Stages of owner-occupied and investor nonfarm nonresidential |
+| `P3COMRE` | 30-89 DAYS P/D-COMMERCIAL RE | 30-89 stage of `LNCOMRE`, CRE not secured by real estate (see the field's comment) |
+| `LNRENR1`–`LNRENR4`, `LNRENR1N`–`LNRENR4N` | RE NONFARM NONRES-UNDER 100 / 100-250 / 250-1M / UNDER 1M, $ and NUM | Loan sizes. **Semiannual:** June and December only |
+| `LNRECNOT` / `LNRECNFM` | OTHER RE CONSTRUCTION & LAND LN / 1-4 FAM RE CONSTRUCTION LOANS | Construction split |
+| `UCCOMRES` / `UCCOMREU` | UNUSED COMMIT-SECURED / UNSECURED COM RE | Unused CRE commitments, portfolio level |
+| `RSCONS`, `RSMULT`, `RSNRES`, `RSOTHER`, `NARSNRES`, `RSLNLTOT` | RESTRUCTURED LN by type, NONACCR RESTRUCTURED NFNR LN, RESTRUCTURED LOANS - TOTAL | Restructured balances. **The split by type is semiannual in practice**; the total is quarterly |
+| `LNLSSALE`, `NALNSALE`, `P9LNSALE`, `P3LNSALE` | LOANS & LEASES HELD FOR RESALE; NONACCRUAL / 90+ / 30-89 P/D-L&L HELD FOR SALE | Seller evidence |
+| `NETGNSLN` / `NTGLLNQ` | NET G/L ON SALES OF LOANS (year to date) / QUARTERLY | Seller evidence, not CRE-specific |
+| `LNOT3LES`, `LNOT3T12`, `LNOT1T3`, `LNOT3T5`, `LNOT5T15`, `LNOTOV15` | ALL OTHER LNS & LS * 3 MO OR LESS ... OVER 15 YRS | Maturity and repricing proxy, not CRE-specific |
 
 ## Appendix C. Release 1 build contract
 

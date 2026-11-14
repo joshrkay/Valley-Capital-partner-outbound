@@ -4,6 +4,7 @@ import { loadRules } from '../../../lib/engine.mjs';
 import { period, num } from '../../../lib/format.mjs';
 import { NotAuthorized, Problem, Markdown } from '../../ui.jsx';
 import { setPersonAction, confirmRoleAction, queueResearchAction, queueDraftAction } from '../actions.js';
+import { Calls } from './calls.jsx';
 
 export default async function Account({ params }) {
   const ctx = await requirePrincipal();
@@ -66,6 +67,8 @@ export default async function Account({ params }) {
           </div>
         </>
       ) : null}
+
+      <Calls client={ctx.client} id={a.id} />
 
       <h2>Brief</h2>
       {brief ? <div className="panel"><Markdown text={brief} /></div> : <p className="muted">No brief yet.</p>}

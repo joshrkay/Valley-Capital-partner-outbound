@@ -34,6 +34,7 @@ test('a principal queues the FDIC pull and scoring; the worker runs both and the
   assert.ok(fake.docs.has('sources/fdic/institutions.json'));
   assert.ok(fake.docs.has('candidates/latest.json'));
   assert.ok(fake.candidates.size > 0, 'the projection was filled');
+  assert.ok([...fake.docs.keys()].some((p) => /^paper\/fdic-\d+\.json$/.test(p)), 'score.run writes the paper estimates (E14-S1)');
   const [fdicJob, scoreJob] = fake.jobs;
   assert.equal(fdicJob.result.outcome, 'ok');
   assert.equal(scoreJob.result.provisional, true);
@@ -125,4 +126,60 @@ test('the CMBS pull runs as a job: refused while the SEC contact is a placeholde
   assert.deepEqual([fake.jobs[1].result.cmbsTrusts, fake.jobs[1].result.loansKept], [1, 2]);
   assert.ok(fake.docs.has('sources/edgar/loans.json') && fake.docs.has('sources/edgar/servicers.json'));
   assert.doesNotMatch(JSON.stringify(fake.jobs[1].result), /Example Apartments|Example Special/, 'the job result holds counts, not names');
+});
+
+test('the weekly triage runs as a job after the FDIC pull and scoring: it writes only the day\'s triage and its snapshot, and its result holds counts', async () => {
+  const fake = fakePostgrest();
+  const monday = () => new Date('2026-11-16T14:00:00Z');
+  await pat(fake).enqueue('sources.fdic');
+  await pat(fake).enqueue('score.run', { draftBuybox: true });
+  await pat(fake).enqueue('triage.run');
+  const logged = [];
+  const done = await work({ client: worker(fake), rules, deps: deps({ now: monday }), log: (l) => logged.push(l) });
+  assert.deepEqual(done.map((d) => [d.kind, d.outcome]), [['sources.fdic', 'done'], ['score.run', 'done'], ['triage.run', 'done']]);
+  for (const p of ['triage/2026-11-16.json', 'triage/2026-11-16.md', 'triage/state.json']) assert.ok(fake.docs.has(p), p);
+  const job = fake.jobs[2];
+  assert.equal(job.result.firstRun, true);
+  assert.equal(typeof job.result.actNow, 'number');
+  assert.doesNotMatch(JSON.stringify(job.result), /Example|Bank|fdic:|servicer/, 'no institution name or key in a job result');
+  assert.equal(logged[2], `job ${job.id} triage.run done`);
+  // A week later it compares with that snapshot; past triages are not loaded.
+  await pat(fake).enqueue('triage.run', { since: '2026-11-20' });
+  await work({ client: worker(fake), rules, deps: deps({ now: () => new Date('2026-11-23T14:00:00Z') }) });
+  assert.equal(fake.jobs[3].status, 'done', JSON.stringify(fake.jobs[3].result));
+  assert.equal(fake.jobs[3].result.firstRun, false);
+  assert.equal(fake.docs.get('triage/2026-11-23.json').body.window.basis, 'since');
+  const loads = fake.calls.filter((c) => c.method === 'GET' && c.path === 'documents').map((c) => c.query.or ?? '').at(-1);
+  assert.doesNotMatch(loads, /triage\/2026-11-16/, 'the earlier triage is not loaded');
+  await pat(fake).enqueue('triage.run', { since: 'last week' });
+  await work({ client: worker(fake), rules, deps: deps({ now: () => new Date('2026-11-23T15:00:00Z') }) });
+  assert.match(fake.jobs[4].result.error, /--since needs a date/);
+});
+
+test('the FDIC loan-sale pull runs as a job: refused while the FDIC contact is a placeholder, then run and the sale ledger rebuilt', async () => {
+  const { fakeFdicWww } = await import('./fdicsales-fake.mjs');
+  const fake = fakePostgrest();
+  await pat(fake).enqueue('sources.fdicsales');
+  await work({ client: worker(fake), rules, deps: deps({ fetchImpl: fakeFdicWww().fetchImpl, sleep: async () => {} }) });
+  assert.equal(fake.jobs[0].status, 'failed');
+  assert.match(fake.jobs[0].result.error, /fdic\.userAgent is a placeholder/);
+
+  const filled = { ...rules, config: { ...rules.config, fdic: { ...rules.config.fdic, userAgent: 'Example Firm ops@example.test', minIntervalMs: 0 } } };
+  await pat(fake).enqueue('sources.fdicsales');
+  await work({ client: worker(fake), rules: filled, deps: deps({ fetchImpl: fakeFdicWww().fetchImpl, sleep: async () => {} }) });
+  assert.equal(fake.jobs[1].status, 'done', JSON.stringify(fake.jobs[1].result));
+  assert.deepEqual([fake.jobs[1].result.listed, fake.jobs[1].result.salesNew, fake.jobs[1].result.ledger.outcome, fake.jobs[1].result.ledger.byKind], [2, 2, 'ok', { fdic_sale_announced: 2 }]);
+  assert.ok(fake.docs.has('sources/fdic/sales.json') && fake.docs.has('sales/ledger.json'));
+  assert.doesNotMatch(JSON.stringify(fake.jobs[1].result), /Example Prairie|Example Loan Advisors|Pat Person/, 'the job result holds counts, not names');
+});
+
+test('the CMBS job rebuilds the sale ledger too', async () => {
+  const { fakeSec } = await import('./edgar-fake.mjs');
+  const fake = fakePostgrest();
+  const filled = { ...rules, config: { ...rules.config, sec: { ...rules.config.sec, userAgent: 'Example Firm ops@example.test', minIntervalMs: 0, knownSpecialServicers: ['Example Special Servicing LLC'] } } };
+  await pat(fake).enqueue('sources.edgar');
+  await work({ client: worker(fake), rules: filled, deps: deps({ fetchImpl: fakeSec().fetchImpl }) });
+  assert.equal(fake.jobs[0].status, 'done', JSON.stringify(fake.jobs[0].result));
+  assert.equal(fake.jobs[0].result.ledger.outcome, 'ok');
+  assert.ok(fake.docs.has('sales/ledger.json') && fake.docs.has('sources/edgar/dispositions.json'));
 });
