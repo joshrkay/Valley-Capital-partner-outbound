@@ -7,7 +7,7 @@ import { makeDir, put, account, config, touch, SENDER } from './kit.mjs';
 import { fakeFdic, METROS, TABLES } from './fdic-fake.mjs';
 import { loadRules } from '../src/rules.mjs';
 import { memoryBackend, snapshotFromDir, applyPlanToDir, withUnitOfWork, LOADS } from '../src/uow.mjs';
-import { mount, readJson, writeJson, readJsonl, listFiles, exists, appendJsonl, readText, writeText } from '../src/store.mjs';
+import { mount, readJson, writeJson, readJsonl, listFiles, exists, appendJsonl, readText, writeText, redactJsonl, REDACTED } from '../src/store.mjs';
 import { runFdic } from '../src/sources/fdic.mjs';
 import { runScoring } from '../src/score.mjs';
 import { promote, dismiss, snooze } from '../src/candidates.mjs';
@@ -141,4 +141,37 @@ test('a unit of work that changes nothing writes nothing', async () => {
   let flushed = 0;
   await withUnitOfWork({ load: async () => ({ docs: { 'accounts/a.json': { id: 'a' } } }), flush: async () => { flushed++; } }, LOADS.account, (dir) => readJson(join(dir, 'accounts', 'a.json')));
   assert.equal(flushed, 0);
+});
+
+// PRD E7-S3: the one exception to append-only logs. A deletion request blanks values in log lines that mention a person; the plan
+// carries each redaction (the line as loaded, and as it becomes) so the platform can apply it, and refuse anything that is not one.
+test('redacting a log line: the plan carries it; a line appended in the same unit of work is changed in place; on disk the file is rewritten', () => {
+  const b = memoryBackend({ logs: { 'touches.jsonl': [{ type: 'reply', note: 'Jordan Sample replied', date: '2026-11-11' }, { type: 'touch', date: '2026-11-10' }] }, loaded: ['touches.jsonl'] });
+  b.appendJsonl('touches.jsonl', { type: 'reply', note: 'Jordan again', date: '2026-11-12' });
+  const n = b.redactJsonl('touches.jsonl', (l) => (/Jordan/.test(l.note ?? '') ? { ...l, note: REDACTED } : l));
+  assert.equal(n, 2);
+  assert.deepEqual(b.readJsonl('touches.jsonl').map((l) => l.note ?? null), ['[removed]', null, '[removed]']);
+  const plan = b.plan();
+  assert.deepEqual(plan.redactions, [{ path: 'touches.jsonl', old: { type: 'reply', note: 'Jordan Sample replied', date: '2026-11-11' }, new: { type: 'reply', note: '[removed]', date: '2026-11-11' } }]);
+  assert.deepEqual(plan.lines.map((l) => l.line.note), ['[removed]'], 'the new line is appended already redacted');
+  assert.throws(() => memoryBackend({ loaded: ['accounts/'] }).redactJsonl('touches.jsonl', (l) => l), /was not loaded/);
+  assert.equal('redactions' in memoryBackend().plan(), false, 'a plan with no redaction keeps its old shape');
+
+  const dir = makeDir();
+  put(dir, 'touches.jsonl', `${JSON.stringify({ type: 'reply', note: 'Jordan Sample replied' })}\n${JSON.stringify({ type: 'touch' })}\n`);
+  assert.equal(redactJsonl(join(dir, 'touches.jsonl'), (l) => (l.note ? { ...l, note: REDACTED } : l)), 1);
+  assert.deepEqual(readJsonl(join(dir, 'touches.jsonl')), [{ type: 'reply', note: '[removed]' }, { type: 'touch' }]);
+  assert.equal(redactJsonl(join(dir, 'missing.jsonl'), (l) => l), 0);
+  applyPlanToDir({ docs: [], lines: [], redactions: [{ path: 'touches.jsonl', old: { type: 'touch' }, new: { type: 'touch' } }] }, dir);
+  const other = makeDir();
+  put(other, 'touches.jsonl', `${JSON.stringify({ type: 'reply', note: 'Jordan Sample replied', date: '2026-11-11' })}\n`);
+  applyPlanToDir(plan, other);
+  assert.deepEqual(readJsonl(join(other, 'touches.jsonl')), [{ type: 'reply', note: '[removed]', date: '2026-11-11' }, { type: 'reply', note: '[removed]', date: '2026-11-12' }]);
+});
+
+test('a unit of work whose only change is a redaction still flushes', async () => {
+  let flushed = null;
+  await withUnitOfWork({ load: async () => ({ logs: { 'touches.jsonl': [{ type: 'reply', note: 'x' }] } }), flush: async (p) => { flushed = p; } }, ['touches.jsonl'],
+    (dir) => redactJsonl(join(dir, 'touches.jsonl'), (l) => ({ ...l, note: REDACTED })));
+  assert.equal(flushed?.redactions?.length, 1);
 });

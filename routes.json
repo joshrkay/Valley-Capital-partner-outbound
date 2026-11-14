@@ -1,0 +1,35 @@
+{
+  "_note": "Routes to the decision-maker (PRD E22): how buildRoutes (src/routes.mjs) turns the lender side (the briefer's sourced findings, the sale ledger and county counsel records) and the firm's own network into a ranked list of ways in for one account. A rule file: NO prospect data and NO network data live here. Every value below is a PLACEHOLDER for a principal to review, not a researched figure. Routes are internal: for the firm's principals only. They are never sent, never given to a model, and a route relaxes no guard rule.",
+  "topics": {
+    "_note": "Which playbook questions feed a route, and as what. officer: the bank's own people (bank.people), matched as a board route; board: directors and senior officers; counsel: the bank's law firms; advisor: loan-sale advisors and brokers it has used; membership: associations and conference appearances (a forum route). A question not listed here is not read. PLACEHOLDERS.",
+    "bank.people": "officer",
+    "bank.board": "board",
+    "bank.counsel": "counsel",
+    "bank.advisors": "advisor",
+    "bank.memberships": "membership"
+  },
+  "order": {
+    "_note": "D-R1. The route types, warmest first. Routes are ranked by type in this order, then by tier (reported, observed, inferred), then current before not current, then by the amount of evidence, then by id. The direct route is always listed, wherever this order puts it. A PLACEHOLDER order.",
+    "types": ["board", "counsel", "advisor", "forum", "direct"]
+  },
+  "tiers": {
+    "_note": "How evidence becomes a tier (docs/paper-estimate.md, section 3). finding: a finding's source tier gives the route tier (a government record, a regulator or the bank itself reports it; press is observed; anything else is inferred). supportNotYes: the cap when the support check did not say yes. nameOnly: the cap when a person matches on name alone, with no shared organization (D-R5). colleague: the cap when the bridge only works at the same firm as the target, or the network knows the target's firm and not the target. PLACEHOLDERS.",
+    "finding": { "government": "reported", "regulator": "reported", "company": "reported", "press": "observed", "other": "inferred" },
+    "supportNotYes": "inferred",
+    "nameOnly": "inferred",
+    "colleague": "inferred"
+  },
+  "matching": {
+    "_note": "personNameOnly: list a person matched on name alone, as inferred and labelled 'same name only', or drop them (D-R5). colleagues: also list a network person who works at a lender-side person's firm, and a network firm that is a lender-side person's firm. PLACEHOLDERS.",
+    "personNameOnly": true,
+    "colleagues": true
+  },
+  "consent": {
+    "_note": "D-R2. required: true holds every route through a network person who has not agreed to be asked for introductions (introConsent yes); false lists it with the consent state, and the checklist says to ask them first. A person who said no is never a route, whatever this says. A PLACEHOLDER.",
+    "required": false
+  },
+  "currency": {
+    "_note": "D-R3. How long evidence stays current, in days, by route type: from the page's own date, or from the research run's date when the page is undated. A route whose newest evidence is older is listed as not current, after the current ones of its type and tier. PLACEHOLDERS.",
+    "maxAgeDays": { "direct": 365, "board": 365, "counsel": 730, "advisor": 730, "forum": 365 }
+  }
+}

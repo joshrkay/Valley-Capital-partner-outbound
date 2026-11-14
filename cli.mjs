@@ -22,12 +22,16 @@ import { runDrafter, approveDraft } from './src/draft.mjs';
 import { makeClient } from './src/model.mjs';
 import { writeTruthTemplate, reviewList, markFinding, scorecard, passPilot, researchGate } from './src/pilot.mjs';
 import { platformClient } from './src/platform/client.mjs';
-import { setPerson, confirmRole } from './src/accounts.mjs';
+import { setPerson, confirmRole, setEmail, setPhone, setAddress, addDomain, verifyEmail, contactStatus, sourceLabel, FIELDS, ATTEST_METHODS } from './src/accounts.mjs';
+import { forgetInFolder } from './src/forget.mjs';
+import { runVendorTest, passVendor, listVendors } from './src/vendors.mjs';
 import { work, JOB_KINDS } from './src/platform/worker.mjs';
 import { push, pull } from './src/platform/move.mjs';
 import { smoke } from './src/platform/smoke.mjs';
 import { runCallPrep, saveNotes, runCallExtract, buildExtractPrompt, confirmInFolder, rejectProposal, listCalls, renderProposal, needDate, MAX_NOTES } from './src/calls.mjs';
 import { runOutcomesReport, renderOutcomesReport } from './src/outcomes.mjs';
+import { addPerson, addFirm, addMembership, listNetwork } from './src/network.mjs';
+import { buildRoutes, readRoutes, chooseRoute, removeNetworkEntry } from './src/routes.mjs';
 import { readFileSync } from 'node:fs';
 
 const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE this repository first.
@@ -37,8 +41,36 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
 
   outbound research run --account ID [--dry-run]  Agent 2: deep web research and a verified brief (costs money; --dry-run shows the request)
   outbound research show --account ID             print the brief
-  outbound account set-person --account ID --name N [--title T] --by NAME   a principal names the person (e.g. from an institution brief's candidates)
+  outbound account set-person --account ID --name N [--title T] --by NAME SOURCE   a principal names the person, usually one of an institution
+                                                  brief's candidates (--finding F3); a new person starts with an unconfirmed role and no address
   outbound account confirm-role --account ID --by NAME    a principal confirms the named person's role after reading the brief
+
+  Contact details (PRD E7-S3). Every field records where it came from. SOURCE is one of:
+    --finding F3                                  a finding in the account's brief (its page and date come from the brief)
+    --url URL                                     a page on the bank's own site
+    --source correspondence|principal_known [--seen YYYY-MM-DD]     they wrote to us; or a principal knows it first-hand
+    --source vendor --vendor NAME                 a contact-data vendor, only after a recorded pass (contacts vendor-pass)
+  outbound account contact --account ID           each field with its source, the address's state, the domains
+  outbound account set-email --account ID --email E --by NAME SOURCE      a new address starts unverified
+  outbound account set-phone --account ID --phone P --type landline|mobile|unknown [--timezone TZ] --by NAME SOURCE
+  outbound account set-address --account ID --address A --by NAME SOURCE  the mailing address, for letters
+  outbound account add-domain --account ID --domain D --by NAME SOURCE    a principal confirms one of the institution's email domains
+  outbound account verify-email --account ID --by NAME --method institution_site --url URL | correspondence [--seen D] | principal_known
+                                                  | vendor --vendor NAME     every check must pass (syntax, a source, a business
+                                                  address, a confirmed domain, an MX record in DNS, no suppression) and you record
+                                                  how you know it. No mail server is contacted. It lasts contacts.json reverifyDays
+  outbound account forget-person --account ID --by NAME --reason TEXT --confirm "ACCOUNT NAME" [--name N --email E]
+                                                  a deletion request: removes the person from every record in the data folder (the
+                                                  routes and the firm's network included: a routes file that names them is rebuilt), keeps
+                                                  a hashed suppression entry so they are never contacted or named again, and logs counts
+                                                  only. --name/--email: a person no longer on the account
+
+  Contact-data vendors (PRD E7-S2). No vendor API and no key: a principal exports the vendor's results to a file.
+  outbound contacts vendor-test --vendor NAME --results FILE [--by NAME]   compare a vendor's CSV or JSON export with contacts/known.json
+                                                  (people we know: name, institution, email, title, asOf); writes
+                                                  contacts/vendor-tests/<vendor>-<date>.json and .md: refs, counts and rates only
+  outbound contacts vendor-pass --vendor NAME --by NAME   record a pass, only if the latest test meets every threshold in contacts.json
+  outbound contacts vendors                       each vendor's tests and pass
 
   outbound draft run --account ID --channel email|letter|linkedin_note|call [--step N] [--sender ID] [--date YYYY-MM-DD] [--ack-risk] [--dry-run]
   outbound draft approve --account ID --channel C --step N --by NAME
@@ -62,7 +94,8 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
                                                   EDGAR full-text search, for every bank filer a principal confirmed, plus a discovery
                                                   search by state and bank SIC code (needs config.sec.userAgent filled in)
   outbound sources run fdicsales                  FDIC loan-sale announcements from www.fdic.gov (PRD E16-S2): sale id, dates, receiverships,
-                                                  pools, advisor; the buyer is unknown. Gentle: robots.txt and a few requests a minute
+                                                  pools, the FDIC's own loan-sale advisor (a route into FDIC sales, never into a bank);
+                                                  the buyer is unknown. Gentle: robots.txt and a few requests a minute
                                                   (needs config.fdic.userAgent filled in). Then rebuilds the sale ledger, as the edgar run does
   outbound sources status                         the last run of each source, and the latest FDIC quarter seen
   outbound sources verify [fdic|edgar|filings|fdicsales] [--sample N]   check the stored data against the live sources (read-only): fresh, complete,
@@ -130,6 +163,21 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound outcomes report [--since YYYY-MM-DD]   confirmed outcomes by signal type, tier and lead time (no model; never changes
                                                   weights), written to reports/outcomes-DATE.json
 
+  The firm's network (PRD E22-S1): the principals' own relationships. Private: the data folder only, never a model, never the repo.
+  outbound network add-person --name N --known-by PRINCIPAL [--organization O] [--title T] [--relationship R]
+                              [--consent yes|no|unknown] [--alias A]... --by NAME     someone a principal knows (no email or phone)
+  outbound network add-firm --name N --known-by PRINCIPAL [--kind law|advisor|broker|other] [--relationship R] [--alias A]... --by NAME
+  outbound network add-membership --association A --principal PRINCIPAL [--role R] [--alias A]... --by NAME
+  outbound network list --by NAME [--json]       every entry, and how many chosen routes use each (the listing is audited)
+  outbound network remove --id ID --by NAME      removes the entry, and every route and choice that used it, from every routes file
+
+  Routes to the decision-maker (PRD E22): who decides, and the best way in. Code only, no model. Nothing is drafted or sent.
+  outbound routes build --account ID             match the research (board, counsel, advisors, memberships, people), the sale ledger
+                                                  and the network; rank by routes.json (placeholders); write routes/ID.json and .md
+  outbound routes show --account ID [--json]     print the routes: the direct route's status, each warm route's bridge and evidence
+  outbound routes choose --account ID --route RID --by NAME     record the choice and print its checklist: who to ask, what to
+                                                  cite. A route relaxes no guard rule; it is refused after an opt-out or a suppression
+
   Platform (PRD E12): needs SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (the worker's key; never put it in the web app).
   outbound platform smoke                         check a new project with SUPABASE_URL and SUPABASE_ANON_KEY (the PUBLIC key only):
                                                   sign-ups off, every table and function present and refusing the public key
@@ -176,6 +224,9 @@ async function runVerify(dir, which, rules, flags) {
 }
 
 const need = (flags, k) => { if (!flags[k] || flags[k] === true) throw new Error(`--${k} is required.`); return flags[k]; };
+const opt = (flags, k) => (flags[k] && flags[k] !== true ? String(flags[k]) : undefined);
+// Where a contact detail came from (PRD E7-S3), from --finding, --url, --source, --vendor and --seen.
+const sourceFrom = (flags) => ({ kind: opt(flags, 'source'), findingId: opt(flags, 'finding'), url: opt(flags, 'url'), vendor: opt(flags, 'vendor'), seenOn: opt(flags, 'seen') });
 
 async function main() {
   const { pos, flags } = parse(process.argv.slice(2));
@@ -222,7 +273,7 @@ async function main() {
   if (cmd === 'init') {
     if (!exists(join(dir, 'senders.json'))) writeJson(join(dir, 'senders.json'), { _note: 'Fill every field. A sender with a [CONFIRM] placeholder blocks all sending.', senders: [{ id: 'principal-1', name: '[CONFIRM: name]', title: '[CONFIRM: title]', phone: '[CONFIRM: phone]', address: '[CONFIRM: street address]', mailbox: '[CONFIRM: mailbox]' }] });
     if (!exists(join(dir, 'suppression.json'))) writeJson(join(dir, 'suppression.json'), { entries: [] });
-    if (!exists(join(dir, 'accounts', 'example-bank.json'))) writeJson(join(dir, 'accounts', 'example-bank.json'), { id: 'example-bank', name: 'Example Community Bank', aliases: [], type: 'bank', sectors: ['hospitality'], tier: 'A', person: { name: 'Jordan Sample', title: 'Chief Credit Officer', email: '', phone: '', phoneType: '', timezone: 'America/Chicago', mailingAddress: '' }, contact: { emailStatus: 'unverified', roleConfirmed: false, provenance: [] }, notes: 'INVENTED EXAMPLE. Replace with a real account chosen by a principal.', knownFacts: [] });
+    if (!exists(join(dir, 'accounts', 'example-bank.json'))) writeJson(join(dir, 'accounts', 'example-bank.json'), { id: 'example-bank', name: 'Example Community Bank', aliases: [], type: 'bank', sectors: ['hospitality'], tier: 'A', person: { name: 'Jordan Sample', title: 'Chief Credit Officer', email: '', phone: '', phoneType: '', timezone: 'America/Chicago', mailingAddress: '' }, contact: { emailStatus: 'unverified', roleConfirmed: false, provenance: [], verification: null }, domains: [], notes: 'INVENTED EXAMPLE. Replace with a real account chosen by a principal. Set each contact detail with its source: outbound account set-person, set-email, add-domain, verify-email.', knownFacts: [] });
     return out(`Data folder ready: ${dir}\nNext: fill senders.json, add accounts/<id>.json for the accounts a principal chose, then: outbound status`);
   }
 
@@ -247,8 +298,51 @@ async function main() {
   }
 
   if (cmd === 'account' && sub === 'set-person') {   // a principal picks the person, usually from an institution brief's candidates
-    const a = setPerson({ dir, id: need(flags, 'account'), name: need(flags, 'name'), title: flags.title, by: need(flags, 'by') });
-    return out(`Person set for ${a.name}: ${a.person.name}. Their role is unconfirmed. Read the sources in the brief, or run the briefer again for person research, then: outbound account confirm-role --account ${a.id} --by NAME`);
+    const a = setPerson({ dir, id: need(flags, 'account'), name: need(flags, 'name'), title: flags.title, by: need(flags, 'by'), source: sourceFrom(flags) });
+    return out(`Person set for ${a.name}: ${a.person.name} (source: ${sourceLabel(a.contact.provenance.find((p) => p.field === 'name'))}). Their role is unconfirmed. Read the sources in the brief, or run the briefer again for person research, then: outbound account confirm-role --account ${a.id} --by NAME`);
+  }
+
+  // Contact details (PRD E7-S3): each with its source; an address verified by checks and a principal's word; a deletion request.
+  if (cmd === 'account' && sub === 'contact') {
+    const a = loadAccount(dir, need(flags, 'account'));
+    const st = contactStatus(a, { config: rules.config });
+    const label = { name: 'Name', title: 'Title', email: 'Email', phone: 'Phone', mailingAddress: 'Mailing address' };
+    const state = { none: 'none', unverified: 'UNVERIFIED', verified: 'VERIFIED', expired: 'EXPIRED: verify it again', other_address: 'UNVERIFIED: the verification on record is for another address', unsourced: 'UNSOURCED: verified, but the address has no source of its own, so the guard refuses it' }[st.email.state];
+    const v = st.email.verification;
+    return out([
+      `${a.name} (${a.id}). Role: ${st.role.confirmed ? `confirmed by ${st.role.by}` : 'unconfirmed'}.`,
+      ...FIELDS.map((f) => `  ${label[f].padEnd(16)} ${String(a.person?.[f] || '-').padEnd(32)} ${a.person?.[f] ? sourceLabel(st.fields[f]) : ''}`),
+      `  Address state:   ${state}${st.email.state === 'verified' ? ` (${v.method}, by ${v.by} on ${v.verifiedOn}; verify again by ${st.email.reverifyBy})` : st.email.reason && st.email.state !== 'none' ? `. ${st.email.reason}` : ''}`,
+      `Domains: ${st.domains.length ? st.domains.map((d) => `${d.domain} (${sourceLabel(d)})`).join('; ') : 'none confirmed yet (outbound account add-domain)'}`,
+      ...(st.unsourced.length ? [`No source recorded for: ${st.unsourced.join(', ')}. Set each again with its source.`] : []),
+      ...(st.forgotten.length ? [`A person was removed from this account on a deletion request: ${st.forgotten.map((x) => `${String(x.at).slice(0, 10)} by ${x.by}`).join('; ')}.`] : []),
+    ].join('\n'));
+  }
+  if (cmd === 'account' && sub === 'set-email') {
+    const a = setEmail({ dir, id: need(flags, 'account'), email: need(flags, 'email'), by: need(flags, 'by'), source: sourceFrom(flags), config: rules.config });
+    return out(`Address set for ${a.person.name} at ${a.name}. It is UNVERIFIED until a principal verifies it: outbound account verify-email --account ${a.id} --by NAME --method ${Object.keys(ATTEST_METHODS).join('|')}`);
+  }
+  if (cmd === 'account' && sub === 'set-phone') {
+    const a = setPhone({ dir, id: need(flags, 'account'), phone: need(flags, 'phone'), phoneType: opt(flags, 'type'), timezone: opt(flags, 'timezone'), by: need(flags, 'by'), source: sourceFrom(flags) });
+    return out(`Phone set for ${a.person.name} at ${a.name} (${a.person.phoneType}${a.person.timezone ? `, ${a.person.timezone}` : ''}).${a.person.phoneType === 'landline' ? '' : ' Only business landlines are called.'}`);
+  }
+  if (cmd === 'account' && sub === 'set-address') {
+    const a = setAddress({ dir, id: need(flags, 'account'), address: need(flags, 'address'), by: need(flags, 'by'), source: sourceFrom(flags) });
+    return out(`Mailing address set for ${a.person.name} at ${a.name}.`);
+  }
+  if (cmd === 'account' && sub === 'add-domain') {
+    const r = addDomain({ dir, id: need(flags, 'account'), domain: need(flags, 'domain'), by: need(flags, 'by'), source: sourceFrom(flags), config: rules.config });
+    return out(`Domain confirmed for ${r.account.name}: ${r.account.domains.at(-1).domain}.${r.sharedWith.length ? `\nSHARED: ${r.sharedWith.join(', ')} already hold this domain. A reply from it cannot say which institution it came from; a principal reviews it (PRD E9-S3).` : ''}`);
+  }
+  if (cmd === 'account' && sub === 'verify-email') {
+    const r = await verifyEmail({ dir, id: need(flags, 'account'), by: need(flags, 'by'), method: opt(flags, 'method'), url: opt(flags, 'url'), vendor: opt(flags, 'vendor'), seen: opt(flags, 'seen'), config: rules.config });
+    const lines = r.checks.map((c) => `${c.ok ? (c.skipped ? 'SKIP' : 'PASS') : 'FAIL'}  ${c.id}: ${c.message}`).join('\n');
+    if (!r.ok) { process.exitCode = 1; return out(`NOT VERIFIED. The address stays unverified, and the guard refuses any email to it.\n${lines}`); }
+    return out(`VERIFIED for ${r.account.person.name} at ${r.account.name}, by ${r.account.contact.verification.by} (${r.account.contact.verification.method}). It lasts ${rules.config.contacts?.reverifyDays} days.\n${lines}`);
+  }
+  if (cmd === 'account' && sub === 'forget-person') {   // a deletion request (PRD E7-S3); the output names no one
+    const r = await forgetInFolder({ dir, id: need(flags, 'account'), by: need(flags, 'by'), reason: need(flags, 'reason'), confirm: opt(flags, 'confirm'), name: opt(flags, 'name'), email: opt(flags, 'email'), rules });
+    return out(`Removed from account ${r.accountId} and every record that held them. A hashed suppression entry keeps them from being contacted or named again.\nFiles or lines changed, by store: ${Object.entries(r.counts).map(([k, n]) => `${k} ${n}`).join(', ')}.\nCopies outside the data folder (a vendor export you saved, your mailbox, notes on paper) are yours to remove.`);
   }
 
   if (cmd === 'account' && sub === 'confirm-role') {
@@ -476,9 +570,58 @@ async function main() {
     }
   }
 
+  if (cmd === 'network') {   // PRD E22-S1: names and relationships only; audit lines carry ids
+    const opt = (k) => (flags[k] && flags[k] !== true ? flags[k] : undefined);
+    if (sub === 'add-person') { const p = addPerson({ dir, name: need(flags, 'name'), organization: opt('organization'), title: opt('title'), relationship: opt('relationship'), knownBy: need(flags, 'known-by'), introConsent: opt('consent'), aliases: flags.alias, by: need(flags, 'by') }); return out(`Added ${p.id}: ${p.name}${p.organization ? ` of ${p.organization}` : ''}, known to ${p.knownBy.join(', ')}. Agreed to be asked for introductions: ${p.introConsent}.`); }
+    if (sub === 'add-firm') { const f = addFirm({ dir, name: need(flags, 'name'), kind: opt('kind'), relationship: opt('relationship'), knownBy: need(flags, 'known-by'), aliases: flags.alias, by: need(flags, 'by') }); return out(`Added ${f.id}: ${f.name} (${f.kind}), known to ${f.knownBy.join(', ')}.`); }
+    if (sub === 'add-membership') { const m = addMembership({ dir, association: need(flags, 'association'), principal: need(flags, 'principal'), role: opt('role'), aliases: flags.alias, by: need(flags, 'by') }); return out(`Added ${m.id}: ${m.principal} is a ${m.role} of ${m.association}.`); }
+    if (sub === 'list') {
+      const l = listNetwork({ dir, by: need(flags, 'by') });
+      if (flags.json) return out(l);
+      const used = (id) => (l.uses[id] ? `  (bridge of ${l.uses[id]} chosen route${l.uses[id] === 1 ? '' : 's'})` : '');
+      return out([`People (${l.people.length}):`, ...l.people.map((p) => `  ${p.id}  ${p.name}${p.organization ? `, ${p.organization}` : ''}${p.title ? `, ${p.title}` : ''}  known to ${p.knownBy.join(', ')}  consent ${p.introConsent}${p.relationship ? `  (${p.relationship})` : ''}${used(p.id)}`),
+        `Firms (${l.firms.length}):`, ...l.firms.map((f) => `  ${f.id}  ${f.name} (${f.kind})  known to ${f.knownBy.join(', ')}${f.relationship ? `  (${f.relationship})` : ''}${used(f.id)}`),
+        `Memberships (${l.memberships.length}):`, ...l.memberships.map((m) => `  ${m.id}  ${m.association}${m.aliases.length ? ` (${m.aliases.join(', ')})` : ''}: ${m.principal}, ${m.role}${used(m.id)}`)].join('\n'));
+    }
+    if (sub === 'remove') { const r = removeNetworkEntry({ dir, id: need(flags, 'id'), by: need(flags, 'by') }); return out(`Removed ${r.id} (${r.kind}). It was removed from ${r.routeFiles} routes file(s), with ${r.routesRemoved} route(s) that used it.`); }
+  }
+
+  if (cmd === 'routes') {   // PRD E22: code only; nothing is drafted or sent
+    const id = need(flags, 'account');
+    if (sub === 'build') {
+      const r = buildRoutes({ dir, id, rules });
+      const types = r.routes.map((x) => x.type);
+      return out(`Routes for ${r.name}: ${r.routes.length} routes (${types.join(', ')}), ${r.held.length} held.${r.guard.hardStops.length ? ` STOP: ${r.guard.hardStops.map((h) => h.code).join(', ')}.` : ''}\nWritten: ${join(dir, 'routes', `${id}.md`)}. Read it with: outbound routes show --account ${id}`);
+    }
+    if (sub === 'show') { const r = readRoutes({ dir, id }); if (!r) return out(`No routes yet for ${id}. Run: outbound routes build --account ${id}`); return out(flags.json ? r.record : r.markdown); }
+    if (sub === 'choose') {
+      const { route } = chooseRoute({ dir, id, routeId: need(flags, 'route'), by: need(flags, 'by'), rules });
+      const md = readRoutes({ dir, id }).markdown;
+      return out(`Chosen: ${route.type} route ${route.id}. Nothing is drafted or sent; the checklist is below and in routes/${id}.md.\n\n${md.slice(md.indexOf('## Chosen route'))}`);
+    }
+  }
+
   if (cmd === 'outcomes' && sub === 'report') {
     const { report, path } = runOutcomesReport({ dir, config: rules.config, since: flags.since && flags.since !== true ? flags.since : null });
     return out(`${renderOutcomesReport(report)}\n\nWritten: ${path}`);
+  }
+
+  if (cmd === 'contacts') {   // the vendor test harness (PRD E7-S2); nothing here calls a vendor
+    const contacts = rules.contacts;
+    if (sub === 'vendor-test') {
+      const file = need(flags, 'results');
+      const { report, paths } = runVendorTest({ dir, vendor: need(flags, 'vendor'), text: readFileSync(file, 'utf8'), fileName: file, contacts, by: opt(flags, 'by') });
+      return out(`${readText(paths.md)}\nWritten: ${paths.json} and ${paths.md}.${report.meets.ok ? `\nIt meets every threshold. A principal may record a pass: outbound contacts vendor-pass --vendor "${report.vendorName}" --by NAME` : ''}`);
+    }
+    if (sub === 'vendor-pass') {
+      const r = passVendor({ dir, vendor: need(flags, 'vendor'), by: need(flags, 'by'), contacts });
+      if (!r.ok) { process.exitCode = 1; return out(`No pass recorded. The latest test (${r.report}) does not meet the thresholds in contacts.json:\n${r.failures.map((f) => `- ${f}`).join('\n')}`); }
+      return out(`Pass recorded for ${r.pass.vendor} by ${r.pass.by}, on the test of ${r.pass.reportDate}. It may now be a source (--source vendor --vendor "${r.pass.vendor}") and a way of knowing an address (--method vendor).`);
+    }
+    if (sub === 'vendors') {
+      const l = listVendors({ dir });
+      return out(l.length ? l.map((v) => `${v.vendor.padEnd(24)} ${v.tests} test(s), latest ${v.latest ?? '-'}; ${v.passed ? `PASSED (${v.passedBy}, ${String(v.passedAt).slice(0, 10)})` : 'no pass'}`).join('\n') : 'No vendor tested yet. Write contacts/known.json, then: outbound contacts vendor-test --vendor NAME --results FILE');
+    }
   }
 
   if (cmd === 'suppress') {

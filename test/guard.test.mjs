@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { symlinkSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { checkTouch, recordTouch, recordEvent, addSuppression, loadContext, dueList, touchFromAccount } from '../src/guard.mjs';
+import { checkTouch, recordTouch, recordEvent, addSuppression, loadContext, dueList, touchFromAccount, emailHashes, personHashes, nameHashes } from '../src/guard.mjs';
 import { dataDir, insideRepo, REPO } from '../src/paths.mjs';
 import { readJson, readJsonl } from '../src/store.mjs';
 import { makeDir, put, config, account, ctxWith, touch, sent, SENDER } from './kit.mjs';
@@ -62,6 +62,7 @@ test('contact quality: personal domains, role addresses, unverified or bounced e
   blocked(checkTouch(em('not-an-address'), ctx), 'EMAIL_MISSING');
   blocked(checkTouch(em('jordan@acmebank.test', { contact: { ...A.contact, emailStatus: 'unverified' } }), ctx), 'EMAIL_UNVERIFIED');
   blocked(checkTouch(em('jordan@acmebank.test', { contact: { ...A.contact, provenance: [] } }), ctx), 'NO_PROVENANCE');
+  assert.deepEqual(codes(checkTouch(em('jordan@acmebank.test'), ctx)), [], 'the kit account is complete');
   blocked(checkTouch(em('jordan@acmebank.test', { contact: { ...A.contact, roleConfirmed: false } }), ctx), 'ROLE_UNCONFIRMED');
   blocked(checkTouch(em('jordan@acmebank.test'), ctxWith({ touches: [sent(A.id, 1, 'letter', '2026-11-10'), { type: 'bounce', accountId: A.id, date: '2026-11-11' }] })), 'EMAIL_BOUNCED');
 });
@@ -183,4 +184,76 @@ test('recorded touches and events carry the institution, so the rules above can 
   recordTouch(dir, touch(A, { date: '2026-11-16' }), ctx);
   recordEvent(dir, { accountId: A.id, institution: A.name, type: 'reply', date: '2026-11-18' }, ctx);
   assert.deepEqual(readJsonl(join(dir, 'touches.jsonl')).map((l) => l.institution), [A.name, A.name]);
+});
+
+// ---- PRD E7-S3: verified, sourced addresses ------------------------------------------------------------------------------------
+const emailTouch = (contact, extra = {}) => touch(A, { channel: 'email', step: 2, contact: { ...A.contact, ...contact }, ...extra });
+const afterLetter = () => ctxWith({ touches: [sent(A.id, 1, 'letter', '2026-11-10')] });
+const message = (r, code) => r.errors.find((e) => e.code === code)?.message ?? '';
+
+test('an expired verification is not verified: it lasts contacts.reverifyDays from the day it was made', () => {
+  const days = config().contacts.reverifyDays;
+  assert.ok(Number.isInteger(days) && days > 0, 'contacts.json sets reverifyDays');
+  const on = (date) => checkTouch(emailTouch({ verification: { ...A.contact.verification, verifiedOn: '2026-01-02' } }, { date }), afterLetter());
+  const last = new Date(Date.parse('2026-01-02T00:00:00Z') + days * 86400000).toISOString().slice(0, 10);
+  const first = new Date(Date.parse('2026-01-02T00:00:00Z') + (days + 1) * 86400000).toISOString().slice(0, 10);
+  const cfgShort = config(); cfgShort.contacts.reverifyDays = 30;
+  const r = checkTouch(emailTouch({ verification: { ...A.contact.verification, verifiedOn: '2026-10-01' } }, { date: '2026-11-16' }), ctxWith({ cfg: cfgShort, touches: [sent(A.id, 1, 'letter', '2026-11-10')] }));
+  blocked(r, 'EMAIL_UNVERIFIED');
+  assert.match(message(r, 'EMAIL_UNVERIFIED'), /verified on 2026-10-01.*30 days.*expired on 2026-10-31/);
+  assert.ok(!codes(on(last)).includes('EMAIL_UNVERIFIED'), `still verified on day ${days} (${last})`);
+  blocked(on(first), 'EMAIL_UNVERIFIED');
+});
+
+test('a verification made for a different address than the current one is not verified', () => {
+  const r = checkTouch(emailTouch({ verification: { ...A.contact.verification, email: 'jordan.old@acmebank.test' } }), afterLetter());
+  blocked(r, 'EMAIL_UNVERIFIED');
+  assert.match(message(r, 'EMAIL_UNVERIFIED'), /a different address/);
+  assert.ok(!message(r, 'EMAIL_UNVERIFIED').includes('jordan'), 'the message names no address');
+  blocked(checkTouch(emailTouch({ verification: null }), afterLetter()), 'EMAIL_UNVERIFIED');   // "verified" with no record of who, how or when
+  const caseOnly = checkTouch(emailTouch({ verification: { ...A.contact.verification, email: 'Jordan@AcmeBank.TEST' } }), afterLetter());
+  assert.ok(!codes(caseOnly).includes('EMAIL_UNVERIFIED'), 'the same address in other letters is the same address');
+});
+
+test('an email with no recorded source is refused (EMAIL_UNSOURCED), even when other fields are sourced', () => {
+  const others = A.contact.provenance.filter((p) => p.field !== 'email');
+  const r = checkTouch(emailTouch({ provenance: others }), afterLetter());
+  blocked(r, 'EMAIL_UNSOURCED');
+  assert.ok(!codes(r).includes('NO_PROVENANCE'), 'the name is still sourced');
+  blocked(checkTouch(emailTouch({ provenance: [...others, { field: 'email', value: 'jordan.old@acmebank.test', kind: 'institution_site', url: 'https://acmebank.test/x' }] }), afterLetter()), 'EMAIL_UNSOURCED');   // a source for another address
+  blocked(checkTouch(emailTouch({ provenance: [{ source: 'bank leadership page', date: '2026-11-01' }] }), afterLetter()), 'EMAIL_UNSOURCED');   // the old shape names no field
+  assert.ok(!codes(checkTouch(touch(A, { contact: { ...A.contact, provenance: others } }), ctxWith())).includes('EMAIL_UNSOURCED'), 'a letter needs no email source');
+});
+
+test('with no re-verification period set, no address counts as verified (fail closed)', () => {
+  const cfg = config(); delete cfg.contacts;
+  const r = checkTouch(emailTouch({}), ctxWith({ cfg, touches: [sent(A.id, 1, 'letter', '2026-11-10')] }));
+  blocked(r, 'EMAIL_UNVERIFIED');
+  assert.match(message(r, 'EMAIL_UNVERIFIED'), /reverifyDays/);
+});
+
+test('E7-S1: no touch on any channel until a person is named', () => {
+  for (const [channel, step, date, prior] of [['letter', 1, '2026-11-16', []], ['email', 2, '2026-11-16', [sent(A.id, 1, 'letter', '2026-11-10')]], ['linkedin_note', 3, '2026-11-20', [sent(A.id, 1, 'letter', '2026-11-10'), sent(A.id, 2, 'email', '2026-11-13')]]]) {
+    blocked(checkTouch(touch(A, { channel, step, date, person: { ...A.person, name: '  ' } }), ctxWith({ touches: prior })), 'PERSON_MISSING');
+  }
+});
+
+test('hashed suppression entries match like plain ones: the address, and the person at that institution (by name, alias or key)', () => {
+  const sup = (e) => ctxWith({ suppression: [e], touches: [sent(A.id, 1, 'letter', '2026-11-10')] });
+  const em = touch(A, { channel: 'email', step: 2 });
+  blocked(checkTouch(em, sup({ type: 'email', hashes: emailHashes(' JORDAN@acmebank.test '), reason: 'deletion_request' })), 'SUPPRESSED_EMAIL');
+  blocked(checkTouch(touch(A), sup({ type: 'person', hashes: personHashes('Jordan  Sample', ['Acme Community Bank']), reason: 'deletion_request' })), 'SUPPRESSED_PERSON');
+  blocked(checkTouch(touch(A), sup({ type: 'person', hashes: personHashes('jordan sample', ['Acme Bancorp']), reason: 'deletion_request' })), 'SUPPRESSED_PERSON');   // an alias
+  blocked(checkTouch(touch(A, { institutionKey: 'fdic:99999' }), sup({ type: 'person', hashes: personHashes('Jordan Sample', ['fdic:99999']), reason: 'deletion_request' })), 'SUPPRESSED_PERSON');
+  blocked(checkTouch(touch(A), sup({ type: 'person', hashes: nameHashes('Jordan Sample'), reason: 'opt_out' })), 'SUPPRESSED_PERSON');   // a plain name entry, hashed: any institution
+  const suppressed = (r) => codes(r).filter((c) => c.startsWith('SUPPRESSED_'));
+  assert.deepEqual(suppressed(checkTouch(touch(A), sup({ type: 'person', hashes: personHashes('Jordan Sample', ['Other Bank']), reason: 'deletion_request' }))), [], 'the same name at another bank is another person');
+  assert.deepEqual(codes(checkTouch(em, sup({ type: 'email', hashes: emailHashes('someone@acmebank.test'), reason: 'x' }))), []);
+  const h = emailHashes('jordan@acmebank.test')[0];
+  assert.match(h, /^sha256:[0-9a-f]{64}$/);
+  assert.ok(!h.includes('jordan'));
+  assert.equal(touchFromAccount({ ...A, institutionKey: 'fdic:99999' }, { channel: 'letter', step: 1 }).institutionKey, 'fdic:99999');
+  const dir = makeDir();
+  assert.throws(() => addSuppression(dir, { type: 'person', reason: 'x' }, null), /needs a value/);
+  assert.equal(addSuppression(dir, { type: 'email', hashes: emailHashes('jordan@acmebank.test'), reason: 'deletion_request' }, null).type, 'email');
 });

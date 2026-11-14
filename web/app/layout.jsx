@@ -20,6 +20,7 @@ export default function RootLayout({ children }) {
               <a href="/servicers">Servicers</a>
               <a href="/sales">Sales</a>
               <a href="/accounts">Accounts</a>
+              <a href="/network">Network</a>
               <a href="/drafts">Approvals</a>
               <a href="/pilot">Pilot</a>
               <a href="/status">Status</a>

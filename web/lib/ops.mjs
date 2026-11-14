@@ -88,15 +88,77 @@ export async function accountDetail(client, id) {
   return result;
 }
 
-// The engine's own functions (src/accounts.mjs), the same ones `outbound account set-person` and `confirm-role` call.
-export async function setPerson(client, { id, name, title, by }) {
-  const [{ LOADS }, accounts] = await Promise.all([engine('src/uow.mjs'), engine('src/accounts.mjs')]);
-  await client.unitOfWork(LOADS.account, (dir) => accounts.setPerson({ dir, id: need(id, 'An account id'), name, title: typeof title === 'string' ? title : '', by }));
+// The engine's own functions (src/accounts.mjs), the same ones `outbound account set-person` and `confirm-role` call. Naming a person
+// needs a source (PRD E7-S3): usually the brief's candidate finding. It reads that brief, the suppression list and the vendor passes.
+export async function setPerson(client, { id, name, title, by, source }) {
+  const [uow, accounts] = await Promise.all([engine('src/uow.mjs'), engine('src/accounts.mjs')]);
+  await client.unitOfWork(uow.contactLoads('person', need(id, 'An account id')), (dir) => accounts.setPerson({ dir, id, name, title: typeof title === 'string' ? title : '', by, source: sourceOf(source) }));
 }
 
 export async function confirmRole(client, { id, by }) {
   const [{ LOADS }, accounts] = await Promise.all([engine('src/uow.mjs'), engine('src/accounts.mjs')]);
   await client.unitOfWork(LOADS.account, (dir) => accounts.confirmRole({ dir, id: need(id, 'An account id'), by }));
+}
+
+// ---- Contact details (PRD E7-S3) ------------------------------------------------------------------------------------------------
+// Where a field came from, as a form gives it: a source kind, a brief finding id, a URL, a vendor, the date it was seen.
+const str = (v) => (typeof v === 'string' ? v.trim() : '');
+const sourceOf = (s) => (s && typeof s === 'object' ? { kind: str(s.kind), findingId: str(s.findingId), url: str(s.url), vendor: str(s.vendor), seenOn: str(s.seenOn) } : {});
+
+// The account's contact view (each field's source, the address's state, the domains), the brief's candidate findings to name a person
+// from, and the vendors with a recorded pass. Three documents, read as the principal.
+export async function accountContact(client, id) {
+  const [{ store }, accounts] = await Promise.all([mods(), engine('src/accounts.mjs')]);
+  const rules = await loadRules();
+  store.safeId(need(id, 'An account id'));
+  const { result } = await client.unitOfWork([`accounts/${id}.json`, `research/${id}.json`, 'contacts/vendors.json'], (dir) => {
+    const account = store.readJson(join(dir, 'accounts', `${id}.json`), null);
+    if (!account) return null;
+    const research = store.readJson(join(dir, 'research', `${id}.json`), null);
+    const passes = store.readJson(join(dir, 'contacts', 'vendors.json'), { passes: {} }).passes ?? {};
+    return {
+      account: { id: account.id, name: account.name, person: account.person ?? {} },
+      status: accounts.contactStatus(account, { config: rules.config }),
+      candidates: (research?.findings ?? []).filter((f) => f.kind === 'person').map((f) => ({ id: f.id, claim: f.claim, url: f.source_url ?? '' })),
+      vendors: Object.values(passes).filter((p) => p?.passed).map((p) => p.vendor),
+      reverifyDays: rules.config.contacts?.reverifyDays ?? null,
+    };
+  });
+  return result;
+}
+
+export async function setEmail(client, { id, email, by, source }) {
+  const [uow, accounts] = await Promise.all([engine('src/uow.mjs'), engine('src/accounts.mjs')]);
+  const rules = await loadRules();
+  await client.unitOfWork(uow.contactLoads('person', need(id, 'An account id')), (dir) => accounts.setEmail({ dir, id, email, by, source: sourceOf(source), config: rules.config }));
+}
+
+export async function addDomain(client, { id, domain, by, source }) {
+  const [uow, accounts] = await Promise.all([engine('src/uow.mjs'), engine('src/accounts.mjs')]);
+  const rules = await loadRules();
+  const { result } = await client.unitOfWork(uow.contactLoads('domain', need(id, 'An account id')), (dir) => accounts.addDomain({ dir, id, domain, by, source: sourceOf(source), config: rules.config }));
+  return { sharedWith: result.sharedWith };
+}
+
+// The checks include one DNS lookup of the domain's MX record (no mail server is contacted). `resolveMx` is for tests.
+export async function verifyEmail(client, { id, by, method, url, vendor, seen, resolveMx }) {
+  const [uow, accounts] = await Promise.all([engine('src/uow.mjs'), engine('src/accounts.mjs')]);
+  const rules = await loadRules();
+  const { result } = await client.unitOfWork(uow.contactLoads('verify', need(id, 'An account id')), (dir) => accounts.verifyEmail({ dir, id, by, method: str(method), url: str(url), vendor: str(vendor), seen: str(seen), config: rules.config, ...(resolveMx ? { resolveMx } : {}) }));
+  return { ok: result.ok, checks: result.checks };
+}
+
+// A deletion request (src/forget.mjs) loads every store that can hold a person and writes the scrubbed records, the log redactions and
+// the suppression entry in one transaction. First it asks the database whether it can redact log lines at all: a database without the
+// redaction migration would write the documents and silently leave the person in the touch log.
+export async function forgetPerson(client, { id, by, reason, confirm }) {
+  const [{ LOADS }, forget] = await Promise.all([engine('src/uow.mjs'), engine('src/forget.mjs')]);
+  const rules = await loadRules();   // a routes file that names them is rebuilt with routes.json (PRD E22)
+  need(id, 'An account id');
+  const probe = await client.flush({ docs: [], lines: [] });
+  if (typeof probe?.redacted !== 'number') throw new Error('The platform database has not run the redaction migration (20261114200000_log_redaction.sql), so a deletion request cannot reach the touch log. Nothing was changed. An operator runs the migration first.');
+  const { result } = await client.unitOfWork(LOADS.forget, (dir) => forget.forgetPerson({ dir, id, by, reason, confirm, rules }));
+  return result;
 }
 
 // Research is queued only if the pilot gate would let it run, so a principal hears "not yet" now rather than from a failed job.

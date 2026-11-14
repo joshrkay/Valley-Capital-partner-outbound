@@ -1,4 +1,5 @@
-// Loads every committed rule file in one place: config, models, claims, terminology, playbooks, plus the few website files the rules depend on.
+// Loads every committed rule file in one place: config, models, claims, terminology, playbooks, scoring, triage, routes, plus the few website
+// files the rules depend on.
 // Those website files are a SNAPSHOT in site-snapshot/ (the website is a separate repository). Refresh it with `npm run sync-site`.
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -29,8 +30,11 @@ export function loadRules(root = REPO) {
   const site = join(root, 'site-snapshot');
   const terminology = o('terminology.json');
   const siteRules = json(join(site, terminology.bankRulesFrom));
+  // The contact rules (PRD E7-S3) are their own file, and the guard reads them from the config it is already given: config.contacts.
+  const contacts = o('contacts.json');
   return {
-    config: o('config.json'),
+    config: { ...o('config.json'), contacts },
+    contacts,
     models: o('models.json'),
     claims: o('claims.json').claims,
     terminology,
@@ -39,6 +43,7 @@ export function loadRules(root = REPO) {
     buybox: o('buybox.json'),
     scoring: o('scoring.json'),
     triage: o('triage.json'),
+    routes: o('routes.json'),
     desk: json(join(site, 'desk/lint.json')),
     bankAvoid: siteRules.rules.find((r) => r.scope === '/banks/')?.avoid ?? [],
     pages: sitePages(site),

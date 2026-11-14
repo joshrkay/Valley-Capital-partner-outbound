@@ -1,6 +1,7 @@
 // Agent 1: the suppression and cadence guard. Code only, no model. It decides whether a touch may happen, enforces the sequence and the caps,
 // stops everything on a reply or an opt-out, and logs every decision. It has no way to send anything: a person sends, then records it here.
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { readJson, readJsonl, writeJson, appendJsonl, exists, audit } from './store.mjs';
 
 const DAY = 86400000;
@@ -12,6 +13,34 @@ const daysBetween = (a, b) => dayNum(a) - dayNum(b);
 const addDays = (d, n) => new Date((dayNum(d) + n) * DAY).toISOString().slice(0, 10);
 const emailParts = (e) => { const m = String(e ?? '').toLowerCase().match(/^([^@\s]+)@([^@\s]+)$/); return m ? { local: m[1], domain: m[2] } : null; };
 const phrase = (haystackNorm, needle) => { const n = norm(needle); return n.length > 1 && ` ${haystackNorm} `.includes(` ${n} `); };
+
+// A person's name for matching: lower case, punctuation, initials, honorifics and suffixes dropped ("Dr. Jordan A. Sample, Jr." and
+// "jordan sample" are the same name).
+const HONORIFICS = new Set(['mr', 'mrs', 'ms', 'miss', 'mx', 'dr', 'prof', 'sir', 'jr', 'sr', 'ii', 'iii', 'iv', 'esq', 'phd', 'cpa', 'cfa']);
+export const nameTokens = (name) => norm(name).split(' ').filter((t) => t.length > 1 && !HONORIFICS.has(t));
+export const normName = (name) => nameTokens(name).join(' ');
+
+// Suppression without plain text (PRD E7-S3): a forgotten person stays suppressed as hashes, so the list never holds their name or
+// address, and the guard still matches them. An address is hashed alone; a person with each name the institution goes by (its name,
+// aliases and key), so the same name at another bank is someone else. A plain person entry, hashed, matches the name anywhere, as before.
+const H = (s) => `sha256:${createHash('sha256').update(`valley-outbound|${s}`).digest('hex')}`;
+export const emailHashes = (email) => { const e = String(email ?? '').trim().toLowerCase(); return e ? [H(`email|${e}`)] : []; };
+export const nameHashes = (name) => { const n = normName(name); return n ? [H(`person|${n}`)] : []; };
+export const personHashes = (name, institutions = []) => { const n = normName(name); return n ? [...new Set(institutions.map(norm).filter(Boolean))].map((i) => H(`person-at|${n}|${i}`)) : []; };
+const hit = (e, hashes) => Array.isArray(e.hashes) && hashes.some((h) => e.hashes.includes(h));
+
+// Which suppression entry, if any, covers this address or this person at this institution. Shared by the guard and by the functions
+// that name a person or set an address (src/accounts.mjs), so a suppressed person is neither contacted nor named again.
+export function suppressedEmail(entries, email) {
+  const e = String(email ?? '').trim().toLowerCase();
+  if (!e) return null;
+  return entries.find((x) => x?.type === 'email' && ((x.value && String(x.value).toLowerCase() === e) || hit(x, emailHashes(e)))) ?? null;
+}
+export function suppressedPerson(entries, name, institutions = []) {
+  if (!normName(name)) return null;
+  const hs = [...nameHashes(name), ...personHashes(name, institutions)];
+  return entries.find((x) => x?.type === 'person' && ((x.value && norm(x.value) === norm(name)) || hit(x, hs))) ?? null;
+}
 
 export function loadContext({ dir, config, env = process.env }) {
   return {
@@ -59,9 +88,9 @@ export function checkTouch(touch, ctx) {
   for (const e of ctx.suppression) {
     const names = [e.value, ...(e.aliases ?? [])];
     const why = `${e.reason ?? 'suppressed'}${e.added ? `, added ${e.added}` : ''}`;
-    if (e.type === 'email' && em && String(e.value).toLowerCase() === `${em.local}@${em.domain}`) err('SUPPRESSED_EMAIL', `This address is suppressed (${why}).`);
+    if (e.type === 'email' && em && suppressedEmail([e], `${em.local}@${em.domain}`)) err('SUPPRESSED_EMAIL', `This address is suppressed (${why}).`);
     if (e.type === 'domain' && em && (em.domain === String(e.value).toLowerCase() || em.domain.endsWith(`.${String(e.value).toLowerCase()}`))) err('SUPPRESSED_DOMAIN', `This domain is suppressed (${why}).`);
-    if (e.type === 'person' && norm(person.name) === norm(e.value)) err('SUPPRESSED_PERSON', `This person is suppressed (${why}).`);
+    if (e.type === 'person' && suppressedPerson([e], person.name, [touch.institution, ...(touch.aliases ?? []), touch.institutionKey])) err('SUPPRESSED_PERSON', `This person is suppressed (${why}).`);
     if (e.type === 'institution' && names.some((n) => norm(n) === instNorm || norm(n) === norm(touch.accountId) || (norm(n).length > 3 && phrase(instNorm, n)))) err('SUPPRESSED_INSTITUTION', `This institution is suppressed (${why}).`);
     if (e.type === 'asset' && names.some((n) => phrase(textNorm, n))) err('SUPPRESSED_ASSET_NAMED', `The text names an asset or party under NDA, bid or hold (${why}). Remove it.`);
   }
@@ -80,14 +109,16 @@ export function checkTouch(touch, ctx) {
   const other = instSent.filter((t) => t.accountId !== touch.accountId && daysBetween(day, t.date) >= 0 && daysBetween(day, t.date) < quiet).pop();
   if (other) err('OTHER_CONTACT_ACTIVE', `Another person at ${touch.institution} (${other.accountId}) was last contacted ${ymd(other.date)}. One person at a bank at a time: wait until ${addDays(other.date, quiet)}, or ask a principal.`);
 
-  // 6. Contact quality.
+  // 6. Contact quality. No touch on any channel until a principal has named the person (PRD E7-S1).
+  if (!String(person.name ?? '').trim()) err('PERSON_MISSING', 'No person is named on the account. A principal names one, with a source (outbound account set-person), before any touch.');
   if (touch.channel === 'email') {
     if (!em) err('EMAIL_MISSING', 'No valid business email address on the account.');
     else {
       if ((config.personalDomains ?? []).includes(em.domain)) err('PERSONAL_EMAIL', `${em.domain} is a personal email domain. Business addresses only.`);
       if ((config.roleLocalParts ?? []).includes(em.local)) err('ROLE_EMAIL', `"${em.local}@" is a role address, not a person.`);
     }
-    if (contact.emailStatus !== 'verified') err('EMAIL_UNVERIFIED', `Email status is "${contact.emailStatus ?? 'unknown'}". Only verified addresses are used.`);
+    // PRD E7-S3: verified, and sourced. The one rule (emailCheck) that the contact view and the direct route read too.
+    for (const p of emailCheck({ address: person.email, contact, day, reverifyDays: config.contacts?.reverifyDays }).problems) err(p.code, p.message);
     if (mine.some((t) => t.type === 'bounce')) err('EMAIL_BOUNCED', 'A previous message to this account bounced.');
   }
   if (touch.channel === 'letter' && !person.mailingAddress) err('ADDRESS_MISSING', 'No mailing address on the account for a letter.');
@@ -141,6 +172,39 @@ export function checkTouch(touch, ctx) {
   return { allowed: errors.length === 0, errors, warnings, next };
 }
 
+// The one rule for a verified address (PRD E7-S3). The guard, the contact view (src/accounts.mjs contactStatus) and the direct route to
+// the decision-maker (src/routes.mjs) all read this, so nothing calls an address verified when the guard would refuse it. An address is
+// verified on `day` only when every one of these holds:
+//   - a principal verified it (src/accounts.mjs verifyEmail runs the checks and records how they know it): a status of "verified" AND a
+//     verification record, for this exact address;
+//   - the verification is no older than contacts.reverifyDays. With no period set, nothing counts as verified: the rule fails closed;
+//   - the address has a source of its own in contact.provenance (where it was seen, and who recorded it). A source for another address,
+//     or an entry that names no field, does not count.
+// `problems` holds each rule it breaks, as the guard's code and message: EMAIL_UNVERIFIED (state unverified, other_address or expired)
+// and EMAIL_UNSOURCED (state unsourced). With no valid address, the verification rules are still checked and the source rule is not:
+// the guard reports the missing address itself (EMAIL_MISSING), and the state is "none".
+export function emailCheck({ address, contact = {}, day, reverifyDays }) {
+  const em = emailParts(address);
+  const addr = em ? `${em.local}@${em.domain}` : null;
+  const c = contact && typeof contact === 'object' ? contact : {};
+  const problems = [];
+  const unverified = verificationProblem({ address: addr, contact: c, day, reverifyDays });
+  if (unverified) problems.push({ code: 'EMAIL_UNVERIFIED', ...unverified });
+  if (addr && !(Array.isArray(c.provenance) ? c.provenance : []).some((p) => p?.field === 'email' && String(p.value ?? '').trim().toLowerCase() === addr)) {
+    problems.push({ code: 'EMAIL_UNSOURCED', state: 'unsourced', message: 'The address has no recorded source (where it was seen, and who recorded it). Set it with its source: outbound account set-email.' });
+  }
+  return { address: addr, verified: !!addr && !problems.length, state: !addr ? 'none' : problems[0]?.state ?? 'verified', problems };
+}
+function verificationProblem({ address, contact, day, reverifyDays }) {
+  if (contact.emailStatus !== 'verified') return { state: 'unverified', message: `Email status is "${contact.emailStatus ?? 'unknown'}". Only verified addresses are used.` };
+  const v = contact.verification;
+  if (!v || !v.verifiedOn) return { state: 'unverified', message: 'Email status says verified, but no verification is recorded (who checked it, how and when). Verify it: outbound account verify-email.' };
+  if (address && String(v.email ?? '').toLowerCase() !== address) return { state: 'other_address', message: 'The verification on record is for a different address than the current one. Verify the current address: outbound account verify-email.' };
+  if (!(Number.isInteger(reverifyDays) && reverifyDays > 0)) return { state: 'unverified', message: 'No re-verification period is set (contacts.json reverifyDays), so no address counts as verified.' };
+  if (day && daysBetween(day, v.verifiedOn) > reverifyDays) return { state: 'expired', message: `The address was verified on ${v.verifiedOn}. A verification lasts ${reverifyDays} days (contacts.json reverifyDays), so it expired on ${addDays(v.verifiedOn, reverifyDays)}. Verify it again: outbound account verify-email.` };
+  return null;
+}
+
 // Called after a person has actually sent the touch. Re-checks, then logs. Message text is never stored here.
 export function recordTouch(dir, touch, ctx) {
   const r = checkTouch(touch, ctx);
@@ -184,7 +248,7 @@ export function recordEvent(dir, { accountId, institution, type, date, note, per
 export function addSuppression(dir, entry, ctx) {
   const allowed = ['email', 'domain', 'person', 'institution', 'asset'];
   if (!allowed.includes(entry.type)) throw new Error(`Unknown suppression type "${entry.type}". Use ${allowed.join(', ')}.`);
-  if (!entry.value) throw new Error('A suppression entry needs a value.');
+  if (!entry.value && !(Array.isArray(entry.hashes) && entry.hashes.length)) throw new Error('A suppression entry needs a value (or, for a forgotten person, its hashes).');
   const file = join(dir, 'suppression.json');
   const all = readJson(file, { entries: [] });
   const e = { ...entry, added: entry.added ?? new Date().toISOString().slice(0, 10) };
@@ -198,7 +262,7 @@ export function addSuppression(dir, entry, ctx) {
 // Builds the touch to check from an account record and the choices on the command line.
 export function touchFromAccount(account, { channel, step, date, sender, text }) {
   return {
-    accountId: account.id, institution: account.name, aliases: account.aliases ?? [], audience: account.audience ?? account.type, sector: account.sectors?.[0],
+    accountId: account.id, institution: account.name, aliases: account.aliases ?? [], institutionKey: account.institutionKey, audience: account.audience ?? account.type, sector: account.sectors?.[0],
     tier: account.tier, person: account.person ?? {}, contact: account.contact ?? {}, channel, sender, step, date, text,
   };
 }

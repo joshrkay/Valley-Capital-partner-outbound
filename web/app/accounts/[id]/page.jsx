@@ -3,8 +3,10 @@ import { accountDetail } from '../../../lib/ops.mjs';
 import { loadRules } from '../../../lib/engine.mjs';
 import { period, num } from '../../../lib/format.mjs';
 import { NotAuthorized, Problem, Markdown } from '../../ui.jsx';
-import { setPersonAction, confirmRoleAction, queueResearchAction, queueDraftAction } from '../actions.js';
+import { confirmRoleAction, queueResearchAction, queueDraftAction } from '../actions.js';
 import { Calls } from './calls.jsx';
+import { Routes } from './routes.jsx';
+import { Contact } from './contact.jsx';
 
 export default async function Account({ params }) {
   const ctx = await requirePrincipal();
@@ -29,12 +31,7 @@ export default async function Account({ params }) {
             <dt>Title</dt><dd>{a.person?.title || '–'}</dd>
             <dt>Role</dt><dd>{a.contact?.roleConfirmed ? `confirmed by ${a.contact.roleConfirmedBy}` : 'unconfirmed'}</dd>
           </dl>
-          <form action={setPersonAction} className="row" style={{ marginTop: 10 }}>
-            <input type="hidden" name="id" value={a.id} />
-            <label>Name<input name="name" required defaultValue={a.person?.name ?? ''} /></label>
-            <label>Title<input name="title" defaultValue={a.person?.title ?? ''} /></label>
-            <button className="secondary" type="submit">Set person</button>
-          </form>
+          <p className="small muted">Name the person under Contact details, below, with where the name came from: usually the brief's candidate finding.</p>
           {a.person?.name && !a.contact?.roleConfirmed ? (
             <form action={confirmRoleAction} className="inline"><input type="hidden" name="id" value={a.id} /><button type="submit">Confirm role (after reading the sources)</button></form>
           ) : null}
@@ -56,6 +53,8 @@ export default async function Account({ params }) {
         </div>
       </div>
 
+      <Contact client={ctx.client} id={a.id} />
+
       {pipe ? (
         <>
           <h2>What the pipeline found</h2>
@@ -68,6 +67,7 @@ export default async function Account({ params }) {
         </>
       ) : null}
 
+      <Routes client={ctx.client} id={a.id} />
       <Calls client={ctx.client} id={a.id} />
 
       <h2>Brief</h2>

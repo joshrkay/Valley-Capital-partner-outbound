@@ -68,7 +68,13 @@ export function platformClient({ url, key, accessToken, fetchImpl = globalThis.f
     return snap;
   }
 
-  const flush = (plan) => call('POST', 'rpc/flush_uow', { body: { plan } });
+  // A plan with redactions (a deletion request, PRD E7-S3) needs the redaction migration: a database without it would ignore them and
+  // answer without a "redacted" count, leaving the person's lines in place. That is refused here, never reported as done.
+  async function flush(plan) {
+    const res = await call('POST', 'rpc/flush_uow', { body: { plan } });
+    if (plan?.redactions?.length && typeof res?.redacted !== 'number') throw new PlatformError('The platform database has not run the redaction migration (20261114200000_log_redaction.sql), so log lines that name the person were not redacted. Run the migration, then run the deletion request again.', { code: 'REDACTION_UNSUPPORTED' });
+    return res;
+  }
 
   return {
     load, flush,

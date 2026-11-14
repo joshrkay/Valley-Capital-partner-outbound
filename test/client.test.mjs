@@ -122,3 +122,22 @@ test('headers: a JWT key also goes in Authorization; a new-style key goes in api
   assert.equal(seen[2].Authorization, 'Bearer user-session-jwt');
   assert.equal(isJwt(jwt), true); assert.equal(isJwt('sb_secret_x'), false);
 });
+
+// PRD E7-S3: a deletion request's log redactions, through the platform. The fake applies the same rules as flush_uow (test/db.test.mjs).
+test('redactions: applied to the matching log line; anything but "[removed]" on an unprotected key is refused; an old database is caught', async () => {
+  const fake = fakePostgrest();
+  fake.lines.push({ id: 1, path: 'touches.jsonl', line: { type: 'reply', accountId: 'acme', date: '2026-11-11', note: 'Jordan replied' }, by: 'x' });
+  const c = asPat(fake);
+  const old = { type: 'reply', accountId: 'acme', date: '2026-11-11', note: 'Jordan replied' };
+  await assert.rejects(c.flush({ docs: [], lines: [], redactions: [{ path: 'touches.jsonl', old, new: { ...old, type: '[removed]' } }] }), (e) => e.code === '42501');
+  await assert.rejects(c.flush({ docs: [], lines: [], redactions: [{ path: 'touches.jsonl', old, new: { ...old, note: 'someone' } }] }), (e) => e.code === '42501');
+  await assert.rejects(c.flush({ docs: [], lines: [], redactions: [{ path: 'audit.jsonl', old, new: { ...old, note: '[removed]' } }] }), (e) => e.code === '42501');
+  await assert.rejects(c.flush({ docs: [], lines: [], redactions: [{ path: 'touches.jsonl', old: { ...old, note: 'gone' }, new: { ...old, note: '[removed]' } }] }), ConflictError);
+  const r = await c.flush({ docs: [], lines: [], redactions: [{ path: 'touches.jsonl', old, new: { ...old, note: '[removed]' } }] });
+  assert.equal(r.redacted, 1);
+  assert.deepEqual(fake.lines[0].line, { type: 'reply', accountId: 'acme', date: '2026-11-11', note: '[removed]' });
+  // A database without the redaction migration ignores the key and answers without "redacted": the client refuses to call it done.
+  const legacy = async (url, init) => (String(url).endsWith('rpc/flush_uow') ? new Response(JSON.stringify({ written: 0, appended: 0 }), { status: 200 }) : fake.fetchImpl(url, init));
+  await assert.rejects(asPat(fake, { fetchImpl: legacy }).flush({ docs: [], lines: [], redactions: [{ path: 'touches.jsonl', old, new: old }] }), /redaction migration/);
+  await asPat(fake, { fetchImpl: legacy }).flush({ docs: [], lines: [] });   // a plan without redactions is unaffected
+});

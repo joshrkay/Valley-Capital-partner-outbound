@@ -155,6 +155,7 @@ export function approveDraft({ dir, account, channel, step, by, ctx, rules, now 
   const file = `${draftPath(dir, account.id, step, channel)}.json`;
   const rec = readJson(file, null);
   if (!rec) throw new Error(`No draft at ${file}.`);
+  if (rec.status === 'forgotten') throw new Error(`This draft was removed on a deletion request (PRD E7-S3). Nothing of it is kept; draft again for another person.`);
   const allFacts = factsFor(dir, account.id) ?? [];
   const facts = allFacts.filter((f) => f.use === 'draft');
   const lint = lintOutput({ channel, account, out: rec.output, facts, allFacts, rules, sender: ctx.senders.find((s) => s.id === rec.sender) });

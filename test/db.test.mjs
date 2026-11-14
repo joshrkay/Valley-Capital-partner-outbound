@@ -163,3 +163,32 @@ test('the sixth migration adds the FDIC loan-sale pull (PRD E16) and keeps every
   assert.match(j, /^\d+$/);
   must(as('service_role', SERVICE, `update jobs set status = 'done' where id = ${j}`));
 });
+
+// PRD E7-S3: a deletion request blanks values in a log line that mentions the person. flush_uow takes `redactions` from the seventh
+// migration on, for touches.jsonl and outcomes.jsonl only, and only as a redaction: a value becomes "[removed]", no key is added or
+// dropped, and the keys the guard and the outcomes report rely on (type, accountId, institution, date, id, ref) never change.
+test('the seventh migration: a principal redacts a value in touches.jsonl, and nothing else can be changed that way', { skip }, () => {
+  const line = { type: 'reply', accountId: 'acme', institution: 'Acme Community Bank', date: '2026-11-11', note: 'Jordan Sample replied' };
+  must(as('authenticated', PAT, `select flush_uow(${plan([], [{ path: 'touches.jsonl', line }, { path: 'audit.jsonl', line: { type: 'note', note: 'Jordan Sample' } }])})`));
+  const id = must(psql(`select id from log_lines where path = 'touches.jsonl' and line->>'note' = 'Jordan Sample replied'`));
+  const red = (r, docs = []) => lit(JSON.stringify({ docs, lines: [], redactions: [r] }));
+  const refused = (r, why) => { const x = as('authenticated', PAT, `select flush_uow(${red(r)})`); assert.equal(x.ok, false, why); assert.match(x.err, /Not allowed/, why); };
+  refused({ path: 'touches.jsonl', old: line, new: { ...line, type: '[removed]' } }, 'the event type is protected');
+  refused({ path: 'touches.jsonl', old: line, new: { ...line, date: '[removed]' } }, 'the date is protected');
+  refused({ path: 'touches.jsonl', old: line, new: { ...line, note: 'someone else' } }, 'only "[removed]" may replace a value');
+  refused({ path: 'touches.jsonl', old: line, new: { ...line, note: '[removed]', extra: 1 } }, 'no key is added');
+  const { note, ...withoutNote } = line;
+  refused({ path: 'touches.jsonl', old: line, new: withoutNote }, 'no key is dropped');
+  refused({ path: 'audit.jsonl', old: { type: 'note', note: 'Jordan Sample' }, new: { type: 'note', note: '[removed]' } }, 'the audit log is never rewritten');
+  assert.equal(as('authenticated', STRANGER, `select flush_uow(${red({ path: 'touches.jsonl', old: line, new: { ...line, note: '[removed]' } })})`).ok, false, 'a stranger cannot');
+  // A line that is not there (changed since it was loaded) is a conflict, and nothing else in the plan lands.
+  const gone = as('authenticated', PAT, `select flush_uow(${red({ path: 'touches.jsonl', old: { ...line, note: 'not this' }, new: { ...line, note: '[removed]' } }, [{ path: 'accounts/forget-me.json', kind: 'json', body: { id: 'x' }, baseVersion: 0 }])})`);
+  assert.equal(gone.ok, false); assert.match(gone.err, /Conflict: a line of touches\.jsonl changed since it was loaded/);
+  assert.equal(must(as('authenticated', PAT, `select count(*) from documents where path = 'accounts/forget-me.json'`)), '0');
+  // The redaction itself.
+  const r = must(as('authenticated', PAT, `select flush_uow(${red({ path: 'touches.jsonl', old: line, new: { ...line, note: '[removed]' } })})`));
+  assert.equal(JSON.parse(r).redacted, 1);
+  assert.equal(must(psql(`select id || ' ' || (line->>'type') || ' ' || (line->>'note') || ' ' || (line->>'date') from log_lines where id = ${id}`)), `${id} reply [removed] 2026-11-11`);
+  assert.equal(must(psql(`select count(*) from log_lines where line::text like '%Jordan Sample replied%'`)), '0');
+  assert.equal(JSON.parse(must(as('authenticated', PAT, `select flush_uow(${plan()})`))).redacted, 0, 'a plan with no redaction answers 0, so the client knows the migration ran');
+});
