@@ -154,9 +154,10 @@ Rules that apply everywhere:
 | `filing` | County + document number | Document type, date, lender, trustee, lender's counsel, commercial flag. **Context only.** | County, or a vendor | E5 |
 | `signal` | id | Institution key, type, value, period, evidence (record ids), an asset-specific flag | Derived | E3–E5 |
 | `candidate` | Institution key + scoring run | Score, components, tier, "why now" card, status (new, promoted, dismissed or snoozed), reason, who, when | Derived | E6 |
-| `account` | Account id (existing `accounts/<id>.json`) | Existing fields plus `institutionKey` and `originSignals` | A principal's promotion | E6 |
+| `account` | Account id (existing `accounts/<id>.json`) | Existing fields plus `institutionKey` and `originSignals`; the institution's confirmed email `domains`, each with its source; `contact.provenance` (where each person field came from) and `contact.verification` (E7-S3) | A principal's promotion; a principal's contact entries | E6, E7 |
 | `source_run` | Run id | Source, parameters, row counts, field check, errors, duration, outcome | | E2 |
-| Existing | | `touches.jsonl`, `audit.jsonl`, `suppression.json`, briefs, facts, drafts | | Agents 1–3 |
+| Existing | | `touches.jsonl`, `audit.jsonl`, `suppression.json` (with hashed entries for a forgotten person, E7-S3), briefs, facts, drafts | | Agents 1–3 |
+| `contacts/` | Data folder | `known.json` (people we know, for vendor tests), `vendor-tests/<vendor>-<date>.json` and `.md` (refs and counts only), `vendors.json` (recorded passes) | A principal; the harness | E7-S2 |
 
 ## 8. Epics, user stories and acceptance criteria
 
@@ -550,19 +551,115 @@ Every adapter (E3–E5) is built on this shared framework.
 
 ### E7. Contact finding
 
+Rules across the epic:
+- Contact details live in the data folder and the database only: the account file, the known list and the vendor tests (`contacts/`). The data-rule test fails on any tracked file under `contacts/`.
+- None of it reaches the drafter. The drafter writes to a name and a title; the address is the guard's business. `test/contacts-handoff.test.mjs` proves it.
+- Nothing contacts a mail server. Verifying an address looks up its domain's MX record in DNS, and that is all. A test fails if the contact modules use a network socket, SMTP, RCPT or `fetch`.
+- Audit lines and job results hold ids, codes and counts, never a name or an address.
+
 **E7-S1. Institution-first research names the candidates.** *As a principal, I want the briefer to research a promoted bank before anyone is named, and to bring back who most likely decides, so that the first message reaches the right person.* P0, **R1** (built).
-- [ ] An account with no named person is researched in **institution mode**. The prompt says no one is named. For `bank.people` it asks for up to three people who most likely decide on loan sales, each a sourced person finding, and forbids guessing a name.
-- [ ] In institution mode the person check reads `not_named` whatever the model says. The brief lists the candidate findings and says a principal chooses.
-- [ ] `outbound account set-person --account ID --name N [--title T] --by NAME` records the choice, with an audit line. It resets the role to unconfirmed. Confirming the role is still a separate step for a principal (`account confirm-role`).
-- [ ] The guard still refuses any touch until a person is named, their role confirmed, and their address verified (existing rules).
+- [x] An account with no named person is researched in **institution mode**. The prompt says no one is named. For `bank.people` it asks for up to three people who most likely decide on loan sales, each a sourced person finding, and forbids guessing a name. *(Checked in `src/research.mjs` `buildPrompt` and `test/research.test.mjs`.)*
+- [x] In institution mode the person check reads `not_named` whatever the model says. The brief lists the candidate findings and says a principal chooses. *(`processFindings`, `renderBrief`.)*
+- [x] `outbound account set-person --account ID --name N [--title T] --by NAME` records the choice, with an audit line. It resets the role to unconfirmed. Confirming the role is still a separate step for a principal (`account confirm-role`). *Since E7-S3 it also needs a source, normally the candidate's finding (`--finding F3`).*
+- [x] The guard still refuses any touch until a person is named, their role confirmed, and their address verified. **Built here:** the guard had no rule of its own that a person is named. Only `confirm-role` required a name, so an account edited by hand could pass a letter or a LinkedIn note with no one named. The guard now refuses every channel with `PERSON_MISSING`. The role is `ROLE_UNCONFIRMED`; the address is `EMAIL_UNVERIFIED` (E7-S3).
 
-**E7-S2. Vendor test before paying.** *As a principal, I want any contact-data vendor tested on 50 people we already know so that we pay for accuracy, not claims.* P1, R3.
-- [ ] A test harness compares each vendor's results against the known list. It reports correct, wrong and missing emails, and whether titles are current.
-- [ ] No vendor is wired in until a principal records a pass against a threshold the principals set.
+**E7-S2. Vendor test before paying.** *As a principal, I want any contact-data vendor tested on 50 people we already know so that we pay for accuracy, not claims.* P1, R3. **Built** (`src/vendors.mjs`, `outbound contacts ...`). There is no vendor API and no key: a principal exports the vendor's results to a file.
+- [x] A test harness compares each vendor's results against the known list. It reports correct, wrong and missing emails, and whether titles are current.
+  - The known list is `contacts/known.json` in the data folder, written by a principal: name, institution, email, title and an as-of date for each person.
+  - `outbound contacts vendor-test --vendor NAME --results FILE` reads the vendor's CSV or JSON export, mapping its own column names (name, or first and last name; company or organization; work email; job title). It matches each known person by normalized name (case, punctuation, initials, honorifics and suffixes dropped) and institution (legal suffixes such as N.A. dropped).
+  - For each known person it reports the email as correct, wrong or missing, and the title as current, stale or missing (EVP, CCO and similar abbreviations count as the full title). It also reports coverage, the vendor's records not on the list, and duplicates.
+  - Rates: correct email over the known people we hold an address for; wrong email over the addresses the vendor gave; current title over the known people we hold a title for.
+  - It writes `contacts/vendor-tests/<vendor>-<date>.json` and `.md`. Rows name the known list's refs only, never a name, an address or a title, so a deletion request removes a person from one place.
+- [x] No vendor is wired in until a principal records a pass against a threshold the principals set.
+  - `outbound contacts vendor-pass --vendor NAME --by NAME` records a pass in `contacts/vendors.json` only when the latest test meets every threshold in `contacts.json` (`vendorPass`: minimum sample 50, minimum correct-email rate, maximum wrong-email rate, minimum title-current rate). Every value is a placeholder (D-C2). Otherwise it lists the failures and exits 1.
+  - A vendor as the source of a field (`--source vendor`), or as how an address is known (`--method vendor`), is refused without that pass.
+- [ ] The principals set the thresholds (D-C2) and run the first test on 50 people they know.
 
-**E7-S3. Verified, sourced addresses.** *As a principal, I want every email address verified and sourced so that we don't bounce or reach the wrong person.* P1, R3.
-- [ ] Every address is verified before use, and every field records where it came from (existing guard rules: business addresses only, no role or personal addresses).
-- [ ] A deletion request removes the person from every record, and the removal is logged.
+**E7-S3. Verified, sourced addresses.** *As a principal, I want every email address verified and sourced so that we don't bounce or reach the wrong person.* P1, R3. **Built** (`src/accounts.mjs`, `src/forget.mjs`, the guard, `outbound account ...`, the account page's contact section).
+- [x] Every address is verified before use, and every field records where it came from (existing guard rules: business addresses only, no role or personal addresses).
+  - **Sources.** Each person field (name, title, email, phone, mailing address) has one entry in `contact.provenance`: the field, its value, a source kind, a URL or brief finding id, the date seen, and who set it, with when. The kinds:
+    - `brief_finding` (`--finding F3`): the URL and date come from the brief. Naming a person from a finding requires a person finding that names them.
+    - `institution_site` (`--url`).
+    - `correspondence`.
+    - `principal_known`.
+    - `vendor`, only with a recorded pass (E7-S2).
+  - `account set-person`, `set-email`, `set-phone` and `set-address` each take a source. Naming a different person clears the last one's address, phone and verification.
+  - A new address starts unverified. A personal, role or malformed address is refused when it is set, and so is a suppressed one.
+  - **Domains.** `account add-domain` records each of the institution's email domains, with a source, in `account.domains` (E9-S3 matches replies by them). A personal domain is refused. A domain another account already holds is flagged for a principal.
+  - **Verification.** `account verify-email --method institution_site --url URL | correspondence | principal_known | vendor --vendor NAME`. Every check is required:
+    - the syntax is valid;
+    - the address has a recorded source;
+    - it is a business address for a person (no personal domain, no role local part);
+    - the domain is one of the account's confirmed domains, or a subdomain of one;
+    - the domain has an MX record, which is not a null MX. This is one DNS lookup (`node:dns` `resolveMx`, injectable so tests never touch the network). `contacts.json` `requireMx` (D-C3).
+    - the address is not suppressed.
+
+    The address is `verified` only when every check passes **and** the principal's attestation is recorded with it (`contact.verification`: address, method, page or vendor, date seen, who, when). A failed check leaves it unverified and revokes an earlier verification. No mail server is ever contacted.
+  - **The guard**, for email:
+    - `EMAIL_UNVERIFIED` when there is no verification record;
+    - `EMAIL_UNVERIFIED` when the verification is for a different address than the current one;
+    - `EMAIL_UNVERIFIED` when it is older than `contacts.json` `reverifyDays` (placeholder 180, D-C1). With no period set, nothing counts as verified.
+    - `EMAIL_UNSOURCED` when the current address has no source of its own.
+  - `account contact` (and the web page) shows each field with its source, the address's state (unverified, verified, expired, or verified for another address) and the date to verify again by.
+- [x] A deletion request removes the person from every record, and the removal is logged.
+  - `outbound account forget-person --account ID --by NAME --reason TEXT --confirm "ACCOUNT NAME"`, or the account page, which also needs the account's name typed. `--name` and `--email` reach a person who is no longer on the account.
+  - It runs as one unit of work over every store that can hold a person (`LOADS.forget`). Each store, and how it is handled:
+
+    | Store | Handled |
+    |---|---|
+    | `accounts/` | Every account that holds them (the same address, or the same name at the same institution) loses their fields, sources, verification and role. They leave people lists, such as names from call notes, and other text is redacted. The account keeps the institution's own data, and a `forgotten` record: who, when, and the reason with the name removed. |
+    | `research/` | Person findings that name them, and the findings their fields were sourced from, are removed, with pages no other finding cites. Ids that pointed at them are dropped. Other text is redacted, search queries included. |
+    | `briefs/` | Rebuilt from the scrubbed research, then redacted. |
+    | `facts/` | The same findings are removed; other text is redacted. |
+    | `drafts/` | A draft that names them is emptied to its step, channel, dates, claims used and approval. Its text, subject and output are gone, and it cannot be approved (`approveDraft` refuses it). |
+    | `calls/` | Notes, call briefs, proposals and follow-ups are redacted. They leave every people list. The outcome codes stay. |
+    | `outcomes.jsonl` | Holds no names by design; any value that names them would become `[removed]`. |
+    | `touches.jsonl` | It stores the type, account, institution, step, channel, sender, dates and, for an event, a free-text `note`. A value that names them, in practice the note, becomes `[removed]`. The event itself stays, so a reply or an opt-out keeps stopping outreach. |
+    | `pilot/` | Truth sheets are redacted. Review verdicts on removed findings are dropped. |
+    | `contacts/` | Their row leaves the known list. Vendor reports hold refs only, and are redacted all the same. |
+    | `suppression.json` | Plain entries for their address or name become hashes, keeping their reason and date. Hashed entries are added for the address, and for the name with each name of the institution (its name, aliases and key). |
+    | `audit.jsonl` | Never rewritten: it holds ids, codes and counts. |
+
+  - **How a mention is found.** Their address, phone and street address identify them anywhere. Their full name identifies them in the records of their own institution, in any of its accounts: as written, reversed ("Sample, Jordan"), with a middle initial, or as a page slug. A first or last name alone is redacted only in their own account's file, drafts, calls and touch-log notes, where it can only mean them. A name in another institution's records may be someone else, and is left alone (D-C6).
+  - **Never again.** The guard matches hashed entries as it matches plain ones (`SUPPRESSED_EMAIL`, `SUPPRESSED_PERSON`), and naming them, or setting their address, is refused.
+  - **The log line.** One audit line, `person_forgotten`: the account id, who, when, and the number of files or lines changed in each store. It holds no name and no address. The command line prints the same counts.
+  - **The platform.** Migration `20261114200000_log_redaction.sql` lets `flush_uow` redact log lines.
+    - Only `touches.jsonl` and `outcomes.jsonl`. The audit log is never rewritten.
+    - A value may only become `"[removed]"`. No key is added or dropped.
+    - `type`, `accountId`, `institution`, `date`, `id` and `ref` never change.
+    - A line that changed since it was loaded is a conflict, and the whole flush is undone.
+    - `test/db.test.mjs` runs it on Postgres 16, and `test/postgrest-fake.mjs` applies the same rules.
+    - The client refuses to report a redaction as done by a database without the migration. The web app checks that before it scrubs anything.
+    - No new job kind: every contact action runs inside a web request or a command-line unit of work.
+- [ ] Counsel reviews the deletion process and the hashed suppression (Q16, research agenda G1), and the principals decide D-C4 to D-C6.
+- [ ] The account page's older "Set person" form, in "The person" panel, has no source fields, so it is now refused with a pointer to the contact section's form. Remove it when the page is next edited. It was left alone here while the routes work changes the same page.
+
+**Plumbing.**
+- [x] `contacts.json` at the repository root: `reverifyDays`, `requireMx` and `vendorPass`, every value a placeholder with a `_note`. `loadRules()` gives it to the guard as `config.contacts`.
+- [x] Units of work (`src/uow.mjs`, `LOADS`):
+  - `person`, `verify` and `domain`, narrowed to one account by `contactLoads()`. `domain` reads every account, to flag a shared domain.
+  - `forget`: every store above.
+  - `vendors`: `contacts/`.
+
+  The drafter's list holds none of them.
+- [x] **Web**, on the account page, through `web/lib/ops.mjs` as the signed-in principal (`web/app/accounts/[id]/contact.jsx`):
+  - each field and its source;
+  - naming the person with a source, choosing from the brief's candidates;
+  - the address and its state;
+  - the domains;
+  - the verify form, with the checks and an attestation;
+  - forget person, which needs the account's name typed.
+
+**Decisions for a principal.**
+
+| # | Decision | Default |
+|---|---|---|
+| D-C1 | How long a verification lasts before the address must be verified again (`contacts.json` `reverifyDays`) | 180 days (placeholder) |
+| D-C2 | The vendor thresholds (`contacts.json` `vendorPass`): minimum sample, minimum correct-email rate, maximum wrong-email rate, minimum title-current rate | 50 people; 90%; 3%; 80% (placeholders) |
+| D-C3 | Is the MX lookup required to verify an address (`contacts.json` `requireMx`)? It is one DNS query. No mail server is contacted either way, and a principal's attestation is required either way | Required |
+| D-C4 | How long a forgotten person's hashed suppression entries are kept | For good, never pruned: a pruned entry would let them be named and contacted again |
+| D-C5 | How the suppression hash is made. It is SHA-256 of the normalized address, and of the normalized name with each name of the institution, with a fixed prefix and no secret. Anyone who already holds an address or a name can test it against the list; that is how the guard matches. Someone with a long list of candidates could test those too. A keyed hash (HMAC) would resist that, but needs the same secret on every machine that runs the guard | Unsalted SHA-256 |
+| D-C6 | How far a deletion reaches. A name alone in another institution's records is left, because it may be someone else; only the address, phone and street address are removed there. Call notes and briefs are redacted, not deleted, so the bank's facts and the outcome codes stay. A title in free text is not redacted | As built |
 
 ---
 

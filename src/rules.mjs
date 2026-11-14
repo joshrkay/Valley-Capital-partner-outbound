@@ -30,8 +30,11 @@ export function loadRules(root = REPO) {
   const site = join(root, 'site-snapshot');
   const terminology = o('terminology.json');
   const siteRules = json(join(site, terminology.bankRulesFrom));
+  // The contact rules (PRD E7-S3) are their own file, and the guard reads them from the config it is already given: config.contacts.
+  const contacts = o('contacts.json');
   return {
-    config: o('config.json'),
+    config: { ...o('config.json'), contacts },
+    contacts,
     models: o('models.json'),
     claims: o('claims.json').claims,
     terminology,

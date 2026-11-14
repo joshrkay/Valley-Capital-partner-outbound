@@ -60,6 +60,16 @@ export function fakePostgrest({ principals = ['pat@example.test'] } = {}) {
       const cur = docs.get(d.path)?.version ?? 0;
       if ((d.baseVersion ?? 0) !== cur) return pgError(409, '40001', `Conflict: ${d.path} ${cur ? 'changed' : 'was created by someone else'} since it was loaded.`);
     }
+    // Redactions (PRD E7-S3), with the rules of the redaction migration: touches.jsonl and outcomes.jsonl only; the same keys; a value
+    // may only become "[removed]", never on a protected key; a line no longer there is a conflict. All checked before anything changes.
+    const reds = plan.redactions ?? [];
+    for (const r of reds) {
+      if (!['touches.jsonl', 'outcomes.jsonl'].includes(r.path)) return pgError(403, '42501', 'Not allowed: only touches.jsonl and outcomes.jsonl lines can be redacted.');
+      const ok = r.old && r.new && typeof r.old === 'object' && typeof r.new === 'object' && JSON.stringify(Object.keys(r.old).sort()) === JSON.stringify(Object.keys(r.new).sort())
+        && Object.keys(r.old).every((k) => JSON.stringify(r.old[k]) === JSON.stringify(r.new[k]) || (r.new[k] === '[removed]' && !['type', 'accountId', 'institution', 'date', 'id', 'ref'].includes(k)));
+      if (!ok) return pgError(403, '42501', 'Not allowed: a redaction may only replace a value with "[removed]", never a protected key.');
+      if (!lines.some((l) => l.path === r.path && JSON.stringify(l.line) === JSON.stringify(r.old))) return pgError(409, '40001', `Conflict: a line of ${r.path} changed since it was loaded.`);
+    }
     for (const d of plan.docs ?? []) {
       const prev = docs.get(d.path);
       docs.set(d.path, { path: d.path, kind: d.kind, body: d.kind === 'json' ? d.body : null, text: d.kind === 'text' ? d.text : null, version: (prev?.version ?? 0) + 1, updated_by: actor });
@@ -68,8 +78,10 @@ export function fakePostgrest({ principals = ['pat@example.test'] } = {}) {
         for (const i of d.body.items ?? []) candidates.set(i.key, { key: i.key, tier: i.tier ?? null, score: i.score, distress: i.axes?.distress, fit: i.axes?.fit, timing: i.axes?.timing, name: i.name, metros: i.metros ?? [], sectors: i.sectors ?? [], filtered: (i.filtersFailed ?? []).length > 0, card: i.card?.text ?? null, period: i.latestRepdte ?? null, provisional: !!d.body.provisional, item: i });
       }
     }
+    let redacted = 0;
+    for (const r of reds) for (const l of lines) if (l.path === r.path && JSON.stringify(l.line) === JSON.stringify(r.old)) { l.line = structuredClone(r.new); redacted++; }
     for (const l of plan.lines ?? []) lines.push({ id: ++lineId, path: l.path, line: l.line, by: actor });
-    return json(200, { written: plan.docs?.length ?? 0, appended: plan.lines?.length ?? 0 });
+    return json(200, { written: plan.docs?.length ?? 0, appended: plan.lines?.length ?? 0, redacted });
   }
 
   async function fetchImpl(url, init = {}) {

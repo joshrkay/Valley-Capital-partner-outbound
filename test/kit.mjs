@@ -8,7 +8,8 @@ import { readFileSync } from 'node:fs';
 export const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const OUT = REPO;
 export const loadJson = (rel) => JSON.parse(readFileSync(join(OUT, rel), 'utf8'));
-export const config = () => structuredClone(loadJson('config.json'));
+// As loadRules() gives it: config.json, with the contact rules (contacts.json) as config.contacts, which the guard reads.
+export const config = () => structuredClone({ ...loadJson('config.json'), contacts: loadJson('contacts.json') });
 export const models = () => structuredClone(loadJson('models.json'));
 
 export const makeDir = () => mkdtempSync(join(tmpdir(), 'outbound-test-'));
@@ -17,10 +18,20 @@ export const put = (dir, rel, data) => { mkdirSync(dirname(join(dir, rel)), { re
 // Invented sender, account and contact. Nothing here is real.
 export const SENDER = { id: 'pat', name: 'Pat Example', title: 'Principal', phone: '555-0100', address: '1 Example Way, Anytown', mailbox: 'pat@example.test' };
 
+// A complete contact (PRD E7-S3): every field sourced, the address verified by a principal on 2026-11-01, the role confirmed.
+const SEEN = { kind: 'institution_site', url: 'https://acmebank.test/leadership', seenOn: '2026-11-01', by: 'Pat Example', at: '2026-11-01T12:00:00.000Z' };
+export const CONTACT = (over = {}) => ({
+  emailStatus: 'verified', roleConfirmed: true,
+  provenance: [{ field: 'name', value: 'Jordan Sample', ...SEEN }, { field: 'title', value: 'Chief Credit Officer', ...SEEN }, { field: 'email', value: 'jordan@acmebank.test', ...SEEN }, { field: 'phone', value: '555-0199', ...SEEN }, { field: 'mailingAddress', value: '10 Main St, Anytown', ...SEEN }],
+  verification: { email: 'jordan@acmebank.test', method: 'institution_site', url: 'https://acmebank.test/leadership', seenOn: '2026-11-01', by: 'Pat Example', at: '2026-11-01T12:00:00.000Z', verifiedOn: '2026-11-01', checks: { syntax: 'pass', business: 'pass', domain: 'acmebank.test', mx: 'pass' } },
+  ...over,
+});
+
 export const account = (over = {}) => ({
   id: 'acme-bank', name: 'Acme Community Bank', aliases: ['Acme Bancorp'], type: 'bank', audience: 'bank', sectors: ['hospitality'], tier: 'A',
   person: { name: 'Jordan Sample', title: 'Chief Credit Officer', email: 'jordan@acmebank.test', phone: '555-0199', phoneType: 'landline', timezone: 'America/Chicago', mailingAddress: '10 Main St, Anytown' },
-  contact: { emailStatus: 'verified', roleConfirmed: true, provenance: [{ source: 'bank leadership page', date: '2026-11-01' }] },
+  contact: CONTACT(),
+  domains: [{ domain: 'acmebank.test', kind: 'institution_site', url: 'https://acmebank.test/leadership', seenOn: '2026-11-01', confirmedBy: 'Pat Example', confirmedAt: '2026-11-01T12:00:00.000Z' }],
   ...over,
 });
 
