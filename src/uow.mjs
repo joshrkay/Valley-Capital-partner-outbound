@@ -48,8 +48,10 @@ export const LOADS = Object.freeze({
   domain: ['accounts/', 'research/'],
   verify: ['accounts/', 'suppression.json', 'contacts/vendors.json'],
   // A deletion request (src/forget.mjs) reads and scrubs every store that can hold a person, for every account. It is the only action
-  // that loads calls/, drafts/ and pilot/ whole. The audit log is never loaded or rewritten: it holds ids, codes and counts.
-  forget: ['accounts/', 'research/', 'facts/', 'briefs/', 'drafts/', 'calls/', 'pilot/', 'contacts/', 'suppression.json', 'touches.jsonl', 'outcomes.jsonl'],
+  // that loads calls/, drafts/ and pilot/ whole. The audit log is never loaded or rewritten: it holds ids, codes and counts. routes/ and
+  // network/ are here because the routes hold lender-side names and the network can hold the person; a routes file that names them is
+  // rebuilt (src/routes.mjs buildRoutes), which also reads the guard's files and the sale ledger.
+  forget: ['accounts/', 'research/', 'facts/', 'briefs/', 'drafts/', 'calls/', 'pilot/', 'contacts/', 'routes/', 'network/', 'sales/ledger.json', ...GUARD, 'outcomes.jsonl'],
   // The vendor test harness (PRD E7-S2, src/vendors.mjs): the known list, the test reports and the recorded passes. No drafting or
   // research action loads contacts/, so none of it reaches a brief or a message.
   vendors: ['contacts/'],

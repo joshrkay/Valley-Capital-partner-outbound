@@ -55,6 +55,7 @@ const STATE = {
   verified: ['ok', 'Verified.'],
   expired: ['error', 'EXPIRED. The verification is too old; verify it again before any email.'],
   other_address: ['error', 'UNVERIFIED. The verification on record is for a different address.'],
+  unsourced: ['error', 'UNSOURCED. The address has no source of its own, so the guard refuses it; set it again with its source.'],
 };
 
 export async function Contact({ client, id }) {

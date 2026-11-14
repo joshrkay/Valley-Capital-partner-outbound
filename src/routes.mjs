@@ -22,7 +22,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { readJson, writeJson, readText, writeText, listFiles, audit, safeId } from './store.mjs';
 import { LOADS } from './uow.mjs';
-import { loadContext, checkTouch, touchFromAccount, norm } from './guard.mjs';
+import { loadContext, checkTouch, touchFromAccount, norm, emailCheck } from './guard.mjs';
 import { eventsOf, actingSeller, resolveParty, isMers } from './sales.mjs';
 import { readNetwork, networkPath, entryOf, personKey, firmKey, normName } from './network.mjs';
 
@@ -110,23 +110,23 @@ export function validateCounselEvent(ev) {
   return e;
 }
 
-// ---- The account's own prerequisites, read defensively -------------------------------------------------------------------------
-// The guard reads contact.emailStatus today. Email verification (E7-S3) is being built beside this, so a nested status is read too,
-// and anything else is "unknown". Verified means a status of exactly "verified" and an address to verify.
-export function emailState(account) {
+// ---- The account's own prerequisites ----------------------------------------------------------------------------------------------
+// The address is read by the guard's own rule (src/guard.mjs emailCheck, PRD E7-S3), so the direct route never calls an address verified
+// when the guard would refuse it: verified needs a verification record for the current address, no older than contacts.json
+// reverifyDays, and a source of the address's own. `status` is that rule's state; `codes` are the guard's codes for what is missing.
+const EMAIL_WORDS = Object.freeze({ none: 'none on the account', unverified: 'unverified', verified: 'verified', expired: 'expired: verify it again', other_address: 'verified for another address: verify the current one', unsourced: 'no source of its own: set it again with its source' });
+function emailState(account, { config, now }) {
   const c = isObj(account?.contact) ? account.contact : {};
   const p = isObj(account?.person) ? account.person : {};
-  const status = [c.emailStatus, isObj(c.email) ? c.email.status : null, isObj(c.emailVerification) ? c.emailVerification.status : null, isObj(c.verification?.email) ? c.verification.email.status : null]
-    .find((s) => typeof s === 'string' && s.trim()) ?? 'unknown';
-  const present = [p.email, isObj(c.email) ? c.email.address : null].some((x) => typeof x === 'string' && /^[^\s@]+@[^\s@]+$/.test(x.trim()));
-  return { present, status, verified: present && status === 'verified' };
+  const r = emailCheck({ address: p.email, contact: c, day: ymd(now), reverifyDays: config?.contacts?.reverifyDays });
+  return { present: !!r.address, status: r.state, verified: r.verified, codes: r.problems.map((x) => x.code), label: EMAIL_WORDS[r.state] ?? r.state };
 }
 
 // The guard's view, as the follow-up checklist shows it (src/calls.mjs): the hard stops and whether the bank is already in conversation.
 // Shown, never overridden. An opt-out or a suppression of the institution also stops a choice: an introduction must not go around either.
 const HARD = (code) => code === 'KILL_SWITCH' || code.startsWith('SUPPRESSED_') || code === 'EMAIL_BOUNCED';
 const BLOCKS_CHOICE = new Set(['OPT_OUT', 'SUPPRESSED_INSTITUTION']);
-const CONTACT_CODES = new Set(['EMAIL_MISSING', 'EMAIL_UNVERIFIED', 'PERSONAL_EMAIL', 'ROLE_EMAIL', 'ROLE_UNCONFIRMED', 'NO_PROVENANCE', 'SUPPRESSED_PERSON', 'SUPPRESSED_EMAIL', 'SUPPRESSED_DOMAIN', 'EMAIL_BOUNCED']);
+const CONTACT_CODES = new Set(['EMAIL_MISSING', 'EMAIL_UNVERIFIED', 'EMAIL_UNSOURCED', 'PERSONAL_EMAIL', 'ROLE_EMAIL', 'ROLE_UNCONFIRMED', 'NO_PROVENANCE', 'SUPPRESSED_PERSON', 'SUPPRESSED_EMAIL', 'SUPPRESSED_DOMAIN', 'EMAIL_BOUNCED']);
 export function guardView({ account, ctx, now }) {
   const sent = ctx.touches.filter((t) => t.accountId === account.id && t.type === 'touch').length;
   const probe = checkTouch(touchFromAccount(account, { channel: 'email', step: sent + 1, date: ymd(now), sender: ctx.senders?.[0]?.id }), ctx);
@@ -158,7 +158,9 @@ function lenderSide({ account, research, ledger, county, R }) {
       sourceTier: f.evidence_tier, tier: R.tiers.finding[f.evidence_tier] ?? 'inferred', status: f.status, support: f.supportVerdict ?? 'not run', assetSpecific: f.asset_specific === true };
     const cap = f.supportVerdict === 'yes' ? null : R.tiers.supportNotYes;
     const people = entities.filter((e) => e.type === 'person');
-    for (const e of entities) mentions.push({ type: e.type, name: e.name.trim(), affiliation: String(e.affiliation ?? '').trim(), role: String(e.role ?? '').trim(), topic, ev, cap, people });
+    // How many associations the finding names: with two or more, a flat list of entities cannot say who appears with which.
+    const associations = new Set(entities.filter((e) => e.type === 'association').map((e) => firmKey(e.name))).size;
+    for (const e of entities) mentions.push({ type: e.type, name: e.name.trim(), affiliation: String(e.affiliation ?? '').trim(), role: String(e.role ?? '').trim(), topic, ev, cap, people, associations });
   }
   const key = account.institutionKey ?? null;
   for (const e of eventsOf(ledger)) {
@@ -195,7 +197,10 @@ const index = (entries, keysOf) => {
 };
 const targetKey = (t) => (t.kind === 'person' ? `p:${personKey(t.name)}` : t.kind === 'institution' ? `i:${t.id}` : `f:${firmKey(t.name)}`);
 export const routeId = (type, tKey, bridgeId) => `r-${createHash('sha256').update(`${type}|${tKey}|${bridgeId ?? ''}`).digest('hex').slice(0, 10)}`;
-const BOARD_TOPICS = new Set(['officer', 'board', 'membership']);
+// The topics whose people are matched one by one: the bank's officers and directors (a board route), and the people of its counsel and
+// advisors. A person a membership finding names (a speaker, a committee member) is never a director or officer on that evidence: they
+// are only ever the target of a forum route, through the association the same finding names.
+const PERSON_TOPICS = new Set(['officer', 'board', 'counsel', 'advisor']);
 
 function matchRoutes({ account, mentions, net, R }) {
   const people = index(net.people, (p) => [p.name, ...(p.aliases ?? [])].map(personKey));
@@ -204,7 +209,7 @@ function matchRoutes({ account, mentions, net, R }) {
   const memberships = index(net.memberships, (m) => [m.association, ...(m.aliases ?? [])].map(firmKey));
   const bankKeys = new Set([account.name, ...(account.aliases ?? [])].map(firmKey).filter(Boolean));
   const found = new Map();
-  const declined = new Set(), nameOnly = new Set();
+  const declined = new Set(), nameOnly = new Set(), multiAssociation = new Set(), peopleElsewhere = new Set();
   const add = ({ type, target, bridge, m, match, cap = null, extra = {} }) => {
     const id = routeId(type, targetKey(target), bridge.id);
     const tier = weakest(m.ev.tier, m.cap, cap);
@@ -217,7 +222,7 @@ function matchRoutes({ account, mentions, net, R }) {
   const consentOk = (p) => { if (p.introConsent === 'no') { declined.add(p.id); return false; } return true; };
   for (const m of mentions) {
     const asType = m.topic === 'counsel' ? 'counsel' : m.topic === 'advisor' ? 'advisor' : 'board';
-    if (m.type === 'person') {
+    if (m.type === 'person' && PERSON_TOPICS.has(m.topic)) {
       const person = { kind: 'person', name: m.name, affiliation: m.affiliation, role: m.role };
       const firm = m.affiliation ? { kind: 'firm', name: m.affiliation } : null;
       // The network knows this person by name.
@@ -250,11 +255,18 @@ function matchRoutes({ account, mentions, net, R }) {
       for (const f of firms.get(firmKey(m.name)) ?? []) add({ type: asType, target: firm, bridge: bridgeOf('firm', f), m, match: 'firm-name' });
       for (const p of peopleAt.get(firmKey(m.name)) ?? []) { if (consentOk(p, m)) add({ type: asType, target: firm, bridge: bridgeOf('person', p), m, match: 'works-at-the-firm' }); }
     } else if (m.type === 'association' && m.topic === 'membership') {
-      const targets = m.people.length ? m.people.map((p) => ({ kind: 'person', name: p.name.trim(), affiliation: String(p.affiliation ?? '').trim(), role: String(p.role ?? '').trim() })) : [{ kind: 'institution', id: account.id, name: account.name }];
+      // One association per finding. With two or more ("the bank belongs to A; its officer spoke at B"), nothing in a flat list of
+      // entities says which one the bank, or each person, appears with, so the finding gives no forum route. It is counted.
+      if (m.associations > 1) { multiAssociation.add(m.ev.id); continue; }
+      // Only the bank's own people (their affiliation is the bank, or none is given) appear "for the bank". A roster that names only
+      // people from elsewhere says nothing about the bank, so it gives no route; one that names nobody lists the bank itself.
+      const ours = m.people.filter((p) => { const a = String(p.affiliation ?? '').trim(); if (!a || bankKeys.has(firmKey(a))) return true; peopleElsewhere.add(`${m.ev.id}|${personKey(p.name) || normName(p.name)}`); return false; });
+      if (m.people.length && !ours.length) continue;
+      const targets = ours.length ? ours.map((p) => ({ kind: 'person', name: p.name.trim(), affiliation: String(p.affiliation ?? '').trim(), role: String(p.role ?? '').trim() })) : [{ kind: 'institution', id: account.id, name: account.name }];
       for (const ms of memberships.get(firmKey(m.name)) ?? []) for (const t of targets) add({ type: 'forum', target: t, bridge: bridgeOf('membership', ms), m, match: 'association', extra: { association: m.name } });
     }
   }
-  return { found: [...found.values()], declined: declined.size, nameOnly: nameOnly.size };
+  return { found: [...found.values()], declined: declined.size, nameOnly: nameOnly.size, multiAssociation: multiAssociation.size, peopleElsewhere: peopleElsewhere.size };
 }
 
 // ---- One line of reasoning per route, from fixed templates ----------------------------------------------------------------------
@@ -263,7 +275,7 @@ const evWords = (e) => (e.kind === 'finding' ? `finding ${e.id}: ${e.question}, 
     : `county record ${e.id}: ${String(e.documentType).replace(/_/g, ' ')}, ${e.date}`);
 const bridgeWords = (b) => (b.kind === 'person' ? `${b.name}${b.organization ? ` of ${b.organization}` : ''} (${b.id}), known to ${listWords(b.knownBy)}`
   : b.kind === 'firm' ? `${b.name} (${b.id}), known to ${listWords(b.knownBy)}` : `${b.association} (${b.id}), where ${b.principal} is a ${b.role}`);
-const ROLE_AT = { officer: 'is an officer of', board: 'is a director or senior officer of', membership: 'appears for' };
+const ROLE_AT = { officer: 'is an officer of', board: 'is a director or senior officer of' };
 const HOW = { 'works-at-the-firm': 'works there', 'name-and-organization': 'is the person the record names, at the same organization', 'name-only': 'has the same name as the person the record names: same name only: confirm it is the same person' };
 function reasoning(r, account, R) {
   const first = r.evidence.findings[0] ?? r.evidence.ledger[0] ?? r.evidence.county[0];
@@ -288,24 +300,31 @@ function reasoning(r, account, R) {
   return '';
 }
 
-const MISSING_WORDS = { PERSON_NOT_NAMED: 'a named person', ROLE_UNCONFIRMED: 'a confirmed role', EMAIL_UNVERIFIED: 'a verified address' };
-function directRoute({ account, research, R, guard, now }) {
+const MISSING_WORDS = { PERSON_NOT_NAMED: 'a named person', ROLE_UNCONFIRMED: 'a confirmed role', EMAIL_UNVERIFIED: 'a verified address', EMAIL_UNSOURCED: 'a source for the address' };
+// The direct route, from the account as it is and its research: built with the rest, and again whenever it is chosen (chooseRoute), so
+// its checklist never speaks for a person or an address the account no longer holds. Its evidence is the bank's own people findings
+// (topics mapped to officer, bank.people) and nothing else: a speaker list, a court filing or an advisor's page that happens to name the
+// person says nothing about who decides at the bank.
+function directRoute({ account, research, R, config, guard, now }) {
   const named = String(account.person?.name ?? '').trim();
   const pk = personKey(named);
   const researchDate = ISO.test(String(research?.date ?? '')) ? research.date : null;
   const checked = (Array.isArray(research?.findings) ? research.findings : []).filter((f) => ['verified', 'verified_pool'].includes(f.status) || (f.corroborations ?? 0) >= 2);
   const persons = (f) => (Array.isArray(f.entities) ? f.entities : []).filter((e) => e?.type === 'person' && typeof e.name === 'string');
   const evOf = (f) => { const d = pageDate(f.published); return { kind: 'finding', id: f.id, question: f.question_id, url: f.source_url, publisher: f.publisher ?? '', published: f.published ?? '', date: d ?? researchDate, dateBasis: d ? 'published' : 'research run', sourceTier: f.evidence_tier, tier: weakest(R.tiers.finding[f.evidence_tier] ?? 'inferred', f.supportVerdict === 'yes' ? null : R.tiers.supportNotYes), status: f.status, support: f.supportVerdict ?? 'not run', assetSpecific: f.asset_specific === true }; };
+  const officers = checked.filter((f) => R.topics[f.question_id] === 'officer' && persons(f).length);
   let target, findings;
   if (named) {
-    findings = checked.filter((f) => R.topics[f.question_id] && persons(f).some((e) => personKey(e.name) === pk));
+    findings = officers.filter((f) => persons(f).some((e) => personKey(e.name) === pk));
     target = { kind: 'person', name: named, title: account.person?.title ?? '' };
   } else {
-    findings = checked.filter((f) => R.topics[f.question_id] === 'officer' && persons(f).length);
-    target = { kind: 'candidates', names: uniq(findings.flatMap((f) => persons(f).map((e) => e.name.trim()))) };
+    findings = officers;
+    // Each candidate with the person findings that name them: naming one needs its own finding as the source (E7-S3, set-person --finding).
+    const byFinding = findings.filter((f) => f.kind === 'person').map((f) => ({ id: f.id, names: uniq(persons(f).map((e) => e.name.trim())) }));
+    target = { kind: 'candidates', names: uniq(findings.flatMap((f) => persons(f).map((e) => e.name.trim()))), byFinding };
   }
-  const email = emailState(account);
-  const missing = [...(named ? [] : ['PERSON_NOT_NAMED']), ...(account.contact?.roleConfirmed && named ? [] : ['ROLE_UNCONFIRMED']), ...(email.verified ? [] : ['EMAIL_UNVERIFIED'])];
+  const email = emailState(account, { config, now });
+  const missing = [...(named ? [] : ['PERSON_NOT_NAMED']), ...(account.contact?.roleConfirmed && named ? [] : ['ROLE_UNCONFIRMED']), ...(email.verified ? [] : email.codes.length ? email.codes : ['EMAIL_UNVERIFIED'])];
   const status = { personNamed: !!named, roleConfirmed: !!(named && account.contact?.roleConfirmed), roleConfirmedBy: named && account.contact?.roleConfirmed ? account.contact.roleConfirmedBy ?? null : null, email, missing, ready: !missing.length, guardCodes: guard.contactCodes };
   const evidence = { findings: findings.map(evOf), ledger: [], county: [], network: [] };
   const line = named
@@ -337,7 +356,8 @@ function suppressedParty(r, suppression) {
 const rulesHash = (r) => createHash('sha256').update(JSON.stringify(r)).digest('hex').slice(0, 16);
 const loadAccount = (dir, id) => { const a = readJson(join(dir, 'accounts', `${safeId(id)}.json`), null); if (!a) throw new Error(`No account "${id}".`); return a; };
 
-export function buildRoutes({ dir, id, rules, counselFeeders = COUNSEL_FEEDERS, now = new Date(), env = process.env }) {
+// `auditLine: false` is for a deletion request (src/forget.mjs), which rebuilds routes inside its own unit of work and logs one line.
+export function buildRoutes({ dir, id, rules, counselFeeders = COUNSEL_FEEDERS, now = new Date(), env = process.env, auditLine = true }) {
   const R = rules.routes;
   const errs = validateRoutesRules(R);
   if (errs.length) throw new Error(`routes.json has errors:\n  ${errs.join('\n  ')}`);
@@ -376,7 +396,7 @@ export function buildRoutes({ dir, id, rules, counselFeeders = COUNSEL_FEEDERS, 
     else if (R.consent.required && r.bridge?.kind === 'person' && r.bridge.introConsent !== 'yes') held.push({ ...r, heldBecause: 'CONSENT_NEEDED', heldWhy: 'They have not agreed to be asked for introductions, and routes.json requires it (D-R2).' });
     else ranked.push(r);
   }
-  ranked.push(directRoute({ account, research, R, guard, now }));
+  ranked.push(directRoute({ account, research, R, config: rules.config, guard, now }));
   const order = (a, b) => (R.order.types.indexOf(a.type) - R.order.types.indexOf(b.type)) || (TIERS.indexOf(a.tier) - TIERS.indexOf(b.tier)) || ((a.current ? 0 : 1) - (b.current ? 0 : 1))
     || (count(b) - count(a)) || cmp(a.id, b.id);
   ranked.sort(order);
@@ -394,7 +414,7 @@ export function buildRoutes({ dir, id, rules, counselFeeders = COUNSEL_FEEDERS, 
       county: { feeders: counselFeeders.length, events: county.length },
     },
     guard, routes: ranked, held,
-    leftOut: { declined: matched.declined, nameOnly: matched.nameOnly, ...leftOut },
+    leftOut: { declined: matched.declined, nameOnly: matched.nameOnly, multiAssociation: matched.multiAssociation, peopleElsewhere: matched.peopleElsewhere, ...leftOut },
     chosen: null, choices: prev?.choices ?? [],
     ...(prev?.choiceRemoved ? { choiceRemoved: prev.choiceRemoved } : {}),
   };
@@ -405,11 +425,13 @@ export function buildRoutes({ dir, id, rules, counselFeeders = COUNSEL_FEEDERS, 
       : { routeId: prev.chosen.routeId, type: prev.chosen.type, by: prev.chosen.by, at: prev.chosen.at, supported: false, checklist: null };
   }
   write(dir, record);
-  audit(dir, { type: 'routes_built', accountId: account.id, routes: ranked.length, held: held.length });
+  if (auditLine) audit(dir, { type: 'routes_built', accountId: account.id, routes: ranked.length, held: held.length });
   return record;
 }
 const count = (r) => r.evidence.findings.length + r.evidence.ledger.length + r.evidence.county.length;
 const write = (dir, record) => { const p = routesPaths(dir, record.account); writeJson(p.json, record); writeText(p.md, renderRoutes(record)); };
+// Writes a routes record and its Markdown, for a deletion request that changed a record after building it.
+export const writeRoutes = write;
 
 // { record, markdown } or null.
 export function readRoutes({ dir, id }) {
@@ -435,11 +457,25 @@ export function buildChecklist({ record, route: r, guard }) {
   const stops = guard.hardStops.map((h) => `${h.code}: ${h.message}`);
   const ask = [], cite = [], never = [], after = [];
   if (r.type === 'direct') {
-    const s = r.status;
-    if (!s.personNamed) ask.push(`Name the person, from the candidates in the brief: outbound account set-person --account ${record.account} --name NAME --by NAME.`);
-    if (!s.roleConfirmed) ask.push(`Confirm the role after reading the sources: outbound account confirm-role --account ${record.account} --by NAME.`);
-    if (!s.email.verified) ask.push(`Verify the address (E7-S3): the guard refuses any email to an address that is not verified (status: ${s.email.status}).`);
-    after.push(`Then draft and approve as for any account: outbound draft run --account ${record.account} --channel letter; the guard checks every touch.`);
+    const s = r.status, acct = record.account;
+    // Every command here is one the command line accepts as written, once its capitals are filled in: naming a person, or setting an
+    // address, needs where it came from (E7-S3).
+    if (!s.personNamed) {
+      const by = (r.target.byFinding ?? []).filter((f) => f.names.length);
+      ask.push(by.length
+        ? `Name the person, from the candidates in the brief: outbound account set-person --account ${acct} --name NAME --finding ID --by NAME, where ID is the candidate's own finding (${by.map((f) => `${f.id}: ${f.names.join(', ')}`).join('; ')}).`
+        : `Name the person, with where the name came from: outbound account set-person --account ${acct} --name NAME --url URL --by NAME, where URL is the page on the bank's own site that names them (or --source principal_known). No research names a candidate yet: outbound research run --account ${acct}.`);
+    }
+    if (!s.roleConfirmed) ask.push(`Confirm the role after reading the sources: outbound account confirm-role --account ${acct} --by NAME.`);
+    if (!s.email.verified) {
+      const verify = `outbound account verify-email --account ${acct} --by NAME --method institution_site --url URL (or --method correspondence, or principal_known)`;
+      const codes = s.email.codes ?? [];
+      if (!s.email.present || codes.includes('EMAIL_UNSOURCED')) {
+        ask.push(`${s.email.present ? 'Set the address again, with where it was seen: the guard refuses an address with no source of its own (EMAIL_UNSOURCED), verified or not' : 'Set the address, with where it was seen'}: outbound account set-email --account ${acct} --email ADDRESS --url URL --by NAME (or --source correspondence, or principal_known).`);
+        ask.push(`Then verify it (E7-S3): ${verify}. A new address starts unverified, and the guard refuses any email to it until it is verified.`);
+      } else ask.push(`Verify the address (E7-S3): ${verify}. The guard refuses any email to an address that is not verified (now: ${s.email.label ?? s.email.status}).`);
+    }
+    after.push(`Then draft and approve as for any account: outbound draft run --account ${acct} --channel letter; the guard checks every touch.`);
   } else {
     const b = r.bridge;
     if (b.kind === 'person') {
@@ -456,7 +492,7 @@ export function buildChecklist({ record, route: r, guard }) {
     if (r.fdicReceiver) ask.push(`This advisor works for the FDIC as receiver: it leads into the FDIC's sale of ${bank}'s loans, not to anyone at a bank.`);
     never.push('Ask for an introduction only. Do not ask them to forward a message or to pitch for us.');
     never.push('Never name a property, loan or borrower, or what we see in the bank\'s numbers.');
-    after.push(`If they introduce you: name the person (outbound account set-person --account ${record.account} --name NAME --by NAME), confirm the role after reading the sources (outbound account confirm-role), and verify the address. The drafter and the guard then work as for any account.`);
+    after.push(`If they introduce you: name the person, with the introduction as the source (outbound account set-person --account ${record.account} --name NAME --source correspondence --by NAME), confirm the role after reading the sources (outbound account confirm-role --account ${record.account} --by NAME), then set the address with where it was seen and verify it (outbound account set-email, then verify-email). The drafter and the guard then work as for any account.`);
     after.push('A message you write yourself to anyone at the bank is still a touch for the guard: record it (outbound guard record), and record any reply or meeting (outbound guard event), so the caps and the stop rules count it.');
   }
   for (const e of [...r.evidence.findings, ...r.evidence.ledger, ...r.evidence.county]) cite.push(e.assetSpecific ? `${evCite(e)}. For your own context only: never mention its property, loan or borrower.` : evCite(e));
@@ -467,7 +503,7 @@ export function chooseRoute({ dir, id, routeId: rid, by, rules, now = new Date()
   const who = needBy(by);
   const rec = readJson(routesPaths(dir, id).json, null);
   if (!rec) throw new Error(`No routes yet for ${id}. Run: outbound routes build --account ${id}`);
-  const route = (rec.routes ?? []).find((r) => r.id === rid);
+  let route = (rec.routes ?? []).find((r) => r.id === rid);
   if (!route) {
     const h = (rec.held ?? []).find((r) => r.id === rid);
     throw new Error(h ? `Route ${rid} is held: ${h.heldBecause}. ${h.heldWhy}` : `No route ${rid} for ${id}. Run outbound routes show --account ${id} for the list.`);
@@ -476,6 +512,13 @@ export function chooseRoute({ dir, id, routeId: rid, by, rules, now = new Date()
   const ctx = loadContext({ dir, config: rules.config, env });
   const guard = guardView({ account, ctx, now });
   if (guard.blocksChoice) throw new Error(`Not chosen: ${guard.hardStops.filter((h) => BLOCKS_CHOICE.has(h.code)).map((h) => h.code).join(', ')}. An introduction must not go around an opt-out or a suppression.`);
+  // The direct route is the account's own person and their prerequisites, which change without a build (a principal names someone
+  // else, confirms a role, verifies an address). So it is made again from the account, its research and the guard as they are now,
+  // and stored in place of the old one: the checklist never says a person is ready because they were at the last build.
+  if (route.type === 'direct') {
+    route = { ...directRoute({ account, research: readJson(join(dir, 'research', `${safeId(id)}.json`), null), R: rules.routes, config: rules.config, guard, now }), rank: route.rank };
+    rec.routes = rec.routes.map((r) => (r.id === route.id ? route : r));
+  }
   // The stored route is checked again against the network and the suppression list as they are now: a contact may have said no, an
   // entry may be gone, or a party may have been suppressed since the build.
   if (route.bridge) {
@@ -505,8 +548,19 @@ export function removeNetworkEntry({ dir, id, by, now = new Date() }) {
   const bucket = { person: 'people', firm: 'firms', membership: 'memberships' }[found.kind];
   const { [id]: _gone, ...rest } = net[bucket];
   writeJson(networkPath(dir), { ...net, [bucket]: rest });
+  const { routeFiles, routesRemoved } = dropNetworkEntries({ dir, removed: [{ id, bucket }], now, reason: 'A network entry it used was removed, so the choice was removed with it.' });
+  audit(dir, { type: 'network_removed', id, entry: found.kind, routeFiles, routesRemoved, by: who });
+  return { id, kind: found.kind, routeFiles, routesRemoved };
+}
+
+// Rewrites every routes file without the routes that used any of these network entries (as the bridge, or in the evidence), and drops a
+// choice that used one, saying so in the file (`reason`, which names no one). `removed`: [{ id, bucket }], bucket being people, firms or
+// memberships. For a principal removing an entry (above), and for a deletion request that removed the person's entry (src/forget.mjs).
+export function dropNetworkEntries({ dir, removed, now = new Date(), reason }) {
+  const ids = removed.map((x) => x.id);
+  const byBucket = removed.reduce((o, x) => ({ ...o, [x.bucket]: (o[x.bucket] ?? 0) + 1 }), {});
   let routeFiles = 0, routesRemoved = 0;
-  const uses = (r) => r?.bridge?.id === id || (r?.evidence?.network ?? []).includes(id);
+  const uses = (r) => ids.includes(r?.bridge?.id) || (r?.evidence?.network ?? []).some((n) => ids.includes(n));
   for (const f of listFiles(join(dir, 'routes'), '.json')) {
     const rec = readJson(join(dir, 'routes', f), null);
     if (!rec || !Array.isArray(rec.routes)) continue;
@@ -516,12 +570,11 @@ export function removeNetworkEntry({ dir, id, by, now = new Date() }) {
     rec.routes = rec.routes.filter((r) => !uses(r)).map((r, i) => ({ ...r, rank: i + 1 }));
     rec.held = (rec.held ?? []).filter((r) => !uses(r));
     rec.choices = (rec.choices ?? []).filter((c) => !dropped.includes(c.routeId));
-    if (rec.chosen && dropped.includes(rec.chosen.routeId)) { rec.chosen = null; rec.choiceRemoved = { at: now.toISOString(), reason: 'A network entry it used was removed, so the choice was removed with it.' }; }
-    rec.inputs = { ...rec.inputs, network: { ...rec.inputs?.network, [bucket]: Math.max(0, (rec.inputs?.network?.[bucket] ?? 1) - 1) } };
+    if (rec.chosen && dropped.includes(rec.chosen.routeId)) { rec.chosen = null; rec.choiceRemoved = { at: now.toISOString(), reason }; }
+    rec.inputs = { ...rec.inputs, network: { ...rec.inputs?.network, ...Object.fromEntries(Object.entries(byBucket).map(([b, n]) => [b, Math.max(0, (rec.inputs?.network?.[b] ?? n) - n)])) } };
     write(dir, rec);
   }
-  audit(dir, { type: 'network_removed', id, entry: found.kind, routeFiles, routesRemoved, by: who });
-  return { id, kind: found.kind, routeFiles, routesRemoved };
+  return { routeFiles, routesRemoved };
 }
 
 // ---- The written routes (routes/<id>.md) -----------------------------------------------------------------------------------------
@@ -533,7 +586,7 @@ const evLink = (e) => (e.kind === 'finding' ? `[${e.id}](${e.url}) (${e.question
 function routeLines(r, prefix) {
   const L = [`${prefix}**${TYPE_LABEL[r.type]}**: ${targetShort(r.target)}${bridgeShort(r.bridge)} · ${r.tier}${r.current || !r.asOf ? '' : ' · NOT CURRENT'} · id \`${r.id}\``];
   L.push(`   - ${r.reasoning}`);
-  if (r.status) L.push(`   - Status: person named: ${r.status.personNamed ? 'yes' : 'no'}; role confirmed: ${r.status.roleConfirmed ? `yes${r.status.roleConfirmedBy ? ` (by ${r.status.roleConfirmedBy})` : ''}` : 'no'}; address: ${r.status.email.present ? r.status.email.status : 'none on the account'}${r.status.ready ? '. Ready.' : '.'}`);
+  if (r.status) L.push(`   - Status: person named: ${r.status.personNamed ? 'yes' : 'no'}; role confirmed: ${r.status.roleConfirmed ? `yes${r.status.roleConfirmedBy ? ` (by ${r.status.roleConfirmedBy})` : ''}` : 'no'}; address: ${r.status.email.present ? r.status.email.label ?? r.status.email.status : 'none on the account'}${r.status.ready ? '. Ready.' : '.'}`);
   const ev = [...r.evidence.findings, ...r.evidence.ledger, ...r.evidence.county].map(evLink);
   if (ev.length || r.evidence.network.length) L.push(`   - Evidence: ${[...ev, ...(r.evidence.network.length ? [`network ${r.evidence.network.join(', ')}`] : [])].join(' · ')}`);
   if (!r.current) L.push(r.asOf ? `   - Not current: the newest evidence is from ${r.asOf} (limit ${r.maxAgeDays} days, routes.json). Check it is still true.` : '   - No dated evidence: no finding names this target yet.');
@@ -563,7 +616,8 @@ export function renderRoutes(r) {
   if (r.held?.length) { L.push('', `## Held: not choosable (${r.held.length})`, ''); r.held.forEach((x) => L.push(...routeLines(x, '- '))); }
   const lo = r.leftOut ?? {};
   L.push('', '## Left out', '', `- Network contacts who said no to introductions: ${lo.declined ?? 0}. Same-name matches dropped (routes.json): ${lo.nameOnly ?? 0}.`,
-    `- Findings whose quote could not be checked: ${lo.uncheckedFindings ?? 0}. Findings that name no one: ${lo.findingsWithoutNames ?? 0}. Known buyers of the bank's loans in the ledger (not a route, D-R6): ${lo.ledgerBuyers ?? 0}.`);
+    `- Findings whose quote could not be checked: ${lo.uncheckedFindings ?? 0}. Findings that name no one: ${lo.findingsWithoutNames ?? 0}. Known buyers of the bank's loans in the ledger (not a route, D-R6): ${lo.ledgerBuyers ?? 0}.`,
+    `- Membership findings that name more than one association: ${lo.multiAssociation ?? 0} (nothing says who appears with which). People a membership finding names from another organization: ${lo.peopleElsewhere ?? 0}.`);
   L.push('', '## Chosen route', '');
   if (r.chosen?.supported && r.chosen.checklist) L.push(...renderChecklist(r.chosen.checklist, r.chosen));
   else if (r.chosen) L.push(`The chosen route \`${r.chosen.routeId}\` (${r.chosen.type}, by ${r.chosen.by}) is no longer supported by the evidence. Build again, or choose another.`, '');

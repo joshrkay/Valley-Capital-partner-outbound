@@ -153,10 +153,11 @@ export async function verifyEmail(client, { id, by, method, url, vendor, seen, r
 // redaction migration would write the documents and silently leave the person in the touch log.
 export async function forgetPerson(client, { id, by, reason, confirm }) {
   const [{ LOADS }, forget] = await Promise.all([engine('src/uow.mjs'), engine('src/forget.mjs')]);
+  const rules = await loadRules();   // a routes file that names them is rebuilt with routes.json (PRD E17)
   need(id, 'An account id');
   const probe = await client.flush({ docs: [], lines: [] });
   if (typeof probe?.redacted !== 'number') throw new Error('The platform database has not run the redaction migration (20261114200000_log_redaction.sql), so a deletion request cannot reach the touch log. Nothing was changed. An operator runs the migration first.');
-  const { result } = await client.unitOfWork(LOADS.forget, (dir) => forget.forgetPerson({ dir, id, by, reason, confirm }));
+  const { result } = await client.unitOfWork(LOADS.forget, (dir) => forget.forgetPerson({ dir, id, by, reason, confirm, rules }));
   return result;
 }
 

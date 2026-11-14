@@ -12,6 +12,10 @@
 //   calls/          notes, call briefs, proposals and follow-ups are redacted; they leave every people list.
 //   pilot/          truth sheets are redacted; review verdicts on removed findings are dropped.
 //   contacts/       they leave the known list (contacts/known.json); vendor reports hold refs only, and are redacted all the same.
+//   network/        the firm's network can hold them if the firm knows them: their entry (their name at their institution, or their address
+//                   or phone anywhere) is removed, with every route and choice that used it (src/routes.mjs dropNetworkEntries).
+//   routes/         a routes file that names them (a target, the direct route's person or candidates, a reasoning line, a checklist) is
+//                   rebuilt from the scrubbed research and network (src/routes.mjs buildRoutes); a choice whose route named them goes.
 //   touches.jsonl   a value that mentions them becomes "[removed]". The event itself (type, account, institution, date) stays: a reply or
 //                   an opt-out must keep stopping the sequence. outcomes.jsonl the same (it holds no names by design).
 //   suppression.json  plain entries for their address or name become hashes; hashed entries for the address and for the name at this
@@ -27,6 +31,9 @@ import { norm, normName, nameTokens, emailHashes, nameHashes, personHashes, supp
 import { renderBrief } from './research.mjs';
 import { instKey } from './vendors.mjs';
 import { LOADS, withUnitOfWork, snapshotFromDir, applyPlanToDir } from './uow.mjs';
+import { buildRoutes, dropNetworkEntries, renderRoutes, writeRoutes, validateRoutesRules } from './routes.mjs';
+import { networkPath } from './network.mjs';
+import { loadRules } from './rules.mjs';
 
 const need = (v, what) => { const s = String(v ?? '').trim(); if (!s || s === 'true') throw new Error(`${what} is required.`); return s; };
 const str = (v) => (typeof v === 'string' ? v.trim() : '');
@@ -109,13 +116,22 @@ const redactLine = (line, m, level) => (line && typeof line === 'object' && !Arr
 // ---- The deletion -----------------------------------------------------------------------------------------------------------------
 // `confirm` is the account's name, typed by the principal. `name` and `email` name a person who is no longer on the account; by default
 // it is the account's own person.
-export function forgetPerson({ dir, id, by, reason, confirm, name, email, now = new Date() }) {
+// `rules` (loadRules()) rebuilds the routes; it is loaded here when not given.
+export function forgetPerson({ dir, id, by, reason, confirm, name, email, rules, now = new Date() }) {
   const who = need(by, 'A name for who made the request (--by)');
   const why = need(reason, 'A reason');
   safeId(id);
   const acct = readJson(join(dir, 'accounts', `${id}.json`), null);
   if (!acct) throw new Error(`No account "${id}".`);
   if (!str(confirm) || norm(confirm) !== norm(acct.name)) throw new Error(`To forget a person, type the account's name exactly as it is (${acct.name}) to confirm.`);
+  // The routes are rebuilt with the committed rules (routes.json). They are checked before anything is written, so an error in the rule
+  // file stops the deletion before it starts, never halfway.
+  let ruleSet = rules ?? null;
+  const routeRules = () => (ruleSet ??= loadRules());
+  if (listFiles(join(dir, 'routes'), '.json').length) {
+    const errs = validateRoutesRules(routeRules().routes);
+    if (errs.length) throw new Error(`routes.json has errors, and the routes must be rebuilt without the person. Nothing was changed:\n  ${errs.join('\n  ')}`);
+  }
   const cur = acct.person ?? {};
   const explicit = !!(str(name) || str(email));
   const isCurrent = !explicit || (!!str(name) && normName(name) === normName(cur.name)) || (!!lower(email) && lower(email) === lower(cur.email));
@@ -137,7 +153,7 @@ export function forgetPerson({ dir, id, by, reason, confirm, name, email, now = 
   const isPersonOf = (a) => { const p = a.person ?? {}; return (!!target.email && lower(p.email) === target.email) || (!!target.name && normName(p.name) === normName(target.name) && sameInst(a)); };
   // How hard to look in a store of one account: its own file, drafts and calls (weak); its institution (strong); elsewhere (contact).
   const level = (aid, own = false) => (aid === id && own ? 'weak' : !byId.has(aid) ? 'strong' : sameInst(byId.get(aid)) ? 'strong' : 'contact');
-  const counts = { accounts: 0, research: 0, facts: 0, briefs: 0, drafts: 0, calls: 0, pilot: 0, touches: 0, outcomes: 0, suppression: 0, contacts: 0 };
+  const counts = { accounts: 0, research: 0, facts: 0, briefs: 0, drafts: 0, calls: 0, pilot: 0, touches: 0, outcomes: 0, suppression: 0, contacts: 0, routes: 0, network: 0 };
   const write = (store, path, before, after, text = false) => { if (text ? before === after : same(before, after)) return; text ? writeText(path, after) : writeJson(path, after); counts[store]++; };
 
   // Accounts, computed first: the briefs are rebuilt from them. Written last.
@@ -275,9 +291,60 @@ export function forgetPerson({ dir, id, by, reason, confirm, name, email, now = 
   write('suppression', supPath, sup, { ...sup, entries });
 
   for (const a of accounts) write('accounts', join(dir, 'accounts', `${a.id}.json`), a, nextAccounts.get(a.id));
+
+  // The firm's network and the routes (PRD E17), after the accounts: a routes file is rebuilt from the accounts, research and network
+  // as they now stand. Counted per file changed, the json and the md each.
+  const routesBefore = routesFiles(dir);
+  const ours = new Set(instNames.map(instKey).filter(Boolean));
+  const atInst = (org) => !!str(org) && (instSet.has(norm(org)) || ours.has(instKey(org)));
+  // The network (network/network.json) can hold them if the firm knows them: their entry (their name at their institution, or their
+  // address or phone anywhere) is removed, and every route and choice that used it goes with it, as when a principal removes an entry.
+  // Every other entry is redacted like any record: strongly at their institution, for their contact details elsewhere.
+  const netPath = networkPath(dir);
+  const net = readJson(netPath, null);
+  if (net && typeof net === 'object') {
+    const people = net.people && typeof net.people === 'object' ? net.people : {};
+    const isThem = (p) => !!p && typeof p === 'object' && (mentionsDeep(p, m, 'contact') || (atInst(p.organization) && [p.name, ...(Array.isArray(p.aliases) ? p.aliases : [])].some((n) => typeof n === 'string' && m.isName(n, 'strong'))));
+    const gone = Object.keys(people).filter((k) => isThem(people[k]));
+    const keep = Object.fromEntries(Object.entries(people).filter(([k]) => !gone.includes(k)).map(([k, p]) => [k, scrub(p, m, atInst(p?.organization) ? 'strong' : 'contact')]));
+    write('network', netPath, net, { ...net, people: keep, ...(net.firms ? { firms: scrub(net.firms, m, 'contact') } : {}), ...(net.memberships ? { memberships: scrub(net.memberships, m, 'contact') } : {}) });
+    if (gone.length) dropNetworkEntries({ dir, removed: gone.map((k) => ({ id: k, bucket: 'people' })), now, reason: CHOICE_REMOVED });
+  }
+  // The routes (routes/<account>.json and .md) hold lender-side names: targets, the direct route's person and candidates, reasoning
+  // lines, checklists. A file that still mentions them (at its account's level, as for research) is rebuilt from the scrubbed research
+  // and network by the routes' own code (buildRoutes: code only, no model), so it says only what the records now say. A choice whose
+  // route named them is removed, saying so. A routes file whose account is gone is redacted instead.
+  for (const f of listFiles(join(dir, 'routes'), '.json')) {
+    const aid = f.replace(/\.json$/, '');
+    const p = join(dir, 'routes', f), mdPath = join(dir, 'routes', `${aid}.md`);
+    const rec = readJson(p, null);
+    if (!rec || typeof rec !== 'object') continue;
+    const lv = level(aid);
+    const md = readText(mdPath, null);
+    if (!mentionsDeep(rec, m, lv) && !(md !== null && m.mentions(md, lv))) continue;
+    const rebuildable = /^[a-z0-9][a-z0-9_-]{0,63}$/.test(aid) && byId.has(aid) && readJson(join(dir, 'accounts', `${aid}.json`), null)?.id === aid;
+    if (!rebuildable) { const next = scrub(rec, m, lv); writeJson(p, next); writeText(mdPath, renderRoutes(next)); continue; }
+    const named = new Set([...(rec.routes ?? []), ...(rec.held ?? [])].filter((r) => r?.type !== 'direct' && mentionsDeep(r, m, lv)).map((r) => r.id));
+    const built = buildRoutes({ dir, id: aid, rules: routeRules(), now, auditLine: false });
+    const live = new Set([...built.routes, ...built.held].map((r) => r.id));
+    if (built.chosen && !live.has(built.chosen.routeId) && named.has(built.chosen.routeId)) {
+      built.chosen = null;
+      built.choiceRemoved = { at, reason: CHOICE_REMOVED };
+    }
+    built.choices = (built.choices ?? []).filter((c) => live.has(c.routeId) || !named.has(c.routeId));
+    writeRoutes(dir, built);
+  }
+  const routesAfter = routesFiles(dir);
+  counts.routes = [...new Set([...Object.keys(routesBefore), ...Object.keys(routesAfter)])].filter((k) => routesBefore[k] !== routesAfter[k]).length;
+
   audit(dir, { type: 'person_forgotten', accountId: id, by: who, at, counts });
   return { accountId: id, counts };
 }
+
+const CHOICE_REMOVED = 'A deletion request removed a person it used, so the choice was removed with it.';
+// Every routes file, json and md, as text: to count what a deletion changed there.
+const routesFiles = (dir) => Object.fromEntries(listFiles(join(dir, 'routes'), '').filter((n) => /\.(json|md)$/.test(n))
+  .map((n) => [n, n.endsWith('.json') ? JSON.stringify(readJson(join(dir, 'routes', n), null)) : readText(join(dir, 'routes', n), null)]));
 
 function tombstone(aid, channel, step, at) {
   return `---\naccount: ${aid}\nchannel: ${channel}\nstep: ${step}\nstatus: forgotten\n---\n\nRemoved on a deletion request on ${ymd(at)}. Nothing of the message is kept. Draft it again for another person.\n`;

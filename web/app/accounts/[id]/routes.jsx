@@ -18,7 +18,7 @@ function Direct({ r }) {
     <dl className="kv small">
       <dt>Person</dt><dd>{s.personNamed ? r.target.name : <span className="muted">not named yet{r.target.names?.length ? ` (candidates: ${r.target.names.join(', ')})` : ''}</span>}</dd>
       <dt>Role</dt><dd>{s.roleConfirmed ? `confirmed${s.roleConfirmedBy ? ` by ${s.roleConfirmedBy}` : ''}` : 'unconfirmed'}</dd>
-      <dt>Address</dt><dd>{s.email.present ? (s.email.verified ? 'verified' : `not verified (${s.email.status})`) : 'none on the account'}</dd>
+      <dt>Address</dt><dd>{s.email.present ? (s.email.verified ? 'verified' : `not verified (${s.email.label ?? s.email.status})`) : 'none on the account'}</dd>
       <dt>Ready</dt><dd>{s.ready ? 'yes' : 'no'}</dd>
     </dl>
   );
@@ -78,7 +78,7 @@ export async function Routes({ client, id }) {
             })}</tbody>
           </table></div>
           {rec.held.length ? <><h3>Held: not choosable</h3><ul className="small">{rec.held.map((r) => <li key={r.id}>{TYPE_LABEL[r.type]}: {routeRow(r).target} via {routeRow(r).bridge}. {r.heldBecause}: {r.heldWhy}</li>)}</ul></> : null}
-          <p className="small muted">Left out: {rec.leftOut.declined} contact(s) who said no to introductions, {rec.leftOut.uncheckedFindings} finding(s) whose quote could not be checked, {rec.leftOut.nameOnly} same-name match(es) dropped, {rec.leftOut.ledgerBuyers} known buyer(s) of the bank's loans (not a route).</p>
+          <p className="small muted">Left out: {rec.leftOut.declined} contact(s) who said no to introductions, {rec.leftOut.uncheckedFindings} finding(s) whose quote could not be checked, {rec.leftOut.nameOnly} same-name match(es) dropped, {rec.leftOut.ledgerBuyers} known buyer(s) of the bank's loans (not a route), {rec.leftOut.multiAssociation ?? 0} membership finding(s) naming more than one association, {rec.leftOut.peopleElsewhere ?? 0} person(s) a membership finding names from another organization.</p>
           {rec.chosen?.supported && rec.chosen.checklist ? <Checklist chosen={rec.chosen} /> : null}
           {rec.chosen && !rec.chosen.supported ? <div className="banner warn small">The chosen route <span className="mono">{rec.chosen.routeId}</span> is no longer supported by the evidence. Build again, or choose another.</div> : null}
           {rec.choiceRemoved ? <p className="small muted">A choice was removed on {String(rec.choiceRemoved.at).slice(0, 10)}: {rec.choiceRemoved.reason}</p> : null}

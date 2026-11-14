@@ -2,7 +2,7 @@
 // and memberships; a sale ledger; and the firm's network. Every name, firm, association and page is invented. Distinctive names make a
 // leak easy to spot.
 import { join } from 'node:path';
-import { makeDir, put, SENDER } from './kit.mjs';
+import { makeDir, put, SENDER, CONTACT } from './kit.mjs';
 import { loadRules } from '../src/rules.mjs';
 import { addPerson, addFirm, addMembership } from '../src/network.mjs';
 import { listingEvent, assignmentEvent } from '../src/sales.mjs';
@@ -46,7 +46,8 @@ export const FINDINGS = [
 export const ACCOUNT = (over = {}) => ({
   id: ID, name: 'Acme Community Bank', aliases: ['Acme Bancorp'], type: 'bank', audience: 'bank', sectors: ['multifamily'], tier: 'A', institutionKey: KEY,
   person: { name: 'Jordan Sample', title: 'Chief Credit Officer', email: 'jordan@acmebank.test', phone: '555-0199', phoneType: 'landline', timezone: 'America/Phoenix', mailingAddress: '10 Main St, Anytown' },
-  contact: { emailStatus: 'verified', roleConfirmed: true, roleConfirmedBy: BY, provenance: [{ source: 'bank leadership page', date: '2026-11-01' }] },
+  // A complete contact, as the guard reads it (E7-S3): every field sourced, the address verified on 2026-11-01, the role confirmed.
+  contact: CONTACT({ roleConfirmedBy: BY }),
   ...over,
 });
 
