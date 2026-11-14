@@ -28,13 +28,13 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 
 | Epic | Release | Priority | Depends on | Outside blockers |
 |---|---|---|---|---|
-| E17 A backtest of the score | Now | P0 | E3, E6, E13, E16 (built) | None |
+| E17 A backtest of the score | Now | P0 | E3, E6, E13, E16 (built) | None for the FDIC labels. The SEC-derived label (`disclosed_sale`) waits for the SEC contact (Q11) and confirmed filers |
 | E18 Pressure at banks the SEC never sees | Now (S1 to S3), R2 (S4) | P0 (S1, S2), P1 (S3, S4) | E2, E3, E6 | OCC API key (D3), for one source only |
 | E19 Intermediaries | R2 | P1 (S1 to S4), P2 (S5, S6) | E4, E16, E15 | Approved claims for intermediaries; the credibility package (research agenda D9) |
 | E20 A give-first market note | R3 | P1 | E3, E4, E16, E10, the website's news desk | Q24, Q25; the site live with a named principal |
 | E21 New sellers | Now (S1, S3 spikes), later (S2, S4) | P1 (spikes), P2 (builds) | E2, E3, E6, E14 | D2 (credit unions in or out) |
 
-**Suggested order:** E17-S1 to S4 and E18-S1 first. They need nothing from anyone, and E17 tells the principals whether the score is worth acting on before the first send. Then E18-S2 and S3, then the E21 spikes, then E19, then E20 once the site is live.
+**Suggested order:** E17-S1 to S4 and E18-S1 first. They need nothing from anyone (E17 starts with the FDIC labels only; see E17-S2), and E17 tells the principals whether the score is worth acting on before the first send. Then E18-S2 and S3, then the E21 spikes, then E19, then E20 once the site is live.
 
 ---
 
@@ -62,7 +62,7 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 - [ ] **Label kinds** (placeholders, decision D-B2):
   - `failure`, from `sources/fdic/failed.json` (all three failure sources, E3-S5);
   - `assisted_merger`, from `sources/fdic/events.json`;
-  - `disclosed_sale`, from the sale ledger's `bank_disclosed_sale` events and the filings listener's held-for-sale and loan-sale searches (E13-S1, E16-S3). EDGAR full-text search reaches back to 2001, so `outbound backtest labels --filings` runs the saved searches over the window for **confirmed filers only**;
+  - `disclosed_sale`, from the filings listener's held-for-sale, loan-sale and note-sale searches only (E13-S1). EDGAR full-text search reaches back to 2001, so `outbound backtest labels --filings` runs those saved searches over the window for **confirmed filers only**. An 8-K Item 2.01 hit is **never** a label on its own: it reports an acquisition or a disposition, so the bank may have bought (E16-S3). It becomes a label only when a principal has read the filing and recorded that the bank sold. **This label kind needs the SEC contact (Q11) and confirmed filers.** Until both exist it is off, and the report lists it as unavailable rather than leaving it out silently;
   - `fdic_loan_sale`, an FDIC loan-sale announcement whose receivership matched the bank (E16-S2);
   - `enforcement_order`, once E18-S2 is built.
 - [ ] Ordinary mergers are **not** labels by default. A merger may follow pressure or may not, and counting every merger would reward size.
@@ -74,20 +74,23 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 - [ ] **One scorer.** The backtest imports `scoreBank`. It never copies or forks it. A test proves it, by checking that a change to a component's weight changes the backtest's output.
 - [ ] Hard filters that depend on the buy box run with the buy box as it stands. Placeholders are allowed here, because the output is an analysis, not a list. Every output is marked `PROVISIONAL` while the buy box has placeholders, as `--draft-buybox` does today.
 - [ ] `--scoring PATH` runs an alternative scoring file without touching the committed one. `--compare A B` runs two and reports them side by side.
+- [ ] **A holdout, declared first.** `config.backtest.holdoutFrom` (placeholder: the last 4 as-of quarters in the window) is set before any comparison is run, and each run records it. `--compare` reports the training quarters only. The holdout quarters are scored once, for the scoring file a principal has chosen, with `--holdout`. A run with `--holdout` is recorded, and a second holdout run on the same quarters with a different scoring file is marked `reused holdout` in its report. A `_calibration` note may cite holdout figures only. If the holdout has fewer than `minLabels` labelled banks, the report says so and a rolling-origin split (train on quarters up to T, test on T+1 to T+4, for each T) is offered instead.
 - [ ] Each run records the hash of each scoring file, the buy box hash, the panel's run id and the labels' run id, so a report can always be traced to its inputs.
 - [ ] Cost: deterministic, with no model and no network after S1 and S2.
 
 **E17-S4. The report.** *As a principal, I want one report that says whether the score ranks pressure well, which components carry it, and how early, so that I can choose weights from evidence.* P0, Now.
 - [ ] Written to `backtest/report-<hash>.json` and `.md` in the data folder. `outbound backtest report` prints the summary.
-- [ ] **Headline figures**, pooled over as-of quarters and per quarter:
-  - the base rate: the share of banks in the universe with a label inside the horizon;
-  - for Tier A, for Tier B, and for the top K by score (K placeholder 25): the share labelled (precision), lift over the base rate, and the share of all labelled banks that were in the group (recall);
-  - **lead time**: for each labelled bank, how many quarters before its label it first reached Tier A, as a distribution;
+- [ ] **The headline rank leaves out fit.** Tier A needs a fit threshold (`tierFor` in `src/score.mjs`), and fit has no history to test. So every headline figure ranks banks by their **distress and timing points only**. The backtest's groups are the top K by that rank (K placeholder 25) and the banks at or above the Tier A distress threshold. The current all-axis tiers are shown in a separate table, labelled context, and a `_calibration` note may never cite them.
+- [ ] **Labels are incomplete, and the words say so.** Public sources miss many real sales, so the report never says "precision" or "recall". It reports:
+  - the base rate: the share of banks in the universe with an observed label inside the horizon;
+  - per group: the **observed-label yield** (the share of the group with an observed label), its lift over the base rate, and the **share of observed labels captured** (labelled banks that were in the group, out of all labelled banks);
+  - **lead time**: for each labelled bank, how many quarters before its label it first entered the top K, as a distribution;
+  - each figure **stratified by label coverage**: banks with a confirmed SEC filer (every label kind can be observed) apart from banks without one (only the FDIC kinds can). A difference between the strata is shown as a coverage effect, not a scoring effect;
   - the same figures for the metro subset, with its sample size.
 - [ ] **Per component:** for each component in `scoring.json`, the labelled rate among banks where it scored more than zero against the rest, with counts. This shows which components carry the score and which add nothing.
 - [ ] **Small numbers.** Below `config.backtest.minLabels` labelled banks (placeholder 20), a figure is shown with its count and the words "too few to tune on". The metro subset will usually say this.
 - [ ] The report states its known limits every time, in fixed text: amended figures, labels that are forced events, the fit axis not tested, and unlabelled banks not being negatives.
-- [ ] **It never writes `scoring.json`.** A PR that changes weights adds a `_calibration` note to `scoring.json` naming the report hash it relied on. A test checks that the note, when present, names a hash of the right form.
+- [ ] **It never writes `scoring.json`.** A PR that changes weights adds a `_calibration` note to `scoring.json` naming the report hash it relied on, and that report must be a holdout run. A test checks that the note, when present, names a hash of the right form.
 - [ ] Job logs carry counts and run ids only (E11-S1).
 
 **E17-S5. Calibration page.** *As a principal, I want to read the latest backtest in the web app so that I don't need the command line to see whether the score works.* P2, R2.
@@ -100,7 +103,8 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 | D-B1 | The horizon: how many quarters after the as-of date a label counts | 4 quarters |
 | D-B2 | Which label kinds count. Should ordinary mergers count at all? | Failure, assisted merger, disclosed sale, FDIC loan sale; mergers off |
 | D-B3 | The universe: five states plus the metros' footprint, or every US bank | Five states plus footprint |
-| D-B4 | How many labelled banks a backtest needs before a weight change may cite it | 20 |
+| D-B4 | How many labelled banks a backtest needs before a weight change may cite it | 20, in the holdout |
+| D-B5 | The holdout: the last 4 quarters, or rolling-origin from the start | The last 4 quarters; rolling-origin if they hold too few labels |
 
 ---
 
@@ -164,7 +168,8 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
   - the CMBS special servicers (`sources/edgar/servicers.json`), as `special_servicer` for each trust, with the loans in our metros and sectors;
   - listing advisors (E16-S8), when that feeder exists;
   - county records (E5), when they exist: the lender's counsel on a Colorado election and demand, and receivers in court filings (plan 3.2, step 2);
-  - call outcomes: a `wrong_person` referral (E15-S2) adds a mandate only when a principal enters the **firm**. The model's free-text referral is never parsed into the registry.
+  - a principal's confirmation that a firm acted for a named seller, with the date and how they know it, audited with their name.
+- [ ] **Referrals are not mandates.** A `wrong_person` call outcome (E15-S2) says only that the person does not decide, and may say who does. When a principal enters the firm it names, it is stored as a **referral**: evidence of a route to that seller, kept apart from mandates. Referrals are shown on the firm's page and never count toward the ranking (S2). The model's free-text referral is never parsed into the registry.
 - [ ] A mandate is `{ intermediary, kind, seller, date, metro?, propertyType?, balance?, sources }`, and each one has a stable id, so a rebuild never counts one twice.
 - [ ] No person's name, phone number or email address is stored. The FDIC adapter already cuts the contacts block off before parsing (E16-S2), and a test proves the registry holds none.
 
@@ -182,7 +187,11 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 
 **E19-S4. The route to a seller.** *As a principal, I want a bank candidate that has sold through an advisor to say so, so that I approach it the way it sells.* P1, R2.
 - [ ] When a sale-ledger event names both a seller and an advisor, the seller is linked to the advisor.
-- [ ] The candidate card and the paper estimate's Q6 (seller evidence) show a **route**: `direct` (no advisor seen), `advisor` (with the firm and the date of its last mandate), or `both`.
+- [ ] The candidate card and the paper estimate's Q6 (seller evidence) show a **route**:
+  - `unknown`, the default. No advisor seen is not evidence of a direct sale: the listing feeders are not built and SEC-disclosed sales name no advisor;
+  - `advisor`, when a mandate shows an advisor acting for this seller, with the firm and the date of its last mandate;
+  - `direct`, only when a principal records evidence that the seller sold without an advisor, with the date and how they know it;
+  - `both`, only when both kinds of evidence are present.
 - [ ] Where the route is `advisor` and the firm is not `registered` (S3), the card says so.
 - [ ] The route is principal context only. The drafter receives nothing from it, and a handoff test proves it.
 
@@ -215,15 +224,17 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 **E20-S1. The data pack.** *As a principal, I want a quarterly pack of aggregate figures by metro and sector, each sourced, so that the news desk can write the note from facts we can stand behind.* P1, R3.
 - [ ] `outbound market pack --quarter 2026-06-30` writes `market/<quarter>.json` and a `.md` table to the data folder.
 - [ ] Per metro, and per buy-box sector where the data allows:
-  - FDIC: CRE noncurrent and nonaccrual ratios, summed over the banks with a footprint in the metro (the method, summed balances or deposit-weighted, is stated), with the bank count and the change on the quarter and the year;
+  - FDIC: CRE noncurrent and nonaccrual ratios, with the bank count and the change on the quarter and the year. Call Reports are whole-bank figures, and branches show where a bank takes deposits, not where it lends (`PROFILE_LIMITS` in `src/score.mjs`). So a bank's balances are **never summed whole into each metro it has a branch in**. One method is used, labelled a deposit-share proxy: each bank's balances are split across the metros by its share of deposits there, with the rest going to "elsewhere". The shares sum to 1, so each dollar is counted once. The pack states the method and its limit beside every FDIC figure;
   - CMBS: balances and loan counts in special servicing by property type, and new transfers in the quarter;
   - CMBS dispositions in the quarter, by count only (see S2).
 - [ ] Every figure carries its source, its as-of date and its method, as in the paper estimate (`docs/paper-estimate.md`).
 - [ ] Deterministic, with no model.
 
 **E20-S2. The disclosure guard.** *As a principal, I want the pack to refuse any figure that could point to one bank or one loan so that the note never names a distressed party by arithmetic.* P1, R3.
-- [ ] A cell built from fewer than `config.market.minInstitutions` institutions (placeholder 5), or in which one institution is more than `config.market.maxShare` of the total (placeholder 0.5), is suppressed and shown as "not shown: too few sources".
-- [ ] No bank, servicer, trust, property, address or person appears in the pack. A test with a fixture in which one bank dominates a metro proves that cell is suppressed.
+- [ ] **FDIC cells:** a cell built from fewer than `config.market.minInstitutions` banks (placeholder 5), or in which one bank is more than `config.market.maxShare` of the total (placeholder 0.5), is suppressed and shown as "not shown: too few sources".
+- [ ] **CMBS cells** have their own guard, because their records are single loans: a cell needs at least `config.market.minLoans` loans (placeholder 10), `minTrusts` trusts (placeholder 3) and `minServicers` special servicers (placeholder 2), and no one loan may be more than `maxShare` of its balance.
+- [ ] **Complementary suppression.** When a cell is suppressed, enough other cells in the same row or column are suppressed that no total or difference can rebuild it. A change on the quarter or the year is suppressed when the cell is suppressed in either period. A test proves that no suppressed cell can be recovered from the published totals and changes.
+- [ ] No bank, servicer, trust, property, address or person appears in the pack. Tests with fixtures prove that a metro where one bank dominates, and a property-type cell holding one large loan, are both suppressed.
 - [ ] **Left out by default:** failures, FDIC loan sales and implied recoveries. The voice guide forbids riding a closure or a failure, and D-S5 has not settled whether recoveries can be shown even to principals. Each can be turned on only by a principal's decision (D-M2).
 
 **E20-S3. The handoff to the news desk.** *As a principal, I want the pack in the form the desk uses so that the note is written there, under the desk's review.* P1, R3.
@@ -294,8 +305,8 @@ As in the main PRD, section 9, for every story. Also:
 | Metric | Target | How measured |
 |---|---|---|
 | A calibrated score before the first send | `scoring.json` carries a `_calibration` note naming a backtest report that a principal read | E17-S4 |
-| Tier A lift | Tier A's labelled rate at least 3 times the base rate (placeholder, set after the first report) | E17-S4 |
-| Lead time | The median labelled bank reaches Tier A at least 2 quarters before its label (placeholder) | E17-S4 |
+| Lift in the holdout | The top K by distress and timing has an observed-label yield at least 3 times the base rate, in the holdout quarters (placeholder, set after the first report) | E17-S4 |
+| Lead time | The median labelled bank enters the top K at least 2 quarters before its label (placeholder) | E17-S4 |
 | Coverage of private banks | The share of Tier A candidates with a dated event source (SEC filer, enforcement, merger application) at least doubles from the E18-S1 baseline | E18-S1 |
 | Advisor registrations | Registered on the buyer lists of the top 5 ranked advisors within two quarters of D9 being approved | E19-S3 |
 | Disclosure | 0 published cells that fail the disclosure guard | E20-S2, and the desk's review |
@@ -308,7 +319,7 @@ Numbered after the main PRD's Q18.
 | # | Question | Who answers | Blocks | Default meanwhile |
 |---|---|---|---|---|
 | Q19 | The backtest's horizon, label kinds and universe (D-B1 to D-B3) | Principals | E17-S2, S3 | The defaults in E17 |
-| Q20 | May weights change on the backtest alone, before 30 outcomes? (D-B4) | Principals | Weight changes | Yes, with at least 20 labelled banks and a `_calibration` note |
+| Q20 | May weights change on the backtest alone, before 30 outcomes? (D-B4, D-B5) | Principals | Weight changes | Yes, with at least 20 labelled banks in the holdout and a `_calibration` note citing a holdout run |
 | Q21 | Open the OCC API key in the firm's name (D-E2, data-sources D3) | Principals | E18-S2, OCC part | The no-key sources first |
 | Q22 | Does an active enforcement order change how, or whether, a bank is approached? (D-E3) | Principals, then counsel | E18-S4 | No change; the card shows it |
 | Q23 | Who owns the advisor registrations and the proof of funds? (D-I2) | Principals | E19-S3 | Nothing is sent to an advisor |
