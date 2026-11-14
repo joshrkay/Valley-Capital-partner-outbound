@@ -73,12 +73,28 @@ Checked live on November 14, 2026, on 40 banks with $1–5 billion in assets in 
 **Q1. Size and stress (Reported).**
 - Investor CRE = construction and land + multifamily + nonfarm nonresidential **other** (not owner-occupied) + CRE not secured by real estate. This is the 2006 guidance's own definition (71 FR 74580).
 - Owner-occupied is shown separately.
-- Each category has its stages: current, 30–89 days, 90+, nonaccrual, charged off.
-- Each has eight quarters of trend, restructured balances (with the 2023 break marked) and unused commitments.
+- **Stages exist only where FDIC reports them.** A missing stage shows as "not reported", never as zero. Checked against FDIC's definitions, November 14, 2026:
+
+  | Category | Balance | 30–89 days | 90+ days | Nonaccrual |
+  |---|---|---|---|---|
+  | Construction and land | `LNRECONS` | `P3RECONS` | `P9RECONS` | `NARECONS` |
+  | Multifamily | `LNREMULT` | `P3REMULT` | `P9REMULT` | `NAREMULT` |
+  | Nonfarm nonresidential, other | `LNRENROT` | `P3RENROT` | `P9RENROT` | `NARENROT` |
+  | Nonfarm nonresidential, owner-occupied | `LNRENROW` | `P3RENROW` | `P9RENROW` | `NARENROW` |
+  | CRE not secured by real estate | `LNCOMRE` | `P3COMRE`? | not reported | not reported |
+
+  - The two construction past-due fields are in FDIC's definitions but **not pulled today** (`src/metrics.mjs`). E14-S1 adds them and checks live that they are filled.
+  - `P3COMRE` is titled "30-89 days past due, commercial RE", and whether it is the not-secured line is Unconfirmed. Until that is checked, the not-secured line shows its balance only.
+- **Charge-offs are flows, not a stage.** They are shown separately: for the quarter, and for the year to date. They are never added to, or shown as part of, the outstanding balance.
+- Each category has eight quarters of trend, and restructured balances by type, with the 2023 break marked.
+- **Unused commitments are portfolio-level only.** `UCCOMRES` (secured) and `UCCOMREU` (unsecured) are not split by category, so they are shown once for the whole CRE book, never per category.
 
 **Q2. Property types.** Tried in order:
 1. **Reported**: the public bank's own breakdown, from the SEC data sets.
-2. **Observed**: lender-map loans by assessor use code, weighted by original principal. The page also states **coverage**: observed dollars as a share of the reported category.
+2. **Observed**: lender-map loans by assessor use code. The page states **coverage by count** only: the number of observed loans, with the reported loan count where one exists (Q4).
+   - Records give **original** principal, while the Call Report gives the **current** balance. So observed original principal is **never divided by** a reported balance. A $10 million group paid down to $6 million would otherwise show 167% coverage.
+   - Original-principal totals are shown on their own, labelled as original.
+   - Balance coverage appears only when current balances are known, for example from a tape or from a vendor that carries them.
 3. **Inferred**: a peer prior from public banks of similar size and region, shown as a range.
 
 A mix is never inferred from fewer than 5 observed loans: show the loans, not a mix. Multifamily and construction are already separate categories, so only nonfarm nonresidential needs a split.
@@ -98,7 +114,9 @@ A mix is never inferred from fewer than 5 observed loans: show the loans, not a 
 **Q5. Maturity and refinancing stress.**
 - **Reported proxy:** the maturity and repricing buckets, for all non-1-4-family loans.
 - **Inferred:**
-  - vintages from balance growth by year, which sets a floor on new loans each year, and from lender-map recording dates;
+  - vintages **only from loan-level dates**: lender-map recording dates and CMBS origination dates.
+    - A change in a category's balance is **not** a floor on new loans. It nets new loans against payoffs, charge-offs, loan sales, acquired books and reclassifications.
+    - It is shown only as "net change", and never across a quarter with a structure event (E3-S6), whose acquired book would look like new lending.
   - typical terms by property type from CMBS comparables;
   - rate at origination (FRED Treasury yield plus a spread range) against today's rate: a payment-shock band.
 - Optional: a DSCR stress test using CMBS comparables' NOI and DSCR for the same type and metro.
@@ -113,7 +131,12 @@ A mix is never inferred from fewer than 5 observed loans: show the loans, not a 
 - later, enforcement orders.
 
 **Q7. Fit and edge.**
-- **In-box estimate:** the estimated balance in each cell (category × type × metro × size × status) times the buy-box match, giving **low, base and high**. Built bottom-up from the tiers, so Inferred cells widen the range.
+- **In-box estimate.** Never built by multiplying separate breakdowns. Knowing that half the book is hotels, half is in Phoenix and half is in our size range says nothing about how much is all three: anywhere from none to half the book. So:
+  1. **Joint, from observed loans.** Each observed loan carries its own type, county, size and date, so the count and original principal of loans in the box are real. This is shown as observed, with its coverage.
+  2. **Bounds, from reported breakdowns.** For each buy-box condition *i*, let *sᵢ* be the share of the book that meets it.
+     - **Upper bound:** the smallest *sᵢ*, times the book.
+     - **Lower bound:** max(0, Σ *sᵢ* − (k − 1)), times the book, for k conditions. It is often zero, and the page says so.
+  3. **No base figure** until a dependence model has been calibrated against real tapes (E14-S6). Until then the page shows the observed figure and the two bounds.
 - **Edge statements:** chosen only from approved claims in `claims.json` that match the profile. These are for the principal, not the message.
 
 **Q8. What we don't know, and the tape request.**
@@ -181,12 +204,25 @@ It shows **no bid or price**. See D-P1.
     - When a real tape arrives, compare the estimate with it and keep **only the aggregate error by field**, never the tape.
     - Report coverage: Observed dollars as a share of Reported.
 16. **Language.** The page says "reported", "observed" or "estimated", and gives ranges. Cards are built from templates, as today. No Inferred number appears as a fact.
+17. **Never multiply marginals.** Separate breakdowns give bounds, not a joint figure (Q7).
+18. **Stocks versus flows.** Balances and stages are stocks at quarter end. Charge-offs and loan-sale gains are flows over a period. They are never mixed.
+19. **Original versus current, again.** Observed records give original principal. Never divide it by a current reported balance (Q2).
+20. **Net change is not new lending.** Payoffs, sales, acquisitions and reclassifications all move a balance (Q5).
+21. **Report what exists.** A stage FDIC does not report is "not reported", not zero (Q1).
 
 ## 8. Build phases (stories)
 
 **E14-S1. The reported layer** (P0; data in hand).
 - [ ] Add the fields in 4.2 to the FDIC pull, with field checks. The semiannual fields are allowed to be null in March and September.
-- [ ] Compute Q1, the Q3 proxy, Q4 for nonfarm nonresidential, the Q5 proxy, Q6 from FDIC and SEC data, the unknowns, and the tape request.
+- [ ] Add `P3RECONS` and `P9RECONS`, check live that they are filled, and check what `P3COMRE` measures.
+- [ ] Compute:
+  - Q1, with per-category stages, flows apart, and commitments at portfolio level;
+  - the Q3 proxy;
+  - Q4 for nonfarm nonresidential;
+  - the Q5 proxy;
+  - Q6 from FDIC and SEC data;
+  - Q7 as bounds only;
+  - the unknowns, and the tape request.
 - [ ] Store each candidate's record (`paper/<key>.json`), and show it on the candidate page.
 - [ ] Tests:
   - units and as-of dates;
@@ -219,7 +255,7 @@ It shows **no bid or price**. See D-P1.
 | # | Decision | Default |
 |---|---|---|
 | D-P1 | Show a price range, or pricing context only? | Context only. A range from public data could anchor a bid on weak ground. |
-| D-P2 | Ranges as low/high, or low/base/high? | Low, base and high, with base only where the method supports one |
+| D-P2 | Ranges as low/high, or low/base/high? | Bounds (low/high), plus the observed figure where loans are seen. A base figure only once a dependence model is calibrated (E14-S6). |
 | D-P3 | Which buy-box dimensions decide fit, and how they weigh: sector, metro, size, status, lien | Sector and metro must match; size and status narrow the range |
 | D-P4 | What we keep from a received tape | Only the aggregate error by field. The tape itself is handled under its agreement. |
 | D-P5 | Show the estimate per charter, per holding company, or both | Both, charter first |
