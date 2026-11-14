@@ -31,7 +31,7 @@ Start with `docs/prd-signal-pipeline.md` for the pipeline, and `docs/research-ag
   - deploying the platform (E12-S7);
   - Gmail drafts and reply detection (E9);
   - quarterly nurture (E10);
-  - the referral mapper's drafted ask to a connector (E17 finds the routes and gives a checklist; it drafts nothing, PRD D-R7), and county records that name a lender's counsel (E17-S3 has the event shape and the seam, no adapter);
+  - the referral mapper's drafted ask to a connector (E22 finds the routes and gives a checklist; it drafts nothing, PRD D-R7), and county records that name a lender's counsel (E22-S3 has the event shape and the seam, no adapter);
   - meeting prep beyond the call brief (event lists, who to meet, and a drafted follow-up email: PRD E15-S3 gives a checklist today);
   - the weekly reporter (the outcomes report, PRD E15-S4, is its first part).
 
@@ -250,7 +250,7 @@ npm run outbound -- sales list --seller fdic:12345      # or --kind disposition
 
 Property names and addresses are kept in the ledger for a principal. They never go in a log, and a test proves no event reaches the drafter.
 
-### Routes to the decision-maker (PRD E17)
+### Routes to the decision-maker (PRD E22)
 
 For each target: who actually decides on loan sales, then the best way in. A warm route gets a much better reply rate than a cold email.
 
@@ -279,7 +279,7 @@ npm run outbound -- network remove --id np-1 --by "Pat Example"   # also removes
 - **The direct route** reads the address by the guard's own rule (`src/guard.mjs` `emailCheck`): verified only with a verification record for the current address, no older than `contacts.json` `reverifyDays`, and a source of the address's own. Its evidence is `bank.people` findings only. Choosing it rebuilds it from the account as it is now.
 - **Tiers** as in `docs/paper-estimate.md`: a government, regulator or company source is reported, press observed, anything else inferred. A same-name match without a shared organization, a colleague, and a support check that did not say yes are inferred.
 - **The FDIC's loan-sale advisor** is the FDIC-as-receiver's: listed only for a failed bank whose loans the FDIC sells, as a route into the FDIC's sale, never into a bank.
-- **The order**, what counts as current, whether consent is required, and same-name matches are all placeholders in `routes.json` (PRD E17, D-R1 to D-R9).
+- **The order**, what counts as current, whether consent is required, and same-name matches are all placeholders in `routes.json` (PRD E22, D-R1 to D-R9).
 - **A route relaxes no guard rule.** A route through a suppressed party is held. Choosing is refused after an opt-out or a suppression of the bank. Choosing changes no account, drafts nothing, records no touch; the checklist says who to ask, what to cite (with links), what never to mention, and what comes after an introduction.
 - On the platform, the account page has a routes section and `/network` is its own page. Both run in units of work as the principal; there is no new job kind. Neither `network/` nor `routes/` is ever loaded by the briefer, the drafter or call prep (`test/routes-handoff.test.mjs`), and neither is `contacts/` (`test/private-stores-handoff.test.mjs`).
 
@@ -411,7 +411,7 @@ In `$OUTBOUND_DATA_DIR`:
 - `senders.json`, `suppression.json`, `accounts/`, `research/`, `facts/`, `briefs/`, `drafts/<account>/`, `touches.jsonl`, `audit.jsonl`;
 - for the pipeline: `sources/` (FDIC data, the run log and the change log), `candidates/` (the latest list and principals' decisions), `paper/` (one paper estimate per bank), `sales/` (the sale ledger), `triage/` (each week's triage and its snapshot), and `pilot/` (truth sheets, verdicts, the pass).
 - for calls: `calls/<account>/` (call briefs, notes, proposals and follow-ups), `outcomes.jsonl` (confirmed outcomes) and `reports/`.
-- for routes (PRD E17): `network/` (the firm's own relationships: private, never given to a model) and `routes/` (each account's routes and the chosen route's checklist).
+- for routes (PRD E22): `network/` (the firm's own relationships: private, never given to a model) and `routes/` (each account's routes and the chosen route's checklist).
 
 ## Changing it
 

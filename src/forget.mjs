@@ -292,7 +292,7 @@ export function forgetPerson({ dir, id, by, reason, confirm, name, email, rules,
 
   for (const a of accounts) write('accounts', join(dir, 'accounts', `${a.id}.json`), a, nextAccounts.get(a.id));
 
-  // The firm's network and the routes (PRD E17), after the accounts: a routes file is rebuilt from the accounts, research and network
+  // The firm's network and the routes (PRD E22), after the accounts: a routes file is rebuilt from the accounts, research and network
   // as they now stand. Counted per file changed, the json and the md each.
   const routesBefore = routesFiles(dir);
   const ours = new Set(instNames.map(instKey).filter(Boolean));

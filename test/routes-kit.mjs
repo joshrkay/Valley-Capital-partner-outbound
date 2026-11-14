@@ -1,4 +1,4 @@
-// Shared fixtures for the routes to the decision-maker (PRD E17): one bank account with research on its people, board, counsel, advisors
+// Shared fixtures for the routes to the decision-maker (PRD E22): one bank account with research on its people, board, counsel, advisors
 // and memberships; a sale ledger; and the firm's network. Every name, firm, association and page is invented. Distinctive names make a
 // leak easy to spot.
 import { join } from 'node:path';

@@ -163,7 +163,7 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound outcomes report [--since YYYY-MM-DD]   confirmed outcomes by signal type, tier and lead time (no model; never changes
                                                   weights), written to reports/outcomes-DATE.json
 
-  The firm's network (PRD E17-S1): the principals' own relationships. Private: the data folder only, never a model, never the repo.
+  The firm's network (PRD E22-S1): the principals' own relationships. Private: the data folder only, never a model, never the repo.
   outbound network add-person --name N --known-by PRINCIPAL [--organization O] [--title T] [--relationship R]
                               [--consent yes|no|unknown] [--alias A]... --by NAME     someone a principal knows (no email or phone)
   outbound network add-firm --name N --known-by PRINCIPAL [--kind law|advisor|broker|other] [--relationship R] [--alias A]... --by NAME
@@ -171,7 +171,7 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound network list --by NAME [--json]       every entry, and how many chosen routes use each (the listing is audited)
   outbound network remove --id ID --by NAME      removes the entry, and every route and choice that used it, from every routes file
 
-  Routes to the decision-maker (PRD E17): who decides, and the best way in. Code only, no model. Nothing is drafted or sent.
+  Routes to the decision-maker (PRD E22): who decides, and the best way in. Code only, no model. Nothing is drafted or sent.
   outbound routes build --account ID             match the research (board, counsel, advisors, memberships, people), the sale ledger
                                                   and the network; rank by routes.json (placeholders); write routes/ID.json and .md
   outbound routes show --account ID [--json]     print the routes: the direct route's status, each warm route's bridge and evidence
@@ -570,7 +570,7 @@ async function main() {
     }
   }
 
-  if (cmd === 'network') {   // PRD E17-S1: names and relationships only; audit lines carry ids
+  if (cmd === 'network') {   // PRD E22-S1: names and relationships only; audit lines carry ids
     const opt = (k) => (flags[k] && flags[k] !== true ? flags[k] : undefined);
     if (sub === 'add-person') { const p = addPerson({ dir, name: need(flags, 'name'), organization: opt('organization'), title: opt('title'), relationship: opt('relationship'), knownBy: need(flags, 'known-by'), introConsent: opt('consent'), aliases: flags.alias, by: need(flags, 'by') }); return out(`Added ${p.id}: ${p.name}${p.organization ? ` of ${p.organization}` : ''}, known to ${p.knownBy.join(', ')}. Agreed to be asked for introductions: ${p.introConsent}.`); }
     if (sub === 'add-firm') { const f = addFirm({ dir, name: need(flags, 'name'), kind: opt('kind'), relationship: opt('relationship'), knownBy: need(flags, 'known-by'), aliases: flags.alias, by: need(flags, 'by') }); return out(`Added ${f.id}: ${f.name} (${f.kind}), known to ${f.knownBy.join(', ')}.`); }
@@ -586,7 +586,7 @@ async function main() {
     if (sub === 'remove') { const r = removeNetworkEntry({ dir, id: need(flags, 'id'), by: need(flags, 'by') }); return out(`Removed ${r.id} (${r.kind}). It was removed from ${r.routeFiles} routes file(s), with ${r.routesRemoved} route(s) that used it.`); }
   }
 
-  if (cmd === 'routes') {   // PRD E17: code only; nothing is drafted or sent
+  if (cmd === 'routes') {   // PRD E22: code only; nothing is drafted or sent
     const id = need(flags, 'account');
     if (sub === 'build') {
       const r = buildRoutes({ dir, id, rules });

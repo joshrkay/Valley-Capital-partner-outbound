@@ -184,6 +184,7 @@ Rules that apply everywhere:
 | E15 Call prep and outcomes | R2 | P0 (S1, S2), P1 (S3, S4) | E1, E7, E12; E14 if present |
 | E16 Who sells to whom | R2 | P1 | E3, E4, E12, E13 |
 | E17 to E21 | Now to R3 | P0 to P2 | See `docs/prd-next-five.md` |
+| E22 Routes to the decision-maker | R2 | P1 | E7, E12, E16 |
 
 ---
 
@@ -537,7 +538,7 @@ Every adapter (E3–E5) is built on this shared framework.
   - assets under the direct-sale threshold, so the bank is more likely to sell without an advisor (FDIC; R1);
   - a CRE book concentrated in the categories and metros we buy (FDIC; R1);
   - a regulatory order that pushes the bank to reduce problem assets (the briefer's `bank.regulatory`);
-  - no loan sale advisor found (`bank.advisors`, which replaced `bank.access` in E17-S2);
+  - no loan sale advisor found (`bank.advisors`, which replaced `bank.access` in E22-S2);
   - the bank has sold loans before (`bank.intent`).
 - [ ] An advantage signal never overrides the risk screen. An active sale run by an advisor, or a failing bank, still means wait or do not approach.
 
@@ -600,7 +601,7 @@ Rules across the epic:
     - `EMAIL_UNVERIFIED` when the verification is for a different address than the current one;
     - `EMAIL_UNVERIFIED` when it is older than `contacts.json` `reverifyDays` (placeholder 180, D-C1). With no period set, nothing counts as verified.
     - `EMAIL_UNSOURCED` when the current address has no source of its own.
-  - **One rule, read everywhere.** These four checks are one function, `emailCheck` in `src/guard.mjs`. The guard, the contact view (`contactStatus`) and the direct route to the decision-maker (E17-S5) all call it, so nothing shows an address as verified when the guard would refuse it.
+  - **One rule, read everywhere.** These four checks are one function, `emailCheck` in `src/guard.mjs`. The guard, the contact view (`contactStatus`) and the direct route to the decision-maker (E22-S5) all call it, so nothing shows an address as verified when the guard would refuse it.
   - `account contact` (and the web page) shows each field with its source, the address's state and the date to verify again by. The state is one of: unverified, verified, expired, verified for another address, or unsourced (verified, but the address has no source of its own, so the guard refuses it).
 - [x] A deletion request removes the person from every record, and the removal is logged.
   - `outbound account forget-person --account ID --by NAME --reason TEXT --confirm "ACCOUNT NAME"`, or the account page, which also needs the account's name typed. `--name` and `--email` reach a person who is no longer on the account.
@@ -618,8 +619,8 @@ Rules across the epic:
     | `touches.jsonl` | It stores the type, account, institution, step, channel, sender, dates and, for an event, a free-text `note`. A value that names them, in practice the note, becomes `[removed]`. The event itself stays, so a reply or an opt-out keeps stopping outreach. |
     | `pilot/` | Truth sheets are redacted. Review verdicts on removed findings are dropped. |
     | `contacts/` | Their row leaves the known list. Vendor reports hold refs only, and are redacted all the same. |
-    | `network/` | The firm's network (E17-S1) can hold them if the firm knows them. Their entry goes: their name at their institution, or their address or phone anywhere. Every route and choice that used the entry goes with it, as when a principal removes an entry (`dropNetworkEntries`). Other entries are redacted: fully at their institution, for contact details elsewhere. |
-    | `routes/` | Routes (E17) hold lender-side names: targets, the direct route's person and candidates, reasoning lines, checklists. A routes file that still names them, judged at its account's level as for research, is rebuilt from the scrubbed research and network by `buildRoutes`, with no model. A choice whose route named them is removed, and the file says a choice was removed. A routes file whose account is gone is redacted instead. Before anything is written, `routes.json` is checked, so an error in it stops the deletion before it starts. |
+    | `network/` | The firm's network (E22-S1) can hold them if the firm knows them. Their entry goes: their name at their institution, or their address or phone anywhere. Every route and choice that used the entry goes with it, as when a principal removes an entry (`dropNetworkEntries`). Other entries are redacted: fully at their institution, for contact details elsewhere. |
+    | `routes/` | Routes (E22) hold lender-side names: targets, the direct route's person and candidates, reasoning lines, checklists. A routes file that still names them, judged at its account's level as for research, is rebuilt from the scrubbed research and network by `buildRoutes`, with no model. A choice whose route named them is removed, and the file says a choice was removed. A routes file whose account is gone is redacted instead. Before anything is written, `routes.json` is checked, so an error in it stops the deletion before it starts. |
     | `suppression.json` | Plain entries for their address or name become hashes, keeping their reason and date. Hashed entries are added for the address, and for the name with each name of the institution (its name, aliases and key). |
     | `audit.jsonl` | Never rewritten: it holds ids, codes and counts. |
 
@@ -636,7 +637,7 @@ Rules across the epic:
     - No new job kind: every contact action runs inside a web request or a command-line unit of work.
 - [ ] Counsel reviews the deletion process and the hashed suppression (Q16, research agenda G1), and the principals decide D-C4 to D-C6.
 - [x] The account page's older "Set person" form, in "The person" panel, had no source fields, so it was refused. **Removed.** The panel now points to the contact section, whose "Name the person" form is the only way to name a person on the web. `web/test/contact.test.mjs` checks that.
-- [x] **Every command that names a person carries a source.** That covers `outbound account set-person` and its help text, and the routes checklists (E17-S6): naming a candidate uses `--finding ID` with the candidate's own finding, and after an introduction it uses `--source correspondence`. `test/routes.test.mjs` runs each checklist's command on the command line.
+- [x] **Every command that names a person carries a source.** That covers `outbound account set-person` and its help text, and the routes checklists (E22-S6): naming a candidate uses `--finding ID` with the candidate's own finding, and after an introduction it uses `--source correspondence`. `test/routes.test.mjs` runs each checklist's command on the command line.
 
 **Plumbing.**
 - [x] `contacts.json` at the repository root: `reverifyDays`, `requireMx` and `vendorPass`, every value a placeholder with a `_note`. `loadRules()` gives it to the guard as `config.contacts`.
@@ -1093,7 +1094,9 @@ Rules across the epic:
 | D-S5 | Show the implied recovery to principals at all? It is not a price, and could anchor a bid. | Shown, labelled approximate, by group and per loan |
 | D-S6 | The FDIC request contact (`config.fdic.userAgent`): the firm's name and a monitored business address | Placeholder: the run refuses |
 
-### E17. Routes to the decision-maker
+### E22. Routes to the decision-maker
+
+**Numbering and overlap.** Built as E17 and renumbered E22, because `docs/prd-next-five.md` uses E17 to E21. This epic is the separate story that E19-S6 (warm paths, the referral mapper) asks for, with its data rules, at the level of one account. Two choices differ from E19-S6 and are open for a principal: E19-S6 drafts the ask to the connector and caps asks per connector; here nothing is drafted (D-R7) and there is no cap in code (D-R8). E19-S6 reads a principal's contact export with written consent; here the network is entered by hand (D-R9). E19-S4's route on the candidate card (advisor, direct, both or unknown) is a separate, seller-level view and is not built.
 
 **Why.** For each target, the firm wants to know who actually decides on loan sales, then the best way in. A warm route gets a much better reply rate than a cold email (plan section 4: "Introductions first"). E7-S1 already finds who decides: the briefer brings back sourced candidates, and a principal names one and confirms the role. This epic finds the ways in:
 
@@ -1117,7 +1120,7 @@ Rules across the epic:
 - **No scraping.** Nothing here reads LinkedIn, or any page that needs a login or bypasses bot protection or robots.txt. The lender side comes only from the briefer's sourced research and stored data.
 - Prospect data, network data and routes are context for a principal only.
 
-**E17-S1. The firm's network.** *As a principal, I want to record the people we know, the firms we work with and the associations we belong to, so that the system can find warm routes without anyone keeping them in their head.* P1, R2. **Built** (`src/network.mjs`, `outbound network ...`, the `/network` page).
+**E22-S1. The firm's network.** *As a principal, I want to record the people we know, the firms we work with and the associations we belong to, so that the system can find warm routes without anyone keeping them in their head.* P1, R2. **Built** (`src/network.mjs`, `outbound network ...`, the `/network` page).
 - [x] Kept in the data folder only, in one document, `network/network.json`: people (name, organization, title, relationship, which principal knows them, whether they agreed to be asked for introductions), firms (name, kind: law, advisor, broker or other; relationship; who knows them) and memberships (association, which principal belongs, role). Each entry has an id that carries no name (`np-1`, `nf-2`, `nm-3`) and optional aliases for matching.
 - [x] `outbound network add-person|add-firm|add-membership|list|remove`, each with `--by`. A duplicate (the same normalized name and organization) is refused, naming the existing id.
 - [x] **Names and relationships only.** An entry that holds an email address or a phone number is refused: nothing here contacts anyone.
@@ -1126,7 +1129,7 @@ Rules across the epic:
 - [x] **A deletion request reaches the network and the routes (E7-S3).** If the firm knows the forgotten person, their entry is removed the same way: their name at their institution, or their address or phone if an entry ever held one. A routes file that names them is rebuilt from the scrubbed research. Both are in `LOADS.forget`, and the `person_forgotten` line counts them.
 - [x] A test proves no network name reaches an audit line, a job, or the repository.
 
-**E17-S2. The lender side, researched with sources.** *As a principal, I want the briefer to find the bank's directors and officers, its outside counsel, the advisors it has used and the associations it belongs to, each with a source, so that routes rest on evidence.* P1, R2. **Built** (`playbooks.json`, `docs/research-agenda.md`, `src/research.mjs`). Not yet run live.
+**E22-S2. The lender side, researched with sources.** *As a principal, I want the briefer to find the bank's directors and officers, its outside counsel, the advisors it has used and the associations it belongs to, each with a source, so that routes rest on evidence.* P1, R2. **Built** (`playbooks.json`, `docs/research-agenda.md`, `src/research.mjs`). Not yet run live.
 - [x] Four playbook questions, in `playbooks.json` and `docs/research-agenda.md`: `bank.board`, `bank.counsel`, `bank.advisors` and `bank.memberships`. They replace `bank.access`.
 - [x] Findings keep the existing format, with tiers and sources. Each also lists the **entities** its quote names: type (person, firm or association), name, affiliation and role. Code keeps an entity only if its name appears in the quote, and an affiliation only if it does too.
 - [x] **These four topics are context only.** A finding under them is never cleared for a message, whatever the model proposes. Who connects to a bank is for a principal choosing a way in.
@@ -1134,13 +1137,13 @@ Rules across the epic:
 - [x] Public pages only: never a members-only directory, or an attendee list that needs a login.
 - [x] `src/research.mjs` changes only as much as this needs, and every existing research test passes unchanged.
 
-**E17-S3. County-record counsel: the shape and the seam.** *As a principal, I want the law firm a county foreclosure filing names for the lender recorded, so that the lender's own counsel is a route.* P1, R3. **The shape and the seam are built** (`src/routes.mjs`); the feeder is not.
+**E22-S3. County-record counsel: the shape and the seam.** *As a principal, I want the law firm a county foreclosure filing names for the lender recorded, so that the lender's own counsel is a route.* P1, R3. **The shape and the seam are built** (`src/routes.mjs`); the feeder is not.
 - [x] **The shape, with no adapter:** `counselEvent` in `src/routes.mjs`. County, document number and type, recording date, the lender (MERS resolved as in E16-S7), the lender's counsel (the firm and the attorneys named), the trustee, the APN, the source and link. Tier `observed`. `validateCounselEvent` checks each event.
 - [x] **The seam:** `buildRoutes` takes `counselFeeders`, each a function from stored records to events, as `buildLedger` takes `feeders`. None is wired in. A test proves an event from a fake feeder becomes a counsel route, and an invalid one fails the build and writes nothing.
 - [x] A filing names a particular property and borrower, so it is asset-specific: a route cites its document number and link only, and the checklist says never to mention the property.
 - [ ] The feeder, on a county recorder's feed or a vendor, after the E5 spike. Names matched to `fdic:CERT` by E6-S1, never guessed.
 
-**E17-S4. Matching and ranking.** *As a principal, I want every route to an account found and ranked the same way every time, with its evidence, so that I can trust the list and argue with it.* P1, R2. **Built** (`src/routes.mjs`, `routes.json`, `outbound routes build|show`).
+**E22-S4. Matching and ranking.** *As a principal, I want every route to an account found and ranked the same way every time, with its evidence, so that I can trust the list and argue with it.* P1, R2. **Built** (`src/routes.mjs`, `routes.json`, `outbound routes build|show`).
 - [x] `buildRoutes({ dir, id, rules })` (`src/routes.mjs`): code only, no model, deterministic. The same inputs give the same routes, ids and order.
 - [x] **Lender side:** the account's research (`research/<id>.json`); the sale ledger's named parties where the bank was the seller (a listing's advisor), plus the FDIC's loan-sale advisor when the bank is a failed bank whose loans the FDIC sells, **labelled a route into the FDIC's sale, not into the bank**; and county counsel events from the seam.
 - [x] **Matching**, on normalized names: lowercase, "&" read as "and", punctuation dropped; legal suffixes (LLP, LLC, Inc., N.A. and the like) and a leading "the" dropped from firm names; honorifics and suffixes dropped from a person's name, then the first and last words only, so a middle name or initial does not matter. Equality only, on the name or an alias. No fuzzy matching.
@@ -1160,10 +1163,10 @@ Rules across the epic:
 - [x] **The order comes from `routes.json`** (placeholders): route type, then tier, then current before not, then the amount of evidence, then the id.
 - [x] Written to `routes/<accountId>.json` and `.md`. A rebuild keeps a choice whose route still exists, and marks one whose route is gone.
 - [x] `outbound routes build --account ID` and `outbound routes show --account ID [--json]`.
-- [ ] **Known limits of matching**, for a principal to work around with aliases: a nickname ("Bob" for "Robert"), a maiden or married name, a renamed or merged firm, an acronym with no alias ("CREFC" for "CRE Finance Council"), and a name the quote abbreviates ("Ms. Doe" for "Jane Doe") do not match. Two different people with the same first and last name do match, as inferred and labelled "same name only". A finding from research run before E17-S2 names no entities, so it gives no route until the account is researched again; it is counted.
+- [ ] **Known limits of matching**, for a principal to work around with aliases: a nickname ("Bob" for "Robert"), a maiden or married name, a renamed or merged firm, an acronym with no alias ("CREFC" for "CRE Finance Council"), and a name the quote abbreviates ("Ms. Doe" for "Jane Doe") do not match. Two different people with the same first and last name do match, as inferred and labelled "same name only". A finding from research run before E22-S2 names no entities, so it gives no route until the account is researched again; it is counted.
 - [ ] The first live research run with the four topics, read against what the principals know (the E1 pilot), before any route is trusted.
 
-**E17-S5. The direct route, always.** *As a principal, I want the direct route shown with what it still needs, so that I know whether it is ready.* P1, R2. **Built.**
+**E22-S5. The direct route, always.** *As a principal, I want the direct route shown with what it still needs, so that I know whether it is ready.* P1, R2. **Built.**
 - [x] Listed first or last as the order says, whatever else is found. Its target is the named person, or the candidates from the research when nobody is named.
 - [x] **Its evidence is the bank's own people findings only**: topics mapped to `officer`, which is `bank.people`, as for the candidates. A speaker list, a court filing or an advisor's page that names the person does not make the direct route reported or current.
 - [x] Its status, from the existing prerequisites: a person named, the role confirmed (and by whom), the address verified.
@@ -1172,7 +1175,7 @@ Rules across the epic:
   - Tests: an expired verification, a verification for an old address, an unsourced address and a nested status each show as not verified. The guard refuses each of them.
 - [x] The guard's view: the hard stops (an opt-out at the bank, a suppression, a bounce, the kill switch) and whether the bank is already in conversation. Shown, never overridden.
 
-**E17-S6. Choosing a route: a checklist, not a message.** *As a principal, I want to record which route I will take and get a checklist, so that I ask the right person with the right evidence.* P1, R2. **Built** (`outbound routes choose`).
+**E22-S6. Choosing a route: a checklist, not a message.** *As a principal, I want to record which route I will take and get a checklist, so that I ask the right person with the right evidence.* P1, R2. **Built** (`outbound routes choose`).
 - [x] `outbound routes choose --account ID --route RID --by NAME` records the choice, with an audit line (account, route id and type, who). It writes the checklist into the routes file and its Markdown.
 - [x] **The checklist:** who to ask (the bridge, their relationship, which principal knows them, whether they agreed to be asked); whom it reaches; the evidence to cite, with links; what never to mention (an asset-specific record's property or borrower); the guard's view; and what comes after an introduction: the person is named with `account set-person`, the role confirmed and the address verified, then the drafter and the guard as for any account.
 - [x] **Every command a checklist names works as written**, once its capitals are filled in. Naming a person needs a source (E7-S3).
@@ -1184,7 +1187,7 @@ Rules across the epic:
 - [x] Choosing a held route is refused, with the reason.
 - [x] Choosing checks the stored route again against the network and the suppression list as they are now: a contact who has since said no, an entry that is gone, or a party suppressed since the build refuses the choice.
 
-**E17-S7. The screens.** *As a principal, I want the routes on the account page and the network on its own page, so that I can work both from a browser.* P1, R2. **Built** (`web/app/accounts/[id]/routes.jsx`, `web/app/network/`, `web/lib/routes-ops.mjs`). Tested against the fake Supabase API, not yet against a real project (E12-S7).
+**E22-S7. The screens.** *As a principal, I want the routes on the account page and the network on its own page, so that I can work both from a browser.* P1, R2. **Built** (`web/app/accounts/[id]/routes.jsx`, `web/app/network/`, `web/lib/routes-ops.mjs`). Tested against the fake Supabase API, not yet against a real project (E12-S7).
 - [x] **Account page:** a routes section in its own component (`web/app/accounts/[id]/routes.jsx`), added to the page with one import and one element. It shows the direct route's status, the ranked routes with their tier, bridge, reasoning and evidence links, the held routes, a build button and a choose button, and the chosen route's checklist.
 - [x] **Network page** (`/network`): the people, firms and memberships, with forms to add each and a button to remove each, and how many chosen routes use each entry. Viewing it writes an audit line.
 - [x] Both run the engine's own functions in a unit of work as the signed-in principal. Building routes is code, so it runs there, not as a job.
@@ -1195,11 +1198,11 @@ Rules across the epic:
 - [x] **Handoff tests:** `network/` and `routes/` are in neither `LOADS.draft` nor `LOADS.research`, and no drafter or briefer code reads them. End to end, with a network, research and a chosen route in the data folder, the drafter's input and the briefer's prompt carry no network name, route id or bridge. `test/private-stores-handoff.test.mjs` adds `contacts/` and call prep: none of the three private stores is in any model-facing load list, and with all three in one data folder, neither the briefer's prompt, the drafter's input nor call prep's prompt carries any of them.
 - [x] `LOADS.forget` includes `routes/` and `network/` (E7-S3), with the guard's files and the sale ledger for the rebuild.
 - [x] **Review findings (PR #8)**, each fixed with a test in `test/routes.test.mjs`:
-  - the address read by the guard's rule (E17-S5);
+  - the address read by the guard's rule (E22-S5);
   - a membership finding's people as forum targets only;
-  - one association per finding, and only the bank's own people (E17-S4);
-  - the direct route's evidence limited to `bank.people` (E17-S5);
-  - the direct route rebuilt when chosen (E17-S6).
+  - one association per finding, and only the bank's own people (E22-S4);
+  - the direct route's evidence limited to `bank.people` (E22-S5);
+  - the direct route rebuilt when chosen (E22-S6).
 - [x] `test/repo.test.mjs`: the data-folder rule covers `network/` and `routes/`.
 - [x] The README describes it.
 

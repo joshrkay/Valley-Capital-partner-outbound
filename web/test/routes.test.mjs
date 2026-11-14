@@ -1,4 +1,4 @@
-// The account page's routes section and the network page (PRD E17-S7), through web/lib/routes-ops.mjs, against the repository's fake
+// The account page's routes section and the network page (PRD E22-S7), through web/lib/routes-ops.mjs, against the repository's fake
 // Supabase REST API. Building routes is code, so it runs in a unit of work as the signed-in principal: no job is queued, nothing is
 // drafted or sent. Invented data only.
 import test from 'node:test';

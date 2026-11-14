@@ -1,4 +1,4 @@
-// PRD E17: the firm's network (network/) and the routes (routes/) never reach the drafter or the briefer. Matching happens in code, so no
+// PRD E22: the firm's network (network/) and the routes (routes/) never reach the drafter or the briefer. Matching happens in code, so no
 // model sees the network. Proved three ways: the load lists, the code, and end to end with a network, research, routes and a chosen
 // route in the data folder. Every name is invented, and the network's names are distinctive so a leak is easy to spot.
 import test from 'node:test';

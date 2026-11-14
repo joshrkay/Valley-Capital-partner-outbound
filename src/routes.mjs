@@ -1,4 +1,4 @@
-// Routes to the decision-maker (PRD E17). For one account: who decides on loan sales, and the best way in. Code only, no model, and the
+// Routes to the decision-maker (PRD E22). For one account: who decides on loan sales, and the best way in. Code only, no model, and the
 // same inputs always give the same routes, ids and order. Five route types:
 //   direct   the named or candidate person (E7-S1). Always listed, with its status from the existing prerequisites.
 //   counsel  the lender's own law firm: the briefer's bank.counsel findings, and county foreclosure filings that name the lender's counsel

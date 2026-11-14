@@ -1,4 +1,4 @@
-// Pure display helpers for the routes section (PRD E17). Every value comes from the stored record; nothing here adds a fact.
+// Pure display helpers for the routes section (PRD E22). Every value comes from the stored record; nothing here adds a fact.
 export const TYPE_LABEL = Object.freeze({ direct: 'Direct', counsel: 'Counsel', advisor: 'Advisor', board: 'Board', forum: 'Forum' });
 
 const bridgeText = (b) => (!b ? '–' : b.kind === 'membership' ? `${b.association} (${b.id})` : `${b.name} (${b.id})`);

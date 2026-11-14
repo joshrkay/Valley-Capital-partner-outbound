@@ -1,4 +1,4 @@
-// PRD E7-S3 and E17 together: the three private stores, the routes (routes/), the firm's network (network/) and the contact stores
+// PRD E7-S3 and E22 together: the three private stores, the routes (routes/), the firm's network (network/) and the contact stores
 // (contacts/: the known list, the vendor tests and passes), never reach a model. Not the briefer, not the drafter, not call prep, not the
 // reading of call notes. Proved by the load lists, and end to end with all three stores in one data folder, each model-facing action run
 // (dry) inside a unit of work loaded with exactly its own load list. Every name is invented and distinctive, so a leak is easy to spot.

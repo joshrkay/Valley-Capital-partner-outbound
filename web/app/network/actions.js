@@ -1,5 +1,5 @@
 'use server';
-// The network page's actions (PRD E17-S1). Each runs the engine's own function (src/network.mjs, src/routes.mjs) in a unit of work as the
+// The network page's actions (PRD E22-S1). Each runs the engine's own function (src/network.mjs, src/routes.mjs) in a unit of work as the
 // signed-in principal, who is recorded as --by. Audit lines carry ids only. Flash messages name ids, never a name from the network.
 import { redirect } from 'next/navigation';
 import { requirePrincipal, flash } from '../../lib/session.mjs';

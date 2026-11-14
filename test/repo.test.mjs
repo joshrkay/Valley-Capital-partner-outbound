@@ -63,7 +63,7 @@ test('every configured model has a price, so cost is always reported', () => {
 // A tracked file that belongs in the data folder. `sources/` is anchored to the root because src/sources/ is code; the data folder's
 // sources/ would sit at the root of a misplaced data dir. The data-folder names are checked for data formats only: web/app/accounts/page.jsx
 // is a route, not an account. contacts/ holds the known list and vendor tests (PRD E7-S2); contacts.json at the root is a rule file.
-// network/ and routes/ (PRD E17) hold the firm's own relationships and the routes built from them: web/app/network/page.jsx is a page, not
+// network/ and routes/ (PRD E22) hold the firm's own relationships and the routes built from them: web/app/network/page.jsx is a page, not
 // the network.
 const dataFormat = (f) => /(\.(json|jsonl|md|txt)|\/[^/.]+)$/.test(f);
 const isDataFile = (f) => /(^|\/)(suppression\.json|touches\.jsonl|audit\.jsonl|senders\.json|runs\.jsonl|changes\.jsonl|KILL|\.env)$/.test(f)

@@ -1,5 +1,5 @@
 'use server';
-// The routes section's actions (PRD E17). Building routes and choosing one run the engine in a unit of work as the signed-in principal.
+// The routes section's actions (PRD E22). Building routes and choosing one run the engine in a unit of work as the signed-in principal.
 // Nothing is queued, drafted or sent: a chosen route gives a principal a checklist.
 import { redirect } from 'next/navigation';
 import { requirePrincipal, flash } from '../../../lib/session.mjs';

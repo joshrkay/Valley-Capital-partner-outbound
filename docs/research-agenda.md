@@ -78,7 +78,7 @@ Each row is a playbook question. `P` = required. The answer's evidence standard 
 | bank.assets | Loans or properties publicly tied to the bank in a court or regulatory record. **Context only, never in a message.** | Court dockets, press | Government |
 | bank.risk | Anything that means we should not approach now: receivership or imminent failure, an active sale process run by an advisor, adverse enforcement action against the named person. | FDIC failed-bank and receivership pages, enforcement databases, press | Government |
 
-**The route topics** (`bank.board`, `bank.counsel`, `bank.advisors`, `bank.memberships`; PRD E17) find the ways in to the person who decides. Each finding names, in `entities`, the people, firms and associations its quote names; code keeps a name only if the quote holds it. They are context only: code never clears one for a message, whatever the model proposes. **Which of these the firm already knows is not a research question.** Matching them against the principals' own network happens in code (`src/routes.mjs`), and the briefer never sees the network.
+**The route topics** (`bank.board`, `bank.counsel`, `bank.advisors`, `bank.memberships`; PRD E22) find the ways in to the person who decides. Each finding names, in `entities`, the people, firms and associations its quote names; code keeps a name only if the quote holds it. They are context only: code never clears one for a message, whatever the model proposes. **Which of these the firm already knows is not a research question.** Matching them against the principals' own network happens in code (`src/routes.mjs`), and the briefer never sees the network.
 
 **Special servicers**
 

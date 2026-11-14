@@ -10,7 +10,7 @@ import { readPaper, paperForBriefer } from './paper.mjs';
 const TIERS = ['government', 'regulator', 'company', 'press', 'other'];
 const DRAFTABLE_TIERS = ['government', 'regulator', 'company', 'press'];
 const NEVER_DRAFT_KINDS = ['risk', 'asset', 'regulatory'];
-// PRD E17-S2: the people, firms and associations a finding's quote names, for the routes to the decision-maker (src/routes.mjs).
+// PRD E22-S2: the people, firms and associations a finding's quote names, for the routes to the decision-maker (src/routes.mjs).
 export const ENTITY_TYPES = ['person', 'firm', 'association'];
 const ENTITY = { type: 'object', additionalProperties: false, required: ['type', 'name', 'affiliation', 'role'], properties: { type: { type: 'string', enum: ENTITY_TYPES }, name: { type: 'string' }, affiliation: { type: 'string' }, role: { type: 'string' } } };
 

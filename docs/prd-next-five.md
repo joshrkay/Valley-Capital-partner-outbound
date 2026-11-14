@@ -204,6 +204,7 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 - [ ] Reads a principal's contact export only with their written consent, recorded with a date, and only from the data folder. It matches on company name and email domain against the registry.
 - [ ] It drafts the request **to the connector**, never a pitch to the target, and caps asks per connector (placeholder: one a quarter).
 - [ ] Design only in this PRD. A separate story will set its data rules before it is built.
+- **Built in part as E22** (`docs/prd-signal-pipeline.md`, routes to the decision-maker): the firm's network, matching and a checklist, with its data rules. Differences from this story are open decisions there: nothing is drafted to the connector (D-R7), there is no cap per connector in code (D-R8), and the network is entered by hand rather than read from a contact export (D-R9).
 
 **Decisions for a principal.**
 

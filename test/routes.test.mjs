@@ -1,4 +1,4 @@
-// PRD E17-S3 to S6: routes to the decision-maker. buildRoutes matches the lender side (sourced findings, the sale ledger, county counsel
+// PRD E22-S3 to S6: routes to the decision-maker. buildRoutes matches the lender side (sourced findings, the sale ledger, county counsel
 // records) against the firm's network in code, with no model, and ranks the routes from routes.json. A principal chooses one and gets a
 // checklist; nothing is drafted or sent, and the guard is unchanged. All names, firms and pages are invented (test/routes-kit.mjs).
 import test from 'node:test';

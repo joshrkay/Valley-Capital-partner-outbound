@@ -1,4 +1,4 @@
-// The account page's routes section (PRD E17-S7): who decides, and the best way in. The direct route's status, the ranked warm routes with
+// The account page's routes section (PRD E22-S7): who decides, and the best way in. The direct route's status, the ranked warm routes with
 // their tier, bridge, reasoning and evidence, the held routes, a build button, a choose button, and the chosen route's checklist. Matching
 // runs in code; no model sees the firm's network. There is no send button: a chosen route gives a principal a checklist only.
 import { accountRoutes } from '../../../lib/routes-ops.mjs';

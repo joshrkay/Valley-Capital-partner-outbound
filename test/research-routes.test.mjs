@@ -1,4 +1,4 @@
-// PRD E17-S2: the lender side of a route, researched with sources. Four playbook topics (board, counsel, advisors, memberships); each
+// PRD E22-S2: the lender side of a route, researched with sources. Four playbook topics (board, counsel, advisors, memberships); each
 // finding names the people, firms and associations its quote names; code keeps a name only if the quote holds it; and the four topics
 // are context only, never cleared for a message. All names and pages are invented.
 import test from 'node:test';

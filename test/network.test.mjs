@@ -1,4 +1,4 @@
-// PRD E17-S1: the firm's network. The principals' own relationships, kept in the data folder only, entered by a principal, with audit
+// PRD E22-S1: the firm's network. The principals' own relationships, kept in the data folder only, entered by a principal, with audit
 // lines that carry ids and never a name. All names are invented.
 import test from 'node:test';
 import assert from 'node:assert/strict';

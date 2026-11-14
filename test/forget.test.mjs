@@ -206,7 +206,7 @@ test('a person no longer on the account is forgotten by name and address, and th
   assert.equal(readJson(join(dir, 'accounts', `${ID}.json`)).person.name, 'Robin Lee');
 });
 
-// The routes (PRD E17) hold lender-side names, and the firm's network can hold the same person if the firm knows them. A second bank's
+// The routes (PRD E22) hold lender-side names, and the firm's network can hold the same person if the firm knows them. A second bank's
 // director is the same Jordan Sample, of Acme, so a route there goes through the network entry; both banks have a chosen route.
 function seedRoutes() {
   const dir = seed();

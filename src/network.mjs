@@ -1,4 +1,4 @@
-// The firm's network (PRD E17-S1): the principals' own relationships. People they know (name, organization, title, relationship, which
+// The firm's network (PRD E22-S1): the principals' own relationships. People they know (name, organization, title, relationship, which
 // principal knows them, whether they agreed to be asked for introductions), firms they work with (law firms, advisors, brokers) and the
 // associations they belong to. A principal enters each one; nothing is imported, looked up or scraped.
 //
@@ -107,7 +107,7 @@ export function addMembership({ dir, association, principal, role = 'member', al
   return save(dir, net, 'memberships', 'nm', entry, who, now);
 }
 
-// How many chosen routes use each entry as their bridge, across every account's routes file (PRD E17, D-R8: no cap on asks per
+// How many chosen routes use each entry as their bridge, across every account's routes file (PRD E22, D-R8: no cap on asks per
 // connector in code; this count is what a principal sees instead).
 export function bridgeUses(dir) {
   const uses = {};

@@ -1,4 +1,4 @@
-// The firm's network (PRD E17-S1): the people the principals know, the firms they work with and the associations they belong to, with
+// The firm's network (PRD E22-S1): the people the principals know, the firms they work with and the associations they belong to, with
 // forms to add each, a button to remove each, and how many chosen routes use each entry (D-R8: no cap on asks in code; this count instead).
 // Private: names and relationships only, kept in the data store, never sent to a model. Viewing it is audited.
 import { requirePrincipal } from '../../lib/session.mjs';
@@ -21,7 +21,7 @@ export default async function Network() {
   return (
     <>
       <h1>The firm's network</h1>
-      <p className="sub">The principals' own relationships, for finding warm routes to the person who decides on loan sales (PRD E17). Routes are built on each account's page.</p>
+      <p className="sub">The principals' own relationships, for finding warm routes to the person who decides on loan sales (PRD E22). Routes are built on each account's page.</p>
       <div className="banner warn small" role="note">Private. Names and relationships only: never an email address or a phone number, because nothing here contacts anyone. It is matched in code; no model ever sees it, and nothing is drafted or sent to anyone in it. Removing an entry removes it from every route that used it.</div>
 
       <h2>People ({n.people.length})</h2>
