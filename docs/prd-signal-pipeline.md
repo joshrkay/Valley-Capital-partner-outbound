@@ -179,6 +179,7 @@ Rules that apply everywhere:
 | E11 Scheduling, monitoring and cost | R2 | P0 | E8 |
 | E12 Platform foundation | R2 | P0 | E1–E6 (built) |
 | E13 Event listeners | R2 | P1 | E2, E3, E12 |
+| E14 The paper estimate | R2 | P0 | E3, E4, E6 |
 
 ---
 
@@ -734,6 +735,10 @@ Some sources report a dated change rather than a state: a filing, a notice, an o
   - The first try met an error body from inside the server. Such errors are now retried twice.
 - [ ] The signals are wired into scoring (`scoring.json`, `src/score.mjs`), after merge.
 - [ ] A principal confirms the filer map, and reviews the searches, windows and bank SIC codes.
+
+### E14. The paper estimate
+
+*As a principal, I want one page per candidate that estimates what CRE the lender holds — how much, which property types, where, what sizes, when it matures, whether the lender already sells, and how much fits our buy box — with every number tiered as reported, observed or inferred, so that I go into the first call knowing the paper.* The design, the critical-detail checklist and stories E14-S1 to S6 are in `docs/paper-estimate.md`. P0 for E14-S1 (data in hand), R2.
 
 ## 9. Definition of done (every story)
 
