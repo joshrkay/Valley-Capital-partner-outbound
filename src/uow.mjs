@@ -55,6 +55,13 @@ export const LOADS = Object.freeze({
   // The vendor test harness (PRD E7-S2, src/vendors.mjs): the known list, the test reports and the recorded passes. No drafting or
   // research action loads contacts/, so none of it reaches a brief or a message.
   vendors: ['contacts/'],
+  // The backtest of the score (PRD E17, src/backtest/). It runs from the command line against the data folder; there is no worker job
+  // kind yet, and a whole panel is too large for one unit of work (see the PRD's size estimate). These lists say what each step reads:
+  // the panel pull, its own files and the run log; the labels, the panel, the FDIC records they are dated by, the confirmed filers
+  // (for the coverage strata) and the run log; the replay, backtest/ only. No research, drafting or call action loads backtest/.
+  backtestPanel: ['backtest/panel/', 'sources/runs.jsonl'],
+  backtestLabels: ['backtest/', 'sources/fdic/failed.json', 'sources/fdic/events.json', 'sources/fdic/sales.json', 'sources/fdic/state.json', 'sources/edgar/filers.json', 'sources/runs.jsonl'],
+  backtestRun: ['backtest/'],
 });
 
 // The contact actions' load lists, narrowed to one account where the action touches only that account.

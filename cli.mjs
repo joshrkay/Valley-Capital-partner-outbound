@@ -32,6 +32,9 @@ import { runCallPrep, saveNotes, runCallExtract, buildExtractPrompt, confirmInFo
 import { runOutcomesReport, renderOutcomesReport } from './src/outcomes.mjs';
 import { addPerson, addFirm, addMembership, listNetwork } from './src/network.mjs';
 import { buildRoutes, readRoutes, chooseRoute, removeNetworkEntry } from './src/routes.mjs';
+import { runPanel, verifyPanel } from './src/backtest/panel.mjs';
+import { buildLabels } from './src/backtest/labels.mjs';
+import { runBacktest, readReport, summarize } from './src/backtest/run.mjs';
 import { readFileSync } from 'node:fs';
 
 const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE this repository first.
@@ -163,6 +166,25 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound outcomes report [--since YYYY-MM-DD]   confirmed outcomes by signal type, tier and lead time (no model; never changes
                                                   weights), written to reports/outcomes-DATE.json
 
+  A backtest of the score (PRD E17): would the score, run on the data known at the time, have ranked banks under pressure? Every
+  setting is a placeholder in config.json backtest. It never changes scoring.json; a principal does, citing a holdout report.
+  outbound backtest panel [--from YYYY-MM-DD] [--to YYYY-MM-DD]   the point-in-time panel (free, no key): Call Reports for every
+                                                  quarter in the window plus scoring.json lookbackQuarters before it, the Summary of
+                                                  Deposits for each June 30, failures and structure events, for every bank in our
+                                                  states or with a branch in the metros, including banks that have since failed or
+                                                  merged. Written to backtest/panel/; suspect if coverage is below minCoverage
+  outbound backtest labels [--filings]            dated labels from sources the score does not read: failure, assisted merger, FDIC
+                                                  loan sale. disclosed_sale is unavailable until the SEC contact (Q11) and confirmed
+                                                  filers exist; --filings says why. Written to backtest/labels.json
+  outbound backtest run [--scoring PATH] [--compare A B] [--holdout] [--rolling] [--horizon N] [--k N]
+                                                  replay scoreBank on each as-of quarter (no model, no network) and write
+                                                  backtest/report-<hash>.json and .md. Training quarters by default; --holdout scores
+                                                  the declared holdout once (a second scoring file on it is marked reused holdout);
+                                                  --rolling trains to T and tests T+1 to T+4. Marked PROVISIONAL while the buy box has
+                                                  placeholders
+  outbound backtest report [--hash H]             print the summary of the latest report (or of report H)
+  outbound backtest verify                        the coverage check on the stored panel (no network)
+
   The firm's network (PRD E22-S1): the principals' own relationships. Private: the data folder only, never a model, never the repo.
   outbound network add-person --name N --known-by PRINCIPAL [--organization O] [--title T] [--relationship R]
                               [--consent yes|no|unknown] [--alias A]... --by NAME     someone a principal knows (no email or phone)
@@ -212,6 +234,7 @@ async function runVerify(dir, which, rules, flags) {
   if (which === 'filings') reports.push(await verifyFilings({ dir, sec: rules.config.sec, rules: loadFilingRules(), sample }));
   if (which === 'fdicsales') reports.push(await verifyFdicSales({ dir, fdic: rules.config.fdic, personalDomains: rules.config.personalDomains, sample }));
   if (which === 'sales') reports.push(verifyLedger({ dir, sample }));
+  if (which === 'backtest') reports.push(verifyPanel({ dir, config: rules.config.backtest }));
   const lines = [];
   for (const r of reports) {
     lines.push(`== ${r.source.toUpperCase()}`);
@@ -599,6 +622,36 @@ async function main() {
       const md = readRoutes({ dir, id }).markdown;
       return out(`Chosen: ${route.type} route ${route.id}. Nothing is drafted or sent; the checklist is below and in routes/${id}.md.\n\n${md.slice(md.indexOf('## Chosen route'))}`);
     }
+  }
+
+  if (cmd === 'backtest') {   // PRD E17: run from the command line against the data folder; never writes scoring.json
+    const bt = rules.config.backtest ?? {};
+    const int = (k) => { if (flags[k] === undefined) return undefined; const n = Number(flags[k]); if (!Number.isInteger(n) || n < 1) throw new Error(`--${k} must be a whole number of 1 or more (the ${k === 'k' ? 'size of the top group' : 'horizon in quarters'}).`); return n; };
+    if (sub === 'panel') {
+      const r = await runPanel({ dir, metros: rules.metros, config: bt, lookbackQuarters: rules.scoring.lookbackQuarters ?? 8, from: opt(flags, 'from'), to: opt(flags, 'to') });
+      if (r.outcome === 'failed') { process.exitCode = 1; return out(r); }
+      return out(`Panel ${r.runId}: ${r.outcome.toUpperCase()}. ${r.banks} bank(s), ${r.asOf.length} as-of quarters from ${r.asOf[0]} to ${r.asOf.at(-1)}, Summary of Deposits ${r.sodYears.join(', ')}.\nCoverage: ${Object.entries(r.coverage).map(([d, c]) => `${d} ${c}`).join(', ')}.\n${r.notes.map((n) => `- ${n}`).join('\n')}\nNext: outbound backtest labels`);
+    }
+    if (sub === 'labels') {
+      const r = buildLabels({ dir, config: rules.config, filings: !!flags.filings });
+      if (r.outcome === 'failed') { process.exitCode = 1; return out(r); }
+      return out(`Labels ${r.runId}: ${r.labels} (${Object.entries(r.byKind).map(([k, n]) => `${k} ${n}`).join(', ')}), complete through ${r.labelsAsOf}. disclosed_sale is unavailable: outbound backtest labels --filings says why.\nNext: outbound backtest run`);
+    }
+    if (sub === 'run') {
+      const compare = flags.compare !== undefined;
+      if (compare && (flags.compare === true || !pos[2])) throw new Error('--compare needs two scoring files: outbound backtest run --compare A B');
+      const mode = compare ? 'compare' : flags.holdout ? 'holdout' : flags.rolling ? 'rolling' : 'training';
+      if ([compare, !!flags.holdout, !!flags.rolling].filter(Boolean).length > 1) throw new Error('Choose one of --compare, --holdout and --rolling.');
+      const scoringPaths = compare ? [flags.compare, pos[2]] : opt(flags, 'scoring') ? [opt(flags, 'scoring')] : [];
+      const r = runBacktest({ dir, rules, mode, scoringPaths, horizon: int('horizon'), k: int('k') });
+      return out(`${summarize(r.report)}\nWritten: ${r.paths.json} and ${r.paths.md}.`);
+    }
+    if (sub === 'report') {
+      const r = readReport({ dir, hash: opt(flags, 'hash') });
+      if (!r) throw new Error(`No backtest report${opt(flags, 'hash') ? ` ${opt(flags, 'hash')}` : ''} yet. Run: outbound backtest run`);
+      return out(summarize(r));
+    }
+    if (sub === 'verify') { if (!(await runVerify(dir, 'backtest', rules, flags))) process.exitCode = 1; return; }
   }
 
   if (cmd === 'outcomes' && sub === 'report') {

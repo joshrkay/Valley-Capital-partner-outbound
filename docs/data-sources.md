@@ -252,6 +252,7 @@ Each step is a story with acceptance criteria in the PRD's format, and each ship
 | Adapter | Hosts |
 |---|---|
 | FDIC | api.fdic.gov, www.fdic.gov, orders.fdic.gov |
+| Backtest (PRD E17) | api.fdic.gov, through the FDIC client; it reads the SEC and www.fdic.gov records only as their own adapters stored them |
 | SEC | www.sec.gov, efts.sec.gov, data.sec.gov |
 | FFIEC | cdr.ffiec.gov, www.ffiec.gov |
 | FRED | api.stlouisfed.org |
