@@ -380,3 +380,10 @@ test('ERAS: every report shows each era apart beside the pooled headline, and sa
   assert.match(summarize(report), /era Early: base rate/);
   assert.throws(() => run(dir, { rules: rulesWith({ eras: [{ id: 'x', from: '2023-12-31', to: '2022-03-31' }] }) }), /eras/);
 });
+
+test('the mode says banks, not quarters, when the holdout is by bank', async () => {
+  const dir = await world();
+  assert.match(run(dir, { rules: bankRules() }).report.modeLabel, /^training banks/);
+  assert.match(run(dir, { mode: 'holdout', rules: bankRules() }).report.modeLabel, /^HELD-OUT banks/);
+  assert.match(run(dir).report.modeLabel, /^training quarters/);
+});

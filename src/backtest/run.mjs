@@ -295,9 +295,10 @@ export function runBacktest({ dir, rules, mode = 'training', scoringPaths = [], 
     ...(cfg.callReportLagDays !== undefined && cfg.callReportLagDays !== panel.state.callReportLagDays ? [`config.backtest.callReportLagDays is ${cfg.callReportLagDays}, but the panel was built with ${panel.state.callReportLagDays}, which the replay uses. Re-pull the panel to change it.`] : []),
     ...(cfg.sodReleaseLagDays !== undefined && cfg.sodReleaseLagDays !== panel.state.sodReleaseLagDays ? [`config.backtest.sodReleaseLagDays is ${cfg.sodReleaseLagDays}, but the panel was built with ${panel.state.sodReleaseLagDays}, which the replay uses. Re-pull the panel to change it.`] : []),
   ];
+  const modeLabel = byBank ? { training: 'training banks (the held-out banks left out), every as-of quarter', holdout: 'HELD-OUT banks, every as-of quarter', compare: 'two scoring files side by side, training banks only', rolling: 'rolling origin on the training banks (train to T, test T+1 to T+4)' }[mode] : MODE_LABEL[mode];
   const report = {
     kind: 'backtest-report', hash, generatedAt: now.toISOString(), provisional: vb.placeholders.length > 0, placeholders: vb.placeholders,
-    mode, modeLabel: MODE_LABEL[mode], reusedHoldout, reusedFrom: [...new Set(prior.map((l) => l.reportHash))], holdoutMovedFrom: movedFrom, inputs,
+    mode, modeLabel, reusedHoldout, reusedFrom: [...new Set(prior.map((l) => l.reportHash))], holdoutMovedFrom: movedFrom, inputs,
     split: { by: split.by, ...(byBank ? { share: split.share, seed: split.seed, heldOutBanks: heldOut.size } : { from: split.from }) },
     quarters: { all, training, holdout, evaluated, horizonIncomplete: evaluated.filter((d) => horizonEnd(d, H) > labels.labelsAsOf), labelsAsOf: labels.labelsAsOf },
     labelKinds: labels.kinds, holdoutLabelledBanks: holdoutLabelled.size, rollingOffered: holdoutLabelled.size < minLabels,
