@@ -260,8 +260,9 @@ export async function pullHqCerts({ states, http, pageSize }) {
   return { ...r, certs: new Set(r.rows.map((x) => String(x.CERT))), filters };
 }
 
-export async function pullInstitutions({ certs, http, pageSize, chunkSize }) {
-  return collect({ endpoint: 'institutions', values: certs, filtersFor: (p) => orFilter('CERT', p), chunkSize, fields: FDIC_FIELDS.institutions, pageSize, http });
+// `fields` defaults to the bank list's; the backtest panel (src/backtest/panel.mjs) asks for the established and end dates too.
+export async function pullInstitutions({ certs, http, pageSize, chunkSize, fields = FDIC_FIELDS.institutions }) {
+  return collect({ endpoint: 'institutions', values: certs, filtersFor: (p) => orFilter('CERT', p), chunkSize, fields, pageSize, http });
 }
 
 export async function pullFailures({ certs, http, pageSize, chunkSize }) {
@@ -413,14 +414,15 @@ export function eventOf(row) {
     acquirerCert: present(row.ACQ_CERT) && Number(row.ACQ_CERT) !== 0 ? String(row.ACQ_CERT) : null };
 }
 
-// Summary of Deposits, latest year, joined to metros by branch COUNTY (STCNTYBR, which FDIC returns as a number, so it is zero-padded)
-// rather than by MSABR. MSABR disagreements are counted so a drift in FDIC's coding shows up in the run notes.
-export async function pullSod({ metros, http, pageSize, chunkSize = 50 }) {
+// Summary of Deposits, latest year (or the `year` given, for the backtest panel), joined to metros by branch COUNTY (STCNTYBR, which FDIC
+// returns as a number, so it is zero-padded) rather than by MSABR. MSABR disagreements are counted so a drift in FDIC's coding shows up
+// in the run notes. Each bank also gets its count of branch rows per metro (branchesByMetro), the footprint as of that June 30.
+export async function pullSod({ metros, http, pageSize, chunkSize = 50, year: askedYear = null }) {
   const countyToMetro = new Map();
   for (const m of metroList(metros)) for (const c of Object.keys(m.counties ?? {})) countyToMetro.set(pad5(c), String(m.cbsa));
   if (!countyToMetro.size) return { rows: [], total: 0, mismatch: false, year: null, byCert: new Map(), msaMismatches: 0, rowsRead: 0 };
   const countyFilter = orFilter('STCNTYBR', [...countyToMetro.keys()].map((c) => Number(c)));
-  const latest = await fdicQuery({ endpoint: 'sod', filters: countyFilter, fields: ['YEAR'], sortBy: 'YEAR', sortOrder: 'DESC', limit: 1, maxRows: 1, http });
+  const latest = askedYear === null ? await fdicQuery({ endpoint: 'sod', filters: countyFilter, fields: ['YEAR'], sortBy: 'YEAR', sortOrder: 'DESC', limit: 1, maxRows: 1, http }) : { rows: [{ YEAR: askedYear }] };
   const year = latest.rows[0]?.YEAR ?? null;
   if (year === null) return { rows: [], total: 0, mismatch: false, year, byCert: new Map(), msaMismatches: 0, rowsRead: latest.rows.length };
   const filters = `YEAR:${Number(year)} AND ${countyFilter}`;
@@ -432,9 +434,10 @@ export async function pullSod({ metros, http, pageSize, chunkSize = 50 }) {
     if (!cbsa) continue;
     if (row.MSABR !== undefined && String(row.MSABR) !== cbsa) msaMismatches++;
     const cert = String(row.CERT);
-    if (!byCert.has(cert)) byCert.set(cert, { depositsByMetro: {}, totalDeposits: null });
+    if (!byCert.has(cert)) byCert.set(cert, { depositsByMetro: {}, totalDeposits: null, branchesByMetro: {} });
     const s = byCert.get(cert);
     s.depositsByMetro[cbsa] = (s.depositsByMetro[cbsa] ?? 0) + (Number(row.DEPSUMBR) || 0);
+    s.branchesByMetro[cbsa] = (s.branchesByMetro[cbsa] ?? 0) + 1;
   }
   // DEPSUM is the bank's total deposits, but FDIC carries it ONLY on the main-office row (branch 0) and sends 0 on every other row.
   // Verified 2026-11-13: one bank's DEPSUM of 55,417 equals its two branches' DEPSUMBR, 33,198 + 22,219. A main office outside the
@@ -449,7 +452,7 @@ export async function pullSod({ metros, http, pageSize, chunkSize = 50 }) {
   // FDIC's branch figures can sum to $1,000 more than its own total (rounding; seen on 3 banks on 2026-11-13). Within 0.1% is rounding;
   // beyond that, the county join is suspect.
   const overOne = certs.filter((c) => { const s = byCert.get(c); const m = Object.values(s.depositsByMetro).reduce((a, b) => a + b, 0); return s.totalDeposits && m > s.totalDeposits * 1.001; }).length;
-  return { ...r, year: Number(year), byCert, msaMismatches, filters, totals, noTotal, overOne, rowsRead: r.rows.length + latest.rows.length };
+  return { ...r, year: Number(year), byCert, msaMismatches, filters, totals, noTotal, overOne, rowsRead: r.rows.length + (askedYear === null ? latest.rows.length : 0) };
 }
 
 // E3-S2: the last `quarters` published quarters for every bank, re-pulled each run because Call Reports get amended.
