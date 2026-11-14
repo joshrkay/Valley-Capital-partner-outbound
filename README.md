@@ -30,7 +30,7 @@ Start with `docs/prd-signal-pipeline.md` for the pipeline, and `docs/research-ag
   - deploying the platform (E12-S7);
   - Gmail drafts and reply detection (E9);
   - quarterly nurture (E10);
-  - the referral mapper;
+  - the referral mapper's drafted ask to a connector (E17 finds the routes and gives a checklist; it drafts nothing, PRD D-R7), and county records that name a lender's counsel (E17-S3 has the event shape and the seam, no adapter);
   - meeting prep beyond the call brief (event lists, who to meet, and a drafted follow-up email: PRD E15-S3 gives a checklist today);
   - the weekly reporter (the outcomes report, PRD E15-S4, is its first part).
 
@@ -231,6 +231,38 @@ npm run outbound -- sales list --seller fdic:12345      # or --kind disposition
 
 Property names and addresses are kept in the ledger for a principal. They never go in a log, and a test proves no event reaches the drafter.
 
+### Routes to the decision-maker (PRD E17)
+
+For each target: who actually decides on loan sales, then the best way in. A warm route gets a much better reply rate than a cold email.
+
+| Route | What it is | Where the lender side comes from |
+|---|---|---|
+| **direct** | The named or candidate person | The account, and the briefer's `bank.people` findings (E7-S1) |
+| **counsel** | The lender's own law firm | `bank.counsel` findings; county foreclosure filings naming the lender's counsel (event shape and seam only) |
+| **advisor** | A loan-sale advisor or broker the lender has used | `bank.advisors` findings; a listing's advisor in the sale ledger where the bank sold |
+| **board** | A director or officer someone in the firm's network knows | `bank.board` and `bank.people` findings |
+| **forum** | A shared association or forum (CREFC, state bankers' associations, RMA, speaker lists) | `bank.memberships` findings |
+
+```bash
+npm run outbound -- network add-person --name "..." --organization "..." --known-by "Pat Example" --consent unknown --by "Pat Example"
+npm run outbound -- network add-firm --name "..." --kind law --known-by "Pat Example" --by "Pat Example"
+npm run outbound -- network add-membership --association "CREFC" --alias "CRE Finance Council" --principal "Pat Example" --by "Pat Example"
+npm run outbound -- network list --by "Pat Example"          # every entry, and how many chosen routes use each (audited)
+npm run outbound -- routes build --account acme-bank         # code only: writes routes/acme-bank.json and .md in the data folder
+npm run outbound -- routes show --account acme-bank
+npm run outbound -- routes choose --account acme-bank --route r-... --by "Pat Example"   # a checklist; nothing is drafted or sent
+npm run outbound -- network remove --id np-1 --by "Pat Example"   # also removes every route and choice that used it
+```
+
+- **The firm's network** (`network/network.json` in the data folder) holds the principals' own relationships: people (name, organization, title, relationship, which principal knows them, whether they agreed to be asked for introductions), firms and memberships. Names and relationships only: an entry with an email address or a phone number is refused. Entry ids carry no name (`np-1`, `nf-2`, `nm-3`), and audit lines carry ids only.
+- **The lender side** is researched by four new playbook topics (`bank.board`, `bank.counsel`, `bank.advisors`, `bank.memberships`; they replace `bank.access`). Each finding lists the people, firms and associations its quote names, and code keeps a name only if the quote holds it. These topics are context only: never cleared for a message.
+- **Matching** (`src/routes.mjs`, `buildRoutes`) is code with no model, so no model ever sees the network. Names are compared in a normal form (case, punctuation, "&", legal suffixes, honorifics and middle initials do not matter) and must be equal: no fuzzy matching. No match means no route. A finding whose quote could not be checked is not used.
+- **Tiers** as in `docs/paper-estimate.md`: a government, regulator or company source is reported, press observed, anything else inferred. A same-name match without a shared organization, a colleague, and a support check that did not say yes are inferred.
+- **The FDIC's loan-sale advisor** is the FDIC-as-receiver's: listed only for a failed bank whose loans the FDIC sells, as a route into the FDIC's sale, never into a bank.
+- **The order**, what counts as current, whether consent is required, and same-name matches are all placeholders in `routes.json` (PRD E17, D-R1 to D-R9).
+- **A route relaxes no guard rule.** A route through a suppressed party is held. Choosing is refused after an opt-out or a suppression of the bank. Choosing changes no account, drafts nothing, records no touch; the checklist says who to ask, what to cite (with links), what never to mention, and what comes after an introduction.
+- On the platform, the account page has a routes section and `/network` is its own page. Both run in units of work as the principal; there is no new job kind. Neither `network/` nor `routes/` is ever loaded by the briefer or the drafter (`test/routes-handoff.test.mjs`).
+
 ### Checking the scrapers
 
 Tests use fakes, so they prove the code does what we meant, not that the sources say what we think. `sources verify` checks the stored data against the live sources. It is read-only and exits 1 on any failure:
@@ -344,10 +376,11 @@ It stores no message text, and writes an audit line for every decision.
 | `buybox.json` | What the firm buys. `[CONFIRM]` fields block scoring until a principal fills them |
 | `scoring.json` | Score components (distress, fit, timing), signal rules, tier cuts and the CMBS maturity window; every number a placeholder |
 | `triage.json` | The weekly triage: the window, what counts as act now and watch, the calendar settings and staleness limits; every value a placeholder |
+| `routes.json` | Routes to the decision-maker: which playbook topics feed which route, the route order, tiers, matching, consent and currency; every value a placeholder |
 | `supabase/migrations/` | The platform's tables, access rules and functions. Structure only, no data |
 | `web/` | The principals' web app (Next.js) |
 | `.github/workflows/` | The platform worker's schedule (off until enabled) |
-| `src/` | `guard`, `research`, `draft`, `lint`, `model` (the only file that calls the Anthropic API), `rules`, `store`, `paths`, plus the pipeline: `sources/` (`http`, `runlog`, `fdic`, `edgar`, `fdicsales`), `metrics`, `score`, `paper` (the paper estimate), `candidates`, `triage`, `sales`, `pilot`, call prep and outcomes: `calls`, `outcomes`, and the platform: `uow`, `platform/` (`client`, `worker`, `move`) |
+| `src/` | `guard`, `research`, `draft`, `lint`, `model` (the only file that calls the Anthropic API), `rules`, `store`, `paths`, plus the pipeline: `sources/` (`http`, `runlog`, `fdic`, `edgar`, `fdicsales`), `metrics`, `score`, `paper` (the paper estimate), `candidates`, `triage`, `sales`, `pilot`, call prep and outcomes: `calls`, `outcomes`, routes to the decision-maker: `network`, `routes`, and the platform: `uow`, `platform/` (`client`, `worker`, `move`) |
 | `scripts/sync-site.mjs` | Refreshes `site-snapshot/` from the website repository (see below) |
 | `site-snapshot/` | A copy of the 7 website files the rules depend on, a list of the site's pages, and a record of the commit it came from. Committed. Refresh it; do not edit it. |
 | `docs/` | The plan, the research agenda, and the PRD for the signal pipeline |
@@ -358,6 +391,7 @@ In `$OUTBOUND_DATA_DIR`:
 - `senders.json`, `suppression.json`, `accounts/`, `research/`, `facts/`, `briefs/`, `drafts/<account>/`, `touches.jsonl`, `audit.jsonl`;
 - for the pipeline: `sources/` (FDIC data, the run log and the change log), `candidates/` (the latest list and principals' decisions), `paper/` (one paper estimate per bank), `sales/` (the sale ledger), `triage/` (each week's triage and its snapshot), and `pilot/` (truth sheets, verdicts, the pass).
 - for calls: `calls/<account>/` (call briefs, notes, proposals and follow-ups), `outcomes.jsonl` (confirmed outcomes) and `reports/`.
+- for routes (PRD E17): `network/` (the firm's own relationships: private, never given to a model) and `routes/` (each account's routes and the chosen route's checklist).
 
 ## Changing it
 

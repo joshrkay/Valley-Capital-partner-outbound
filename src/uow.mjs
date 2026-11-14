@@ -33,6 +33,13 @@ export const LOADS = Object.freeze({
   triage: ['candidates/', 'accounts/', 'suppression.json', 'touches.jsonl', 'sources/runs.jsonl', 'sources/fdic/state.json', 'sources/fdic/failed.json',
     'sources/edgar/loans.json', 'sources/edgar/filings.json', 'sources/edgar/filers.json', 'triage/state.json'],
   sales: ['sources/', 'sales/'],   // the CMBS and FDIC loan-sale pulls rebuild the sale ledger (sales/ledger.json) when they finish
+  // Routes to the decision-maker (PRD E17, src/routes.mjs): the guard's files (for its view: an opt-out or a suppression stops a route),
+  // the account, its research, the sale ledger, the firm's network and the account's own routes file. accounts/, research/ and routes/
+  // are narrowed to one account by routesLoads(). No model-facing action (research, draft, call prep) loads network/ or routes/.
+  routes: [...GUARD, 'accounts/', 'research/', 'sales/ledger.json', 'network/', 'routes/'],
+  // The firm's network (src/network.mjs). routes/ is here because removing an entry rewrites every routes file that stored it, and the
+  // network page shows how many chosen routes use each entry.
+  network: ['network/', 'routes/'],
 });
 
 const covers = (prefix, rel) => prefix === '' || rel === prefix || (prefix.endsWith('/') && rel.startsWith(prefix)) || rel.startsWith(`${prefix}/`);

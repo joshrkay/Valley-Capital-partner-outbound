@@ -28,6 +28,8 @@ import { push, pull } from './src/platform/move.mjs';
 import { smoke } from './src/platform/smoke.mjs';
 import { runCallPrep, saveNotes, runCallExtract, buildExtractPrompt, confirmInFolder, rejectProposal, listCalls, renderProposal, needDate, MAX_NOTES } from './src/calls.mjs';
 import { runOutcomesReport, renderOutcomesReport } from './src/outcomes.mjs';
+import { addPerson, addFirm, addMembership, listNetwork } from './src/network.mjs';
+import { buildRoutes, readRoutes, chooseRoute, removeNetworkEntry } from './src/routes.mjs';
 import { readFileSync } from 'node:fs';
 
 const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE this repository first.
@@ -62,7 +64,8 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
                                                   EDGAR full-text search, for every bank filer a principal confirmed, plus a discovery
                                                   search by state and bank SIC code (needs config.sec.userAgent filled in)
   outbound sources run fdicsales                  FDIC loan-sale announcements from www.fdic.gov (PRD E16-S2): sale id, dates, receiverships,
-                                                  pools, advisor; the buyer is unknown. Gentle: robots.txt and a few requests a minute
+                                                  pools, the FDIC's own loan-sale advisor (a route into FDIC sales, never into a bank);
+                                                  the buyer is unknown. Gentle: robots.txt and a few requests a minute
                                                   (needs config.fdic.userAgent filled in). Then rebuilds the sale ledger, as the edgar run does
   outbound sources status                         the last run of each source, and the latest FDIC quarter seen
   outbound sources verify [fdic|edgar|filings|fdicsales] [--sample N]   check the stored data against the live sources (read-only): fresh, complete,
@@ -129,6 +132,21 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound call list --account ID                 briefs, proposals and confirmed outcomes for an account
   outbound outcomes report [--since YYYY-MM-DD]   confirmed outcomes by signal type, tier and lead time (no model; never changes
                                                   weights), written to reports/outcomes-DATE.json
+
+  The firm's network (PRD E17-S1): the principals' own relationships. Private: the data folder only, never a model, never the repo.
+  outbound network add-person --name N --known-by PRINCIPAL [--organization O] [--title T] [--relationship R]
+                              [--consent yes|no|unknown] [--alias A]... --by NAME     someone a principal knows (no email or phone)
+  outbound network add-firm --name N --known-by PRINCIPAL [--kind law|advisor|broker|other] [--relationship R] [--alias A]... --by NAME
+  outbound network add-membership --association A --principal PRINCIPAL [--role R] [--alias A]... --by NAME
+  outbound network list --by NAME [--json]       every entry, and how many chosen routes use each (the listing is audited)
+  outbound network remove --id ID --by NAME      removes the entry, and every route and choice that used it, from every routes file
+
+  Routes to the decision-maker (PRD E17): who decides, and the best way in. Code only, no model. Nothing is drafted or sent.
+  outbound routes build --account ID             match the research (board, counsel, advisors, memberships, people), the sale ledger
+                                                  and the network; rank by routes.json (placeholders); write routes/ID.json and .md
+  outbound routes show --account ID [--json]     print the routes: the direct route's status, each warm route's bridge and evidence
+  outbound routes choose --account ID --route RID --by NAME     record the choice and print its checklist: who to ask, what to
+                                                  cite. A route relaxes no guard rule; it is refused after an opt-out or a suppression
 
   Platform (PRD E12): needs SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (the worker's key; never put it in the web app).
   outbound platform smoke                         check a new project with SUPABASE_URL and SUPABASE_ANON_KEY (the PUBLIC key only):
@@ -473,6 +491,37 @@ async function main() {
         ...l.proposals.map((p) => `proposal ${p.id}  ${p.status}${p.unfinished ? ' (confirmation unfinished: run call confirm again)' : ''}  ${p.outcomes.map((o) => o.code).join(', ')}`),
         ...l.outcomes.map((o) => `outcome  ${o.date}  ${o.codes.join(', ')}  confirmed by ${o.confirmedBy}`),
       ].join('\n'));
+    }
+  }
+
+  if (cmd === 'network') {   // PRD E17-S1: names and relationships only; audit lines carry ids
+    const opt = (k) => (flags[k] && flags[k] !== true ? flags[k] : undefined);
+    if (sub === 'add-person') { const p = addPerson({ dir, name: need(flags, 'name'), organization: opt('organization'), title: opt('title'), relationship: opt('relationship'), knownBy: need(flags, 'known-by'), introConsent: opt('consent'), aliases: flags.alias, by: need(flags, 'by') }); return out(`Added ${p.id}: ${p.name}${p.organization ? ` of ${p.organization}` : ''}, known to ${p.knownBy.join(', ')}. Agreed to be asked for introductions: ${p.introConsent}.`); }
+    if (sub === 'add-firm') { const f = addFirm({ dir, name: need(flags, 'name'), kind: opt('kind'), relationship: opt('relationship'), knownBy: need(flags, 'known-by'), aliases: flags.alias, by: need(flags, 'by') }); return out(`Added ${f.id}: ${f.name} (${f.kind}), known to ${f.knownBy.join(', ')}.`); }
+    if (sub === 'add-membership') { const m = addMembership({ dir, association: need(flags, 'association'), principal: need(flags, 'principal'), role: opt('role'), aliases: flags.alias, by: need(flags, 'by') }); return out(`Added ${m.id}: ${m.principal} is a ${m.role} of ${m.association}.`); }
+    if (sub === 'list') {
+      const l = listNetwork({ dir, by: need(flags, 'by') });
+      if (flags.json) return out(l);
+      const used = (id) => (l.uses[id] ? `  (bridge of ${l.uses[id]} chosen route${l.uses[id] === 1 ? '' : 's'})` : '');
+      return out([`People (${l.people.length}):`, ...l.people.map((p) => `  ${p.id}  ${p.name}${p.organization ? `, ${p.organization}` : ''}${p.title ? `, ${p.title}` : ''}  known to ${p.knownBy.join(', ')}  consent ${p.introConsent}${p.relationship ? `  (${p.relationship})` : ''}${used(p.id)}`),
+        `Firms (${l.firms.length}):`, ...l.firms.map((f) => `  ${f.id}  ${f.name} (${f.kind})  known to ${f.knownBy.join(', ')}${f.relationship ? `  (${f.relationship})` : ''}${used(f.id)}`),
+        `Memberships (${l.memberships.length}):`, ...l.memberships.map((m) => `  ${m.id}  ${m.association}${m.aliases.length ? ` (${m.aliases.join(', ')})` : ''}: ${m.principal}, ${m.role}${used(m.id)}`)].join('\n'));
+    }
+    if (sub === 'remove') { const r = removeNetworkEntry({ dir, id: need(flags, 'id'), by: need(flags, 'by') }); return out(`Removed ${r.id} (${r.kind}). It was removed from ${r.routeFiles} routes file(s), with ${r.routesRemoved} route(s) that used it.`); }
+  }
+
+  if (cmd === 'routes') {   // PRD E17: code only; nothing is drafted or sent
+    const id = need(flags, 'account');
+    if (sub === 'build') {
+      const r = buildRoutes({ dir, id, rules });
+      const types = r.routes.map((x) => x.type);
+      return out(`Routes for ${r.name}: ${r.routes.length} routes (${types.join(', ')}), ${r.held.length} held.${r.guard.hardStops.length ? ` STOP: ${r.guard.hardStops.map((h) => h.code).join(', ')}.` : ''}\nWritten: ${join(dir, 'routes', `${id}.md`)}. Read it with: outbound routes show --account ${id}`);
+    }
+    if (sub === 'show') { const r = readRoutes({ dir, id }); if (!r) return out(`No routes yet for ${id}. Run: outbound routes build --account ${id}`); return out(flags.json ? r.record : r.markdown); }
+    if (sub === 'choose') {
+      const { route } = chooseRoute({ dir, id, routeId: need(flags, 'route'), by: need(flags, 'by'), rules });
+      const md = readRoutes({ dir, id }).markdown;
+      return out(`Chosen: ${route.type} route ${route.id}. Nothing is drafted or sent; the checklist is below and in routes/${id}.md.\n\n${md.slice(md.indexOf('## Chosen route'))}`);
     }
   }
 

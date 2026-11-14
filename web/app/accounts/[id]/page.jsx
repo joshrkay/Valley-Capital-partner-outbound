@@ -5,6 +5,7 @@ import { period, num } from '../../../lib/format.mjs';
 import { NotAuthorized, Problem, Markdown } from '../../ui.jsx';
 import { setPersonAction, confirmRoleAction, queueResearchAction, queueDraftAction } from '../actions.js';
 import { Calls } from './calls.jsx';
+import { Routes } from './routes.jsx';
 
 export default async function Account({ params }) {
   const ctx = await requirePrincipal();
@@ -68,6 +69,7 @@ export default async function Account({ params }) {
         </>
       ) : null}
 
+      <Routes client={ctx.client} id={a.id} />
       <Calls client={ctx.client} id={a.id} />
 
       <h2>Brief</h2>

@@ -1,4 +1,5 @@
-// Loads every committed rule file in one place: config, models, claims, terminology, playbooks, plus the few website files the rules depend on.
+// Loads every committed rule file in one place: config, models, claims, terminology, playbooks, scoring, triage, routes, plus the few website
+// files the rules depend on.
 // Those website files are a SNAPSHOT in site-snapshot/ (the website is a separate repository). Refresh it with `npm run sync-site`.
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -39,6 +40,7 @@ export function loadRules(root = REPO) {
     buybox: o('buybox.json'),
     scoring: o('scoring.json'),
     triage: o('triage.json'),
+    routes: o('routes.json'),
     desk: json(join(site, 'desk/lint.json')),
     bankAvoid: siteRules.rules.find((r) => r.scope === '/banks/')?.avoid ?? [],
     pages: sitePages(site),
