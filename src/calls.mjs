@@ -138,7 +138,8 @@ export function paperInputs(record) {
       return;
     }
     for (const [k, v] of Object.entries(node)) {
-      if (/^tape[_-]?request/i.test(k) && Array.isArray(v)) { for (const x of v) { const t = itemText(x); if (t) tape.push(t); } continue; }
+      // The tape request is a plain list, or the paper estimate's own shape: { when, items: [...] } (src/paper.mjs, q8.tapeRequest).
+      if (/^tape[_-]?request/i.test(k) && (Array.isArray(v) || Array.isArray(v?.items))) { for (const x of (Array.isArray(v) ? v : v.items)) { const t = itemText(x); if (t) tape.push(t); } continue; }
       if (/^unknowns?$/i.test(k) && Array.isArray(v)) { for (const x of v) { const t = itemText(x); if (t) unknowns.push(t); } continue; }
       walk(v, path ? `${path}.${k}` : k);
     }
