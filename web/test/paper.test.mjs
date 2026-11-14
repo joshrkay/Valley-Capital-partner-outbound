@@ -85,6 +85,9 @@ test('the page component renders from the record only, keeps the house style and
   assert.doesNotMatch(src, /'use client'|process\.env|SERVICE|fetch\(|dangerouslySetInnerHTML/, 'a server component with no secrets, fetches or raw HTML');
   for (const h of ['Summary', 'Q1.', 'Q2.', 'Q3.', 'Q4.', 'Q5.', 'Q6.', 'Q7.', 'Q8.', 'The tape request']) assert.ok(src.includes(h), h);
   assert.ok(src.indexOf('Summary') < src.indexOf('Q1.') && src.indexOf('Q8.') < src.indexOf('The tape request'), 'summary first; unknowns and the tape request last');
+  assert.ok(src.includes('c.share.tier') && src.includes('s.unknownConditions'), 'Q7 shows each condition\'s tier, and the conditions that cannot be measured');
+  const mf = record().q7.sectors.find((s) => s.sector === 'multifamily');
+  assert.deepEqual(mf.unknownConditions.map((u) => u.id), ['size', 'status', 'lien', 'exclusions'], 'what the page lists to say why the floor is 0');
   const page = readFileSync(new URL('../app/candidates/[key]/page.jsx', import.meta.url), 'utf8');
   assert.match(page, /<PaperEstimate paper=\{paper\} \/>/);
 });

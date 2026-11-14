@@ -12,7 +12,8 @@ import { buildDraftPrompt, runDrafter, approveDraft } from '../src/draft.mjs';
 import { runCallPrep, saveNotes, runCallExtract, confirmProposal } from '../src/calls.mjs';
 
 const DATE = '2026-11-17';
-const NOW = new Date('2026-11-14T15:00:00Z');
+const NOW = new Date('2026-11-14T15:00:00Z');     // the brief, before the call
+const AFTER = new Date('2026-11-20T15:00:00Z');   // the notes and the confirmation, after it
 const acct = (dir) => readJson(join(dir, 'accounts', `${ID}.json`));
 
 // What must never reach the drafter: the paper estimate, the research beyond its cleared facts, the pipeline, the call brief, the notes.
@@ -24,8 +25,8 @@ const CALL_LEAKS = ['Riley Example', 'workout side', '30 minutes', 'two multifam
 async function throughTheCall() {
   const dir = setup();
   await runCallPrep({ client: fakeClient([reply(GOOD_BRIEF)]), dir, account: acct(dir), date: DATE, rules, now: NOW });
-  saveNotes({ dir, id: ID, date: DATE, notes: NOTES, by: 'Pat Example', now: NOW });
-  const ex = await runCallExtract({ client: fakeClient([reply(PROPOSAL_REPLY)]), dir, id: ID, date: DATE, by: 'Pat Example', models: rules.models, now: NOW });
+  saveNotes({ dir, id: ID, date: DATE, notes: NOTES, by: 'Pat Example', now: AFTER });
+  const ex = await runCallExtract({ client: fakeClient([reply(PROPOSAL_REPLY)]), dir, id: ID, date: DATE, by: 'Pat Example', models: rules.models, now: AFTER });
   return { dir, ex };
 }
 
@@ -49,7 +50,7 @@ test('with a paper estimate, a call brief and call notes in the data folder, the
 
 test('after the call is confirmed, the account carries the outcome, and the drafter\'s input still carries none of it', async () => {
   const { dir, ex } = await throughTheCall();
-  confirmProposal({ dir, id: ID, proposalId: ex.proposalId, by: 'Pat Example', rules, now: NOW });
+  confirmProposal({ dir, id: ID, proposalId: ex.proposalId, by: 'Pat Example', rules, now: AFTER });
   assert.equal(acct(dir).outcomes.length, 1);
   const input = drafterInput(dir);
   for (const leak of [...PAPER_LEAKS, ...RESEARCH_LEAKS, ...PIPELINE_LEAKS, ...CALL_LEAKS, 'outcome', 'commitment', 'confidentiality agreement by']) assert.ok(!input.includes(leak), `drafter input leaked "${leak}"`);
@@ -57,7 +58,7 @@ test('after the call is confirmed, the account carries the outcome, and the draf
 
 test('the follow-up carries only what was agreed: the commitments, the follow-up date, the matching approved claim and the tape request', async () => {
   const { dir, ex } = await throughTheCall();
-  confirmProposal({ dir, id: ID, proposalId: ex.proposalId, by: 'Pat Example', rules, now: NOW });
+  confirmProposal({ dir, id: ID, proposalId: ex.proposalId, by: 'Pat Example', rules, now: AFTER });
   const f = readJson(join(dir, 'calls', ID, `${DATE}-followup.json`));
   const md = await import('node:fs').then((fs) => fs.readFileSync(join(dir, 'calls', ID, `${DATE}-followup.md`), 'utf8'));
   // What may be in it.
@@ -75,7 +76,7 @@ test('the follow-up carries only what was agreed: the commitments, the follow-up
 test('the stop rule is not weakened: after the call, the drafter refuses before any model call and an older draft cannot be approved', async () => {
   const { dir, ex } = await throughTheCall();
   const ctx = loadContext({ dir, config: rules.config, env: {} });
-  confirmProposal({ dir, id: ID, proposalId: ex.proposalId, by: 'Pat Example', rules, now: NOW });
+  confirmProposal({ dir, id: ID, proposalId: ex.proposalId, by: 'Pat Example', rules, now: AFTER });
   const after = loadContext({ dir, config: rules.config, env: {} });
   const client = fakeClient([new Error('must not be called')]);
   const r = await runDrafter({ client, dir, account: acct(dir), channel: 'email', step: 3, senderId: 'pat', date: '2026-11-20', ctx: after, rules });

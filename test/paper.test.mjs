@@ -129,7 +129,7 @@ test('THE SEMIANNUAL TRAP: a March zero in the loan-size fields is never shown a
     assert.equal(v.value, null); assert.equal(v.status, 'semiannual');
   }
   assert.ok(onlyMarch.q8.unknowns.some((u) => u.id === 'semiannual'));
-  assert.equal(onlyMarch.q7.sectors.find((s) => s.sector === 'hospitality').notUsed.find((n) => n.id === 'size').reason.length > 0, true);
+  assert.match(onlyMarch.q7.sectors.find((s) => s.sector === 'hospitality').unknownConditions.find((u) => u.id === 'size').reason, /June or December/, 'the size range still restricts, so its share is unknown');
 });
 
 test('a June report with every size bucket at 0 while the bank holds nonfarm nonresidential loans is "unclear", not zero', () => {
@@ -236,6 +236,20 @@ test('the eight-quarter trend is net change, never new lending, and is withheld 
   assert.ok(!paper({ events: [{ ...events[0], acquirerCert: '2' }] }).q6.items.some((i) => i.type === 'acquisition'));
 });
 
+test('the sections cover the latest eight quarters, however many quarters the financials file has kept', () => {
+  // The FDIC adapter adds each new quarter to the file and never drops one, so a year on it holds twelve.
+  const twelve = ['20230930', '20231231', '20240331', '20240630', ...REPS];
+  const qs = quarters(twelve, (rep, i) => ({ LNREMULT: 300000 + i * 10000, ...(rep === '20231231' ? { NALNSALE: 900 } : {}) }));
+  const r = paper({ financials: { CERT: '1', quarters: qs } });
+  for (const s of r.q1.trend.series) assert.deepEqual(s.points.map((p) => p.repdte), REPS, s.id);
+  assert.deepEqual(r.q1.restructured.series.find((s) => s.id === 'total').points.map((p) => p.repdte), REPS);
+  for (const s of r.q1.restructured.series.filter((x) => x.id !== 'total')) assert.deepEqual(s.points.map((p) => p.repdte), ['20241231', '20250630', '20251231', '20260630'], s.id);
+  assert.ok(!r.q6.items.some((i) => i.date < '2024-09-30'), 'no seller evidence from before the window');
+  // The quarter before the window is read on its own, for the first point's net change, as the growth base would be.
+  assert.equal(r.q1.trend.series.find((s) => s.id === 'multifamily').points[0].netChange, 10000 * 1000);
+  assert.deepEqual(r, paper({ financials: { CERT: '1', quarters: Object.fromEntries(Object.entries(qs).filter(([k]) => k >= '20240630')) } }), 'older quarters change nothing');
+});
+
 // ---- Q7: bounds only ------------------------------------------------------------------------------------------------------------------
 test('bounds math: k=1, k=3, a lower bound that hits zero, and intervals', () => {
   assert.deepEqual(frechetBounds([{ low: 0.4, high: 0.4 }]), { k: 1, low: 0.4, high: 0.4 }, 'one condition: both bounds are its share');
@@ -257,13 +271,13 @@ test('Q7 in the record: multifamily from its own line and the metro proxy; hotel
   const book = (100000 + 300000 + 600000) * 1000;
   assert.equal(r.q1.creBook.value, book);
   const mf = r.q7.sectors.find((s) => s.sector === 'multifamily');
-  assert.deepEqual(mf.conditions.map((c) => [c.id, c.share.low, c.share.high]), [['category', 0.3, 0.3], ['metro', 0.6, 0.6]]);
-  assert.deepEqual([mf.bounds.low, mf.bounds.high, mf.bounds.k, mf.bounds.tier, mf.bounds.method], [0, 0.3 * book, 2, 'inferred', BOUNDS_METHOD], '0.3 + 0.6 - 1 < 0');
+  assert.deepEqual(mf.conditions.map((c) => [c.id, c.share.low, c.share.high]), [['category', 0.3, 0.3], ['metro', 0.6, 0.6], ['size', 0, 1], ['status', 0, 1], ['lien', 0, 1], ['exclusions', 0, 1]]);
+  assert.deepEqual([mf.bounds.low, mf.bounds.high, mf.bounds.k, mf.bounds.tier, mf.bounds.method], [0, 0.3 * book, 6, 'inferred', BOUNDS_METHOD], '0.3 + 0.6 - 1 < 0, and four conditions are unknown');
   assert.match(mf.bounds.lowNote, /lower bound is 0/);
-  assert.ok(mf.notUsed.some((n) => n.id === 'size' && /no loan-size data for multifamily/.test(n.reason)));
+  assert.match(mf.unknownConditions.find((u) => u.id === 'size').reason, /no loan-size data for multifamily/);
   // Hotel: the category's share is unknown, so it enters as [0, nonfarm nonresidential share]: the lower bound is 0.
   const h = r.q7.sectors.find((s) => s.sector === 'hospitality');
-  assert.deepEqual(h.conditions.map((c) => c.id), ['category', 'metro', 'size']);
+  assert.deepEqual(h.conditions.map((c) => c.id), ['category', 'metro', 'size', 'status', 'lien', 'exclusions']);
   assert.deepEqual([h.conditions[0].share.low, h.conditions[0].share.high], [0, 0.6]);
   assert.equal(h.bounds.low, 0);
   // Size: over $1 million by original amount = LNRENRES - LNRENR4 = 500,000 of 600,000 nonfarm nonresidential: 0.5 of the book at most.
@@ -275,7 +289,7 @@ test('Q7 in the record: multifamily from its own line and the metro proxy; hotel
   const bare = paper({ footprint: {}, buybox: filledBuybox({ loanSize: { minUsd: '[CONFIRM]', maxUsd: '[CONFIRM]' } }), placeholders: ['loanSize.minUsd', 'loanSize.maxUsd'] });
   const hb = bare.q7.sectors.find((s) => s.sector === 'hospitality');
   assert.deepEqual([hb.bounds.low, hb.bounds.high], [0, 600000 * 1000]);
-  assert.match(hb.notUsed.find((n) => n.id === 'size').reason, /placeholder/);
+  assert.match(hb.unknownConditions.find((u) => u.id === 'size').reason, /placeholder/);
   assert.equal(bare.q7.provisional, true); assert.equal(bare.provisional, true);
   // Bounds only: no value, no base, anywhere in Q7.
   for (const s of [...r.q7.sectors, ...bare.q7.sectors]) { assert.ok(!('value' in s.bounds) || s.bounds.value === null); assert.ok(!('base' in s.bounds)); }
@@ -283,16 +297,67 @@ test('Q7 in the record: multifamily from its own line and the metro proxy; hotel
   assert.match(r.q7.formula, /min\(s_i\)/); assert.match(r.q7.note, /never multiplied/);
 });
 
-test('k=3 in the record for hotel (its lower bound stays 0), and a lower bound above zero for multifamily', () => {
+// A buy box whose status, lien and exclusions allow everything: those dimensions are then not conditions.
+const ANY_STATUS = { statuses: ['performing', 'sub-performing', 'non-performing', 'foreclosed'], lien: 'any', exclusions: [] };
+const ALL_IN_BOX = { ...FP, sod: { year: 2026, depositsByMetro: { 38060: 1000000 }, totalDeposits: 1000000 } };
+
+test('k=3 in the record for hotel (its lower bound stays 0), and a lower bound above zero for multifamily when nothing it needs is unmeasured', () => {
   // Deposits all in the buy-box metros (share 1) and every nonfarm nonresidential loan possibly in the size range (min 0): for hotel, a
   // sector inside nonfarm nonresidential, the category's unknown share alone then sets the bounds, [0, NFNR share].
-  const fp = { ...FP, sod: { year: 2026, depositsByMetro: { 38060: 1000000 }, totalDeposits: 1000000 } };
-  const r = paper({ footprint: fp, buybox: filledBuybox({ loanSize: { minUsd: 0, maxUsd: 100000000 } }) });
+  const r = paper({ footprint: ALL_IN_BOX, buybox: filledBuybox({ loanSize: { minUsd: 0, maxUsd: 100000000 }, ...ANY_STATUS }) });
   const h = r.q7.sectors.find((s) => s.sector === 'hospitality');
   assert.equal(h.bounds.k, 3);
   assert.deepEqual([h.bounds.low, h.bounds.high], [0, 600000 * 1000]);
   const mf = r.q7.sectors.find((s) => s.sector === 'multifamily');
-  assert.deepEqual([mf.bounds.low, mf.bounds.high], [300000 * 1000, 300000 * 1000], 'all deposits in the box: multifamily lower = 0.3 + 1 - 1');
+  assert.deepEqual([mf.bounds.low, mf.bounds.high, mf.unknownConditions.map((u) => u.id)], [0, 300000 * 1000, ['size']], 'a size cap restricts, and multifamily has no size data');
+  const open = paper({ footprint: ALL_IN_BOX, buybox: filledBuybox({ loanSize: { minUsd: 0, maxUsd: null }, ...ANY_STATUS }) }).q7.sectors.find((s) => s.sector === 'multifamily');
+  assert.deepEqual([open.bounds.low, open.bounds.high, open.bounds.k], [300000 * 1000, 300000 * 1000, 2], 'all deposits in the box and nothing unmeasured: multifamily lower = 0.3 + 1 - 1');
+  assert.deepEqual(open.unknownConditions, []);
+  for (const id of ['size', 'status', 'lien', 'exclusions']) assert.match(open.notUsed.find((n) => n.id === id)?.reason ?? '', /allows every/, id);
+});
+
+test('every buy-box condition the data cannot measure enters as 0 to all, so the lower bound is 0, and the record lists them', () => {
+  // The review's case: 30% multifamily, 100% of deposits in buy-box metros. The buy box restricts size, status, lien and exclusions, and
+  // nothing measures them for multifamily, so the floor is 0, not 30% of the book.
+  const r = paper({ footprint: ALL_IN_BOX });
+  const mf = r.q7.sectors.find((s) => s.sector === 'multifamily');
+  assert.deepEqual(mf.unknownConditions.map((u) => u.id), ['size', 'status', 'lien', 'exclusions']);
+  assert.deepEqual([mf.bounds.low, mf.bounds.high, mf.bounds.k], [0, 300000 * 1000, 6]);
+  for (const u of mf.unknownConditions) {
+    const c = mf.conditions.find((x) => x.id === u.id);
+    assert.deepEqual([c.share.low, c.share.high, c.share.status, c.share.tier], [0, 1, 'unknown', null], u.id);
+    assert.ok(u.label && u.reason, u.id);
+  }
+  assert.match(mf.bounds.lowNote, /The lower bound is 0 because these buy-box conditions cannot be measured: loan size, status, lien position, exclusions\./);
+  const h = r.q7.sectors.find((s) => s.sector === 'hospitality');
+  assert.deepEqual(h.unknownConditions.map((u) => u.id), ['status', 'lien', 'exclusions'], 'hotel\'s size is measured from the size buckets');
+  assert.equal(h.bounds.low, 0);
+  assert.match(r.q8.unknowns.find((u) => u.id === 'in-box-floor').text, /lien position/);
+  assert.match(renderPaper(r), /Unknown condition lien: .*0\.0% to 100\.0%/);
+  // The shipped buy box's placeholders may restrict anything, so each counts as an unknown condition until a principal fills it.
+  const shipped = paper({ footprint: ALL_IN_BOX, buybox: shippedBuybox(), placeholders: ['loanSize.minUsd', 'loanSize.maxUsd', 'statuses', 'lien', 'exclusions[0]'] });
+  const sm = shipped.q7.sectors.find((s) => s.sector === 'multifamily');
+  assert.deepEqual(sm.unknownConditions.map((u) => u.id), ['size', 'status', 'lien', 'exclusions']);
+  assert.ok(sm.unknownConditions.every((u) => /placeholder/.test(u.reason)));
+  assert.equal(sm.bounds.low, 0);
+});
+
+test('each Q7 condition carries its own tier: the deposit proxy, the hotel and retail interval and an earlier size mix are inferred', () => {
+  const r = paper();
+  const tiers = (s) => Object.fromEntries(s.conditions.filter((c) => c.share.tier).map((c) => [c.id, c.share.tier]));
+  const mf = r.q7.sectors.find((s) => s.sector === 'multifamily');
+  assert.deepEqual(tiers(mf), { category: 'reported', metro: 'inferred' }, 'multifamily has its own Call Report line; the metro share is a deposit proxy');
+  const h = r.q7.sectors.find((s) => s.sector === 'hospitality');
+  assert.deepEqual(tiers(h), { category: 'inferred', metro: 'inferred', size: 'reported' }, 'the hotel share only lies in [0, NFNR share]; the June size mix on the June balance is reported');
+  assert.deepEqual(tiers(r.q7.sectors.find((s) => s.sector === 'retail')), tiers(h));
+  // With a September report, the June size mix is applied to the September balance: an inference.
+  const sep = paper({ financials: { CERT: '1', quarters: quarters([...REPS.slice(1), '20260930']) } });
+  assert.equal(sep.q7.sectors.find((s) => s.sector === 'hospitality').conditions.find((c) => c.id === 'size').share.tier, 'inferred');
+  // The bounds take the weakest tier of the conditions measured. With no deposit data, multifamily rests on its own line alone.
+  assert.equal(mf.bounds.tier, 'inferred');
+  assert.equal(h.bounds.tier, 'inferred');
+  assert.equal(paper({ footprint: {} }).q7.sectors.find((s) => s.sector === 'multifamily').bounds.tier, 'reported');
+  assert.match(renderPaper(r), /Condition metro: Share in the buy-box metros, by the deposit proxy \[inferred\]: 60\.0%/);
 });
 
 // ---- Q3, Q5, Q6, Q8 and the summary -----------------------------------------------------------------------------------------------

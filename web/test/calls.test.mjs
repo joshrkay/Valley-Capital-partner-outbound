@@ -11,7 +11,7 @@ import { work } from '../../src/platform/worker.mjs';
 import * as ops from '../lib/ops.mjs';
 
 const URL_ = 'https://example-project.supabase.test';
-const DATE = '2026-11-17';
+const DATE = '2026-11-12';   // a call that has taken place: the web app reads the real clock, and a future call date is refused
 
 async function seeded() {
   const fake = fakePostgrest();
@@ -49,6 +49,8 @@ test('a brief that failed a check is NOT USABLE on the page, with the reasons', 
 test('pasted notes are saved as the principal and a proposal is queued; the job carries no note text', async () => {
   const { fake, client, runJobs } = await seeded();
   await assert.rejects(ops.logCallNotes(client, { id: ID, date: DATE, notes: ' ', by: 'Pat Example' }), /empty/);
+  await assert.rejects(ops.logCallNotes(client, { id: ID, date: '2999-01-01', notes: NOTES, by: 'Pat Example' }), /later than today/);
+  assert.equal(fake.jobs.length, 0, 'a future call date queues nothing');
   await ops.logCallNotes(client, { id: ID, date: DATE, notes: NOTES, by: 'Pat Example' });
   assert.equal(fake.docs.get(`calls/${ID}/${DATE}-notes.md`).text, `${NOTES}\n`);
   assert.equal(fake.docs.get(`calls/${ID}/${DATE}-notes.md`).updated_by, 'pat@example.test', 'written as the signed-in principal');

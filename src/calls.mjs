@@ -12,12 +12,12 @@
 //
 // The outcome report (E15-S4) is src/outcomes.mjs. Raw notes stay in the data folder, for principals only. Audit lines and job results
 // carry counts, codes and ids only: never a prospect's name and never note text. Nothing here sends anything.
-import { join } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { join, relative } from 'node:path';
+import { createHash, randomBytes } from 'node:crypto';
 import { callJson, neutralize, estimateCost, addUsage, normText } from './model.mjs';
-import { readJson, writeJson, readText, writeText, appendJsonl, listFiles, audit, safeId } from './store.mjs';
+import { readJson, writeJson, readText, writeText, appendJsonl, readJsonl, listFiles, exists, audit, safeId } from './store.mjs';
 import { loadContext, recordEvent, checkTouch, touchFromAccount, norm } from './guard.mjs';
-import { LOADS } from './uow.mjs';
+import { LOADS, withUnitOfWork, snapshotFromDir, applyPlanToDir } from './uow.mjs';
 
 // ---- Small helpers ----------------------------------------------------------------------------------------------------------------
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -36,6 +36,14 @@ export function needDate(s, what = 'The call date') {
   return s;
 }
 const needBy = (by) => { const b = String(by ?? '').trim(); if (!b || b === 'true') throw new Error('A name is required: --by "Pat Example".'); return b; };
+// A call is recorded only once it has happened: a meeting stops the guard's sequence for good, whatever its date. "Today" is the UTC date,
+// which is never earlier than the date in a US time zone, so a call logged the same evening is never refused. A brief may be for any date.
+function needHeld(date, now) {
+  const today = ymd(now);
+  if (date > today) throw new Error(`The call date ${date} is later than today (${today}). Record a call after it has taken place: confirming it records a meeting, which stops the sequence for good.`);
+}
+// The notes a proposal was read from, as stored (sha256 of the file's text).
+export const notesDigest = (text) => createHash('sha256').update(String(text ?? '')).digest('hex');
 
 // YYYYMMDD, YYYY-MM-DD, YYYY-MM -> "June 30, 2026", "June 2026". Anything else is returned as given.
 export function dateLabel(d) {
@@ -550,19 +558,30 @@ export function processProposal({ raw, notes, date }) {
   return { outcomes, objections, commitments, followUpDate, people, problems };
 }
 
-// The raw notes, kept in the data folder for principals only. Re-logging a date overwrites its notes, unless that call is confirmed.
+// The raw notes, kept in the data folder for principals only. Re-logging a date overwrites its notes, unless that call is confirmed, and
+// supersedes the pending proposals read from other notes for that date: they no longer say what the notes say.
 export function saveNotes({ dir, id, date, notes, by, now = new Date() }) {
   const who = needBy(by);
   needDate(date);
+  needHeld(date, now);
   const a = loadAccount(dir, id);
   const text = String(notes ?? '');
   if (!text.trim()) throw new Error('The notes are empty.');
   if (text.length > MAX_NOTES) throw new Error(`The notes are ${text.length} characters; the limit is ${MAX_NOTES}.`);
   const done = (a.outcomes ?? []).find((o) => o.date === date);
   if (done) throw new Error(`The call of ${date} is already confirmed (${done.id}, by ${done.confirmedBy}). Its notes are not replaced.`);
-  writeText(notesPath(dir, id, date), text.endsWith('\n') ? text : `${text}\n`);
-  audit(dir, { type: 'call_notes_saved', accountId: id, date, by: who, at: now.toISOString() });
-  return { path: notesPath(dir, id, date) };
+  const stored = text.endsWith('\n') ? text : `${text}\n`;
+  const digest = notesDigest(stored);
+  writeText(notesPath(dir, id, date), stored);
+  const superseded = [];
+  for (const f of listFiles(join(callDir(dir, id), 'proposals'), '.json')) {
+    const p = readJson(join(callDir(dir, id), 'proposals', f), null);
+    if (p?.account !== id || p.date !== date || p.status !== 'pending' || p.notesDigest === digest) continue;
+    writeJson(proposalPath(dir, id, p.id), { ...p, status: 'superseded', supersededAt: now.toISOString() });
+    superseded.push(p.id);
+  }
+  audit(dir, { type: 'call_notes_saved', accountId: id, date, by: who, at: now.toISOString(), ...(superseded.length ? { superseded } : {}) });
+  return { path: notesPath(dir, id, date), superseded };
 }
 
 // A model reads the saved notes and proposes what to record. The proposal is stored as pending; nothing else changes.
@@ -581,7 +600,7 @@ export async function runCallExtract({ client, dir, id, date, by, models, now = 
   if (!r.ok) { audit(dir, { type: 'call_extract_failed', accountId: id, date, reason: r.reason }); return { ok: false, reason: r.reason, detail: r.detail, costUsd }; }
   const p = processProposal({ raw: r.data, notes, date });
   const pid = `${date}-${randomBytes(3).toString('hex')}`;
-  const proposal = { id: pid, account: id, date, status: 'pending', loggedBy: who, createdAt: now.toISOString(), notes: `calls/${id}/${date}-notes.md`, ...p, model: r.model ?? cfg.model, usage: r.usage ?? {}, costUsd };
+  const proposal = { id: pid, account: id, date, status: 'pending', loggedBy: who, createdAt: now.toISOString(), notes: `calls/${id}/${date}-notes.md`, notesDigest: notesDigest(notes), ...p, model: r.model ?? cfg.model, usage: r.usage ?? {}, costUsd };
   writeJson(proposalPath(dir, id, pid), proposal);
   const counts = { outcomes: p.outcomes.length, objections: p.objections.length, commitments: p.commitments.length, people: p.people.length, problems: p.problems.length };
   audit(dir, { type: 'call_proposal', accountId: id, date, proposalId: pid, codes: p.outcomes.map((o) => o.code), ...counts, costUsd });
@@ -603,22 +622,41 @@ export function originOf(account) {
   return { types: [...new Set(types)].sort(), firstSignalDate: dates.sort()[0] ?? null };
 }
 
-// A principal confirms a proposal. Only now is anything recorded: the guard's meeting event (which stops the automated sequence for
-// good), one line in outcomes.jsonl, and the outcome on the account. Named people stay unconfirmed and are never added to the account.
+// A principal confirms a proposal. Only now is anything recorded: the outcome on the account, the guard's meeting event (which stops the
+// automated sequence for good), one line in outcomes.jsonl, the follow-up, and last the proposal marked confirmed. Named people stay
+// unconfirmed and are never added to the account.
+//
+// It is idempotent, keyed to the proposal id: the outcome on the account and the line in outcomes.jsonl carry it as their id, and the
+// meeting carries it as its ref. Run again after a confirmation that stopped partway, it writes only what is missing, as the first run
+// confirmed it (the same confirmer and time), and never a second meeting or line. Run again after a complete one, it refuses.
 export function confirmProposal({ dir, id, proposalId, by, rules, now = new Date() }) {
-  const who = needBy(by);
+  const caller = needBy(by);
   const pid = safeId(String(proposalId ?? '').trim());
   const account = loadAccount(dir, id);
   const file = proposalPath(dir, id, pid);
   const proposal = readJson(file, null);
   if (!proposal || proposal.account !== id) throw new Error(`No proposal "${pid}" for ${id}.`);
-  if (proposal.status !== 'pending') throw new Error(`Proposal ${pid} is already ${proposal.status}${proposal.confirmedBy || proposal.rejectedBy ? ` (by ${proposal.confirmedBy ?? proposal.rejectedBy})` : ''}.`);
+  if (proposal.status === 'superseded') throw new Error(`Proposal ${pid} was superseded: its notes were replaced after it was made. Confirm the proposal read from the new notes.`);
+  if (!['pending', 'confirmed'].includes(proposal.status)) throw new Error(`Proposal ${pid} is already ${proposal.status}${proposal.rejectedBy ? ` (by ${proposal.rejectedBy})` : ''}.`);
   const done = (account.outcomes ?? []).find((o) => o.date === proposal.date);
-  if (done) throw new Error(`The call of ${proposal.date} is already confirmed (${done.id}). Reject this proposal instead.`);
+  if (done && done.id !== pid) throw new Error(`The call of ${proposal.date} is already confirmed (${done.id}). Reject this proposal instead.`);
   const ctx = loadContext({ dir, config: rules.config });
-  recordEvent(dir, { accountId: id, institution: account.name, type: 'meeting', date: proposal.date }, ctx);
+  const ref = `call:${pid}`;
+  // A meeting logged for this call before refs existed (same account and date, no ref) counts too, so it is never logged twice.
+  const hasMeeting = ctx.touches.some((t) => t.type === 'meeting' && (t.ref === ref || (!t.ref && t.accountId === id && t.date === proposal.date)));
+  const logged = readJsonl(join(dir, OUTCOMES_LOG)).find((l) => l?.type === 'call_outcome' && l.id === pid) ?? null;
+  const fb = followUpBase(dir, id, proposal.date);
+  if (proposal.status === 'confirmed' && done && hasMeeting && logged && exists(`${fb}.json`)) throw new Error(`Proposal ${pid} is already confirmed (by ${proposal.confirmedBy}).`);
+  const resuming = !!(done || logged || proposal.status === 'confirmed');
+  if (!resuming) {
+    // A fresh confirmation: the call has happened, and the proposal still says what the notes say.
+    needHeld(proposal.date, now);
+    const notes = readText(notesPath(dir, id, proposal.date), null);
+    if (!proposal.notesDigest || notes === null || notesDigest(notes) !== proposal.notesDigest) throw new Error(`The notes for the call of ${proposal.date} changed after proposal ${pid} was made (or it has no record of them), so it may not say what they say. Reject it, then log the notes again: outbound call log --account ${id} --date ${proposal.date} --by NAME --notes FILE`);
+  }
+  const who = done?.confirmedBy ?? logged?.confirmedBy ?? proposal.confirmedBy ?? caller;
+  const at = done?.confirmedAt ?? logged?.confirmedAt ?? proposal.confirmedAt ?? now.toISOString();
   const origin = originOf(account);
-  const at = now.toISOString();
   const codes = proposal.outcomes.map((o) => o.code);
   const line = {
     type: 'call_outcome', id: pid, accountId: id, institutionKey: account.institutionKey ?? null, originSignals: account.originSignals ?? [],
@@ -626,31 +664,55 @@ export function confirmProposal({ dir, id, proposalId, by, rules, now = new Date
     followUpDate: proposal.followUpDate || null, counts: { objections: proposal.objections.length, commitments: proposal.commitments.length, people: proposal.people.length },
     confirmedBy: who, confirmedAt: at,
   };
-  appendJsonl(join(dir, OUTCOMES_LOG), line);
-  const detail = {
+  const detail = done ?? {
     ...line, outcomes: proposal.outcomes.map(({ code, when, referral }) => ({ code, when, referral })),
     objections: proposal.objections.map(({ text }) => ({ text })), commitments: proposal.commitments.map(({ who: w, what, by: b, byDate }) => ({ who: w, what, by: b, byDate })),
     peopleMentioned: proposal.people.map((x) => ({ ...x, status: UNCONFIRMED_PERSON })),
   };
-  account.outcomes = [...(account.outcomes ?? []), detail];
-  writeJson(accountPath(dir, id), account);
-  writeJson(file, { ...proposal, status: 'confirmed', confirmedBy: who, confirmedAt: at });
+  if (!done) { account.outcomes = [...(account.outcomes ?? []), detail]; writeJson(accountPath(dir, id), account); }
+  if (!hasMeeting) recordEvent(dir, { accountId: id, institution: account.name, type: 'meeting', date: proposal.date, ref }, ctx);
+  if (!logged) appendJsonl(join(dir, OUTCOMES_LOG), line);
   const followUp = buildFollowUp({ account, outcome: detail, ctx, rules, paper: account.institutionKey ? readPaper(dir, account.institutionKey) : null });
-  const fb = followUpBase(dir, id, proposal.date);
   writeJson(`${fb}.json`, followUp);
   writeText(`${fb}.md`, renderFollowUp({ account, followUp }));
-  audit(dir, { type: 'call_confirmed', accountId: id, proposalId: pid, date: proposal.date, by: who, codes, ...line.counts });
-  return { outcome: line, followUp: { path: `${fb}.md`, items: followUp.items.length, hardStops: followUp.guard.hardStops.map((h) => h.code) } };
+  if (proposal.status !== 'confirmed') writeJson(file, { ...proposal, status: 'confirmed', confirmedBy: who, confirmedAt: at });
+  audit(dir, { type: 'call_confirmed', accountId: id, proposalId: pid, date: proposal.date, by: who, codes, ...line.counts, ...(resuming ? { resumedBy: caller } : {}) });
+  return { outcome: logged ?? line, resumed: resuming, followUp: { path: `${fb}.md`, items: followUp.items.length, hardStops: followUp.guard.hardStops.map((h) => h.code) } };
+}
+
+// The command line's confirmation. The platform runs confirmProposal in a unit of work and writes its plan in one transaction; a folder
+// has no transaction. So here it runs in a unit of work over the folder too: everything is computed and staged first, and nothing is
+// written if any check or step fails. Then the writes are made in an order that keeps a stopped run resumable (commitSteps): the outcome
+// on the account first, which locks the call date against new notes and other proposals; then the meeting and the outcome line; then
+// the audit lines and the follow-up; and last the proposal, so it reads pending until everything else is written. Running the command
+// again finishes the job (confirmProposal is idempotent). `commit` is replaceable for tests.
+export function commitSteps(plan) {
+  const rank = (s) => (s.docs.length ? (s.docs[0].path.startsWith('accounts/') ? 0 : /(^|\/)proposals\//.test(s.docs[0].path) ? 4 : 3) : s.lines[0].path === 'audit.jsonl' ? 2 : 1);
+  const steps = [...plan.docs.map((d) => ({ docs: [d], lines: [] })), ...plan.lines.map((l) => ({ docs: [], lines: [l] }))];
+  return steps.map((s, i) => ({ s, i, r: rank(s) })).sort((a, b) => a.r - b.r || a.i - b.i).map((x) => x.s);
+}
+export const commitToFolder = (plan, dir) => { for (const step of commitSteps(plan)) applyPlanToDir(step, dir); };
+
+export async function confirmInFolder({ dir, id, proposalId, by, rules, now = new Date(), commit = commitToFolder }) {
+  const flush = async (plan) => {
+    try { await commit(plan, dir); } catch (e) { throw new Error(`The confirmation of ${proposalId} stopped partway (${e.message}). Run the same command again: it finishes what is missing and writes nothing twice.`, { cause: e }); }
+  };
+  const { result } = await withUnitOfWork({ load: async (prefixes) => snapshotFromDir(dir, prefixes), flush }, callLoads('callConfirm', id), (root) => {
+    const r = confirmProposal({ dir: root, id, proposalId, by, rules, now });
+    return { ...r, followUp: { ...r.followUp, path: join(dir, relative(root, r.followUp.path)) } };
+  });
+  return result;
 }
 
 export function rejectProposal({ dir, id, proposalId, by, reason = '', now = new Date() }) {
   const who = needBy(by);
   const pid = safeId(String(proposalId ?? '').trim());
-  loadAccount(dir, id);
+  const account = loadAccount(dir, id);
   const file = proposalPath(dir, id, pid);
   const proposal = readJson(file, null);
   if (!proposal || proposal.account !== id) throw new Error(`No proposal "${pid}" for ${id}.`);
   if (proposal.status !== 'pending') throw new Error(`Proposal ${pid} is already ${proposal.status}.`);
+  if ((account.outcomes ?? []).some((o) => o.id === pid)) throw new Error(`Proposal ${pid}'s confirmation is unfinished: its outcome is already on the account. Confirm it again to finish it: outbound call confirm --account ${id} --proposal ${pid} --by NAME`);
   writeJson(file, { ...proposal, status: 'rejected', rejectedBy: who, rejectedAt: now.toISOString(), rejectReason: typeof reason === 'string' ? reason.trim().slice(0, 300) : '' });
   audit(dir, { type: 'call_proposal_rejected', accountId: id, proposalId: pid, by: who });
   return { proposalId: pid, status: 'rejected' };
@@ -715,8 +777,10 @@ export function listCalls({ dir, id }) {
     return { date: r.date, status: r.status, usable: !!r.usable, problems: r.problems ?? [], warnings: r.warnings ?? [], costUsd: r.costUsd ?? null, preparedAt: r.preparedAt ?? null, md: readText(join(base, f.replace(/\.json$/, '.md')), null) };
   }).sort((a, b) => (b.date === a.date ? String(b.preparedAt).localeCompare(String(a.preparedAt)) : b.date.localeCompare(a.date)));
   const followUps = files.filter((f) => f.endsWith('-followup.json')).map((f) => ({ date: f.slice(0, 10), md: readText(join(base, f.replace(/\.json$/, '.md')), null) })).sort((a, b) => b.date.localeCompare(a.date));
+  // A pending proposal whose outcome is already on the account is a confirmation that stopped partway: confirming it again finishes it.
+  const onAccount = new Set((account.outcomes ?? []).map((o) => o.id));
   const proposals = listFiles(join(base, 'proposals'), '.json').map((f) => readJson(join(base, 'proposals', f)))
-    .map((p) => ({ id: p.id, date: p.date, status: p.status, loggedBy: p.loggedBy, createdAt: p.createdAt, outcomes: p.outcomes, objections: p.objections, commitments: p.commitments, followUpDate: p.followUpDate, people: p.people, problems: p.problems, confirmedBy: p.confirmedBy ?? null, rejectedBy: p.rejectedBy ?? null }))
+    .map((p) => ({ id: p.id, date: p.date, status: p.status, loggedBy: p.loggedBy, createdAt: p.createdAt, outcomes: p.outcomes, objections: p.objections, commitments: p.commitments, followUpDate: p.followUpDate, people: p.people, problems: p.problems, confirmedBy: p.confirmedBy ?? null, rejectedBy: p.rejectedBy ?? null, unfinished: p.status === 'pending' && onAccount.has(p.id) }))
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
   return { account: { id: account.id, name: account.name, person: account.person?.name || null, roleConfirmed: !!account.contact?.roleConfirmed }, briefs, proposals, outcomes: account.outcomes ?? [], followUps };
 }
