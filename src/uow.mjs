@@ -33,6 +33,9 @@ export const LOADS = Object.freeze({
   triage: ['candidates/', 'accounts/', 'suppression.json', 'touches.jsonl', 'sources/runs.jsonl', 'sources/fdic/state.json', 'sources/fdic/failed.json',
     'sources/edgar/loans.json', 'sources/edgar/filings.json', 'sources/edgar/filers.json', 'triage/state.json'],
   sales: ['sources/', 'sales/'],   // the CMBS and FDIC loan-sale pulls rebuild the sale ledger (sales/ledger.json) when they finish
+  // Signal coverage (PRD next-five E18-S1, src/coverage.mjs): read-only, five exact files and no folder. The candidate list and its
+  // aliases, the bank-to-filer map, the CMBS servicer summary and the sale ledger. It writes nothing. E18-S2 adds its enforcement store.
+  coverage: ['candidates/latest.json', 'candidates/aliases.json', 'sources/edgar/filers.json', 'sources/edgar/servicers.json', 'sales/ledger.json'],
   // Routes to the decision-maker (PRD E22, src/routes.mjs): the guard's files (for its view: an opt-out or a suppression stops a route),
   // the account, its research, the sale ledger, the firm's network and the account's own routes file. accounts/, research/ and routes/
   // are narrowed to one account by routesLoads(). No model-facing action (research, draft, call prep) loads network/ or routes/.
@@ -55,6 +58,13 @@ export const LOADS = Object.freeze({
   // The vendor test harness (PRD E7-S2, src/vendors.mjs): the known list, the test reports and the recorded passes. No drafting or
   // research action loads contacts/, so none of it reaches a brief or a message.
   vendors: ['contacts/'],
+  // The backtest of the score (PRD E17, src/backtest/). It runs from the command line against the data folder; there is no worker job
+  // kind yet, and a whole panel is too large for one unit of work (see the PRD's size estimate). These lists say what each step reads:
+  // the panel pull, its own files and the run log; the labels, the panel, the FDIC records they are dated by, the confirmed filers
+  // (for the coverage strata) and the run log; the replay, backtest/ only. No research, drafting or call action loads backtest/.
+  backtestPanel: ['backtest/panel/', 'sources/runs.jsonl'],
+  backtestLabels: ['backtest/', 'sources/fdic/failed.json', 'sources/fdic/events.json', 'sources/fdic/sales.json', 'sources/fdic/state.json', 'sources/edgar/filers.json', 'sources/runs.jsonl'],
+  backtestRun: ['backtest/'],
 });
 
 // The contact actions' load lists, narrowed to one account where the action touches only that account.
