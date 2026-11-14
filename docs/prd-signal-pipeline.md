@@ -1082,7 +1082,7 @@ Rules across the epic:
 **E16-S8. Loan-sale listings.** *As a principal, I want loans and pools listed for sale in our metros recorded so that I see the supply, and who sells it when the listing says.* P2, R3.
 - [x] **The shape, with no adapter:** `listingEvent`. Site, listing id, date, title, advisor, property type, metro or county, balance, loan count, status, lien and bid date. The seller is usually unknown; the buyer is always unknown. Tier `observed`. A test proves the ledger accepts it.
 - [ ] The feeders, for listing sites and loan-sale advisors' sale notices, once a principal has read each site's terms (data-sources 2.3).
-  - Listing titles carry the metro and size; the seller is usually only described (data-sources 2.3). The first feeder adds an optional `sellerDescription` ("bank", "regional bank", "credit union") to `listingEvent`: shown to a principal, never used to match a bank, and never guessed into a `fdic:CERT`.
+  - Listing titles carry the metro and size; the seller is usually only described (data-sources 2.3). The first feeder's story adds an optional `sellerDescription` ("bank", "regional bank", "credit union"): shown to a principal, never used to match a bank, and never guessed into a `fdic:CERT`. **Today's `listingEvent` (`src/sales.mjs`) does not accept it,** and its destructuring would drop it silently. So that story extends `listingEvent` to accept and store it (optional; non-empty text when present, checked by the ledger's validation), with a test that it survives the ledger build and is shown as context only. No feeder passes it before then.
 
 **Decisions for a principal.**
 
@@ -1137,6 +1137,7 @@ Rules across the epic:
 - [x] `bank.advisors` says that an FDIC loan sale's advisor works for the FDIC as receiver, not for a bank.
 - [x] Public pages only: never a members-only directory, or an attendee list that needs a login.
 - [x] `src/research.mjs` changes only as much as this needs, and every existing research test passes unchanged.
+- [ ] **The forum event list** (data-sources 2.4, build step 19): an event-list rule file of about 10–15 public event pages (name, host, URL, dates), kept by a principal; a loader that passes the pages applicable to the account to the briefer as fenced data; and a test that a configured page reaches `bank.memberships`. Not built: today the briefer's prompt receives only the account, the playbooks, the models, the date and the paper estimate.
 
 **E22-S3. County-record counsel: the shape and the seam.** *As a principal, I want the law firm a county foreclosure filing names for the lender recorded, so that the lender's own counsel is a route.* P1, R3. **The shape and the seam are built** (`src/routes.mjs`); the feeder is not.
 - [x] **The shape, with no adapter:** `counselEvent` in `src/routes.mjs`. County, document number and type, recording date, the lender (MERS resolved as in E16-S7), the lender's counsel (the firm and the attorneys named), the trustee, the APN, the source and link. Tier `observed`. `validateCounselEvent` checks each event.

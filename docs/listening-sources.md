@@ -9,6 +9,11 @@ Their findings are folded into `docs/data-sources.md`, and into the PRD stories 
 
 **Method: search excerpts only. No primary page has been read yet.** This environment blocks direct page fetches, so every fact came through web-search excerpts, and none is "Seen on page". Before any adapter is built, its own spike reads the primary pages listed in A.7 and B.7, as E2 requires.
 
+**Changed in review (PR #10).** Three of this note's recommendations are tightened where they enter `docs/data-sources.md` and the PRDs; the research below is kept as written:
+- **LinkedIn (B.1.6):** hand-logging an alert's type and date still copies information obtained from LinkedIn. Until counsel approves (D12) or LinkedIn gives written permission, an alert is only a lead for public research, and a signal is logged only from a public, non-LinkedIn source.
+- **The reading list:** a source whose terms say personal or non-commercial (Google Alerts and News, Seeking Alpha, Commercial Observer, American Banker) is not read for the firm until D12 or a business licence. Every other source's terms are read and recorded by the principal before first use.
+- **Advisor listings (B.2.3):** a listing with no named seller is advisor activity. It never counts toward distinct sellers and never makes a route (E19-S1, S2 and S4). The forum event list (B.5.2) also needs a small story before the briefer can read it (E22-S2).
+
 **No bank and no private person is named.** Examples are described by pattern. Vendors, platforms, advisors, publishers, regulators and associations are named.
 
 **Tags.** Every fact carries one:
