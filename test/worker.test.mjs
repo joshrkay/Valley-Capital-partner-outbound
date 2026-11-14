@@ -155,3 +155,31 @@ test('the weekly triage runs as a job after the FDIC pull and scoring: it writes
   await work({ client: worker(fake), rules, deps: deps({ now: () => new Date('2026-11-23T15:00:00Z') }) });
   assert.match(fake.jobs[4].result.error, /--since needs a date/);
 });
+
+test('the FDIC loan-sale pull runs as a job: refused while the FDIC contact is a placeholder, then run and the sale ledger rebuilt', async () => {
+  const { fakeFdicWww } = await import('./fdicsales-fake.mjs');
+  const fake = fakePostgrest();
+  await pat(fake).enqueue('sources.fdicsales');
+  await work({ client: worker(fake), rules, deps: deps({ fetchImpl: fakeFdicWww().fetchImpl, sleep: async () => {} }) });
+  assert.equal(fake.jobs[0].status, 'failed');
+  assert.match(fake.jobs[0].result.error, /fdic\.userAgent is a placeholder/);
+
+  const filled = { ...rules, config: { ...rules.config, fdic: { ...rules.config.fdic, userAgent: 'Example Firm ops@example.test', minIntervalMs: 0 } } };
+  await pat(fake).enqueue('sources.fdicsales');
+  await work({ client: worker(fake), rules: filled, deps: deps({ fetchImpl: fakeFdicWww().fetchImpl, sleep: async () => {} }) });
+  assert.equal(fake.jobs[1].status, 'done', JSON.stringify(fake.jobs[1].result));
+  assert.deepEqual([fake.jobs[1].result.listed, fake.jobs[1].result.salesNew, fake.jobs[1].result.ledger.outcome, fake.jobs[1].result.ledger.byKind], [2, 2, 'ok', { fdic_sale_announced: 2 }]);
+  assert.ok(fake.docs.has('sources/fdic/sales.json') && fake.docs.has('sales/ledger.json'));
+  assert.doesNotMatch(JSON.stringify(fake.jobs[1].result), /Example Prairie|Example Loan Advisors|Pat Person/, 'the job result holds counts, not names');
+});
+
+test('the CMBS job rebuilds the sale ledger too', async () => {
+  const { fakeSec } = await import('./edgar-fake.mjs');
+  const fake = fakePostgrest();
+  const filled = { ...rules, config: { ...rules.config, sec: { ...rules.config.sec, userAgent: 'Example Firm ops@example.test', minIntervalMs: 0, knownSpecialServicers: ['Example Special Servicing LLC'] } } };
+  await pat(fake).enqueue('sources.edgar');
+  await work({ client: worker(fake), rules: filled, deps: deps({ fetchImpl: fakeSec().fetchImpl }) });
+  assert.equal(fake.jobs[0].status, 'done', JSON.stringify(fake.jobs[0].result));
+  assert.equal(fake.jobs[0].result.ledger.outcome, 'ok');
+  assert.ok(fake.docs.has('sales/ledger.json') && fake.docs.has('sources/edgar/dispositions.json'));
+});

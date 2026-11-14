@@ -8,6 +8,8 @@ import { runFdic } from './src/sources/fdic.mjs';
 import { runEdgar } from './src/sources/edgar.mjs';
 import { verifyFdic, verifyEdgar } from './src/sources/verify.mjs';
 import { runFilings, verifyFilings, loadFilingRules, discoveredFilers } from './src/sources/filings.mjs';
+import { runFdicSales, verifyFdicSales } from './src/sources/fdicsales.mjs';
+import { buildLedger, readLedger, listSales, groupBySeller, groupBuyers, pricing, verifyLedger } from './src/sales.mjs';
 import { suggestFilers, confirmFiler, rejectFiler, filerStatus } from './src/sources/filers.mjs';
 import { LOADS } from './src/uow.mjs';
 import { runScoring } from './src/score.mjs';
@@ -59,12 +61,24 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound sources run filings [--since YYYY-MM-DD]   the SEC filings listener (PRD E13-S1): the saved searches in filings.json on
                                                   EDGAR full-text search, for every bank filer a principal confirmed, plus a discovery
                                                   search by state and bank SIC code (needs config.sec.userAgent filled in)
+  outbound sources run fdicsales                  FDIC loan-sale announcements from www.fdic.gov (PRD E16-S2): sale id, dates, receiverships,
+                                                  pools, advisor; the buyer is unknown. Gentle: robots.txt and a few requests a minute
+                                                  (needs config.fdic.userAgent filled in). Then rebuilds the sale ledger, as the edgar run does
   outbound sources status                         the last run of each source, and the latest FDIC quarter seen
-  outbound sources verify [fdic|edgar|filings] [--sample N]   check the stored data against the live sources (read-only): fresh, complete,
+  outbound sources verify [fdic|edgar|filings|fdicsales] [--sample N]   check the stored data against the live sources (read-only): fresh, complete,
                                                   values and ratios equal FDIC's own, every failure and deal stored, the CMBS parser equal
                                                   to a plain count, stored filings found again; plus a short list of records with their
                                                   public URL to compare by eye. Exits 1 on any failure. WARN flags a gap in FDIC's own data
                                                   (a stale /failures index). With no source named: fdic and edgar.
+
+  Who sells to whom (PRD E16): one ledger of sale events from stored data. Context for a principal only; never in a message.
+  outbound sales build                            rebuild sales/ledger.json: CMBS dispositions and DPOs, bank filings disclosing a sale,
+                                                  whole-bank acquisitions in the metros, FDIC loan-sale announcements
+  outbound sales list [--seller KEY] [--kind K]   the events, newest first (KEY: fdic:CERT, servicer:<slug>, cmbs-trust:CIK, fdic-receiver)
+  outbound sales sellers                          who has sold before: count by kind and the latest date, per seller
+  outbound sales buyers                           the known buyers, by kind, property type, metro and quarter
+  outbound sales pricing                          CMBS liquidations by property type and metro, with an APPROXIMATE implied recovery
+  outbound sales verify                           check the ledger itself (no network): every event valid, no buyer or price invented
 
   Bank filers (PRD E13-S1): which SEC filer (CIK) files for each bank, usually its holding company. Only confirmed ones are searched.
   outbound filers list                            every bank in the list: confirmed, rejected or not mapped yet
@@ -118,10 +132,10 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound platform smoke                         check a new project with SUPABASE_URL and SUPABASE_ANON_KEY (the PUBLIC key only):
                                                   sign-ups off, every table and function present and refusing the public key
   outbound worker [--max N]                       run queued jobs until the queue is empty (or N have run); prints ids and outcomes only
-  outbound enqueue sources.fdic|sources.edgar|sources.filings|score.run|triage.run|research.run|draft.run|call.prep|call.extract [--account ID] [--channel C] [--step N] [--date D] [--by NAME] [--draft-buybox] [--include-hq] [--since YYYY-MM-DD]
+  outbound enqueue sources.fdic|sources.edgar|sources.filings|sources.fdicsales|score.run|triage.run|research.run|draft.run|call.prep|call.extract [--account ID] [--channel C] [--step N] [--date D] [--by NAME] [--draft-buybox] [--include-hq] [--since YYYY-MM-DD]
   outbound platform push [--from DIR]             copy a data folder into the platform (default: OUTBOUND_DATA_DIR); safe to re-run
   outbound platform pull --to DIR                 write everything back to a new or empty folder outside this repository
-  outbound platform verify [fdic|edgar|filings] [--sample N]   the same checks on the platform's data (read-only); no spot-check list unless asked
+  outbound platform verify [fdic|edgar|filings|fdicsales|sales] [--sample N]   the same checks on the platform's data (read-only); no spot-check list unless asked
 `;
 
 function parse(argv) {
@@ -146,6 +160,8 @@ async function runVerify(dir, which, rules, flags) {
   if (!which || which === 'fdic') reports.push(await verifyFdic({ dir, metros: rules.metros, sample }));
   if (!which || which === 'edgar') reports.push(await verifyEdgar({ dir, sec: rules.config.sec, sample }));
   if (which === 'filings') reports.push(await verifyFilings({ dir, sec: rules.config.sec, rules: loadFilingRules(), sample }));
+  if (which === 'fdicsales') reports.push(await verifyFdicSales({ dir, fdic: rules.config.fdic, personalDomains: rules.config.personalDomains, sample }));
+  if (which === 'sales') reports.push(verifyLedger({ dir, sample }));
   const lines = [];
   for (const r of reports) {
     lines.push(`== ${r.source.toUpperCase()}`);
@@ -191,7 +207,7 @@ async function main() {
     if (cmd === 'platform' && sub === 'pull') return out(await pull({ client, to: need(flags, 'to') }));
     if (cmd === 'platform' && sub === 'verify') {   // read-only: the unit of work changes nothing, so nothing is written back
       // No spot-check list unless asked: this command runs in scheduled-job logs, which carry check results only, never bank names.
-      const { result } = await client.unitOfWork(LOADS.sources, (dir) => runVerify(dir, pos[2], rules, { ...flags, sample: flags.sample ?? 0 }), { retries: 0 });
+      const { result } = await client.unitOfWork(LOADS.sales, (dir) => runVerify(dir, pos[2], rules, { ...flags, sample: flags.sample ?? 0 }), { retries: 0 });
       if (!result) process.exitCode = 1;
       return;
     }
@@ -279,9 +295,13 @@ async function main() {
       return out(r);
     }
     if (sub === 'run') {
-      if (!['fdic', 'edgar'].includes(pos[2])) throw new Error('Usage: outbound sources run fdic [--include-hq] | outbound sources run edgar | outbound sources run filings [--since YYYY-MM-DD]');
-      const r = pos[2] === 'fdic' ? await runFdic({ dir, metros: rules.metros, includeHq: !!flags['include-hq'] }) : await runEdgar({ dir, metros: rules.metros, buybox: rules.buybox, scoring: rules.scoring, sec: rules.config.sec });
-      if (r.outcome === 'failed') process.exitCode = 1;
+      if (!['fdic', 'edgar', 'fdicsales'].includes(pos[2])) throw new Error('Usage: outbound sources run fdic [--include-hq] | outbound sources run edgar | outbound sources run fdicsales | outbound sources run filings [--since YYYY-MM-DD]');
+      const r = pos[2] === 'fdic' ? await runFdic({ dir, metros: rules.metros, includeHq: !!flags['include-hq'] })
+        : pos[2] === 'fdicsales' ? await runFdicSales({ dir, fdic: rules.config.fdic, personalDomains: rules.config.personalDomains })
+        : await runEdgar({ dir, metros: rules.metros, buybox: rules.buybox, scoring: rules.scoring, sec: rules.config.sec });
+      // The CMBS and FDIC loan-sale runs end by rebuilding the sale ledger (PRD E16), so a liquidation reported this month is kept.
+      if (pos[2] !== 'fdic' && r.outcome !== 'failed') r.ledger = buildLedger({ dir, config: rules.config });
+      if (r.outcome === 'failed' || r.ledger?.outcome === 'failed') process.exitCode = 1;
       return out(r);
     }
     if (sub === 'verify') { if (!(await runVerify(dir, pos[2], rules, flags))) process.exitCode = 1; return; }
@@ -289,6 +309,36 @@ async function main() {
       const last = {};
       for (const r of readJsonl(join(dir, 'sources', 'runs.jsonl'))) last[r.source] = r;
       return out({ lastRuns: last, fdic: readJson(join(dir, 'sources', 'fdic', 'state.json'), null) });
+    }
+  }
+
+  if (cmd === 'sales') {   // the who-sells-to-whom ledger (PRD E16); built from stored data only, so nothing here fetches
+    if (sub === 'build') { const r = buildLedger({ dir, config: rules.config }); if (r.outcome === 'failed') process.exitCode = 1; return out(r); }
+    if (sub === 'verify') { if (!(await runVerify(dir, 'sales', rules, flags))) process.exitCode = 1; return; }
+    const ledger = readLedger(dir);
+    const label = new Map(rules.metros.metros.map((m) => [m.cbsa, m.label]));
+    const where = (a) => (a?.metros?.length ? a.metros : a?.metro ? [a.metro] : []).map((c) => label.get(c) ?? c).join(', ') || a?.county || '';
+    const party = (p) => (p ? `${p.name}${p.key ? ` (${p.key})` : ''}` : '');
+    const money = (v) => (v === null || v === undefined ? '–' : `$${Math.round(v).toLocaleString('en-US')}`);
+    const pctOf = (r) => (r?.value === null || r?.value === undefined ? `– (${r?.reason ?? 'n/a'})` : `${(r.value * 100).toFixed(1)}% (approximate)`);
+    if (!ledger.builtAt) return out('No ledger yet. Run: outbound sales build');
+    const head = `Ledger built ${ledger.builtAt} (run ${ledger.runId}). Context for a principal only: never in a message.`;
+    if (sub === 'list') {
+      const rows = listSales(ledger, { seller: flags.seller === true ? undefined : flags.seller, kind: flags.kind === true ? undefined : flags.kind });
+      return out(`${head} ${rows.length} event(s).\n\n${rows.map((e) => `${e.date}  ${e.kind.padEnd(22)} ${e.id}\n    seller: ${party(e.seller)}${e.seller.via ? `, through ${party(e.seller.via)}` : ''}\n    buyer:  ${party(e.buyer)}\n    asset:  ${e.asset.kind}${e.asset.propertyType ? `, ${e.asset.propertyType}` : ''}${where(e.asset) ? `, ${where(e.asset)}` : ''}, balance ${money(e.asset.balance)}${e.priceEvidence ? `\n    implied recovery: ${pctOf(e.priceEvidence.impliedRecovery)}` : ''}${e.note ? `\n    note: ${e.note}` : ''}\n    source: ${e.sources.map((s) => s.link ?? `${s.source} ${s.ids.join(' ')}`).join(' · ')}`).join('\n\n')}`);
+    }
+    if (sub === 'sellers') {
+      const g = groupBySeller(ledger);
+      return out(`${head}\nWho has sold before: ${g.length} seller(s).\n\n${g.map((s) => `${s.latest}  ${party(s)} [${s.kind}]: ${s.total} event(s): ${Object.entries(s.counts).map(([k, n]) => `${k} ${n}`).join(', ')}`).join('\n')}`);
+    }
+    if (sub === 'buyers') {
+      const g = groupBuyers(ledger);
+      const kv = (o) => Object.entries(o).map(([k, n]) => `${label.get(k) ?? k} ${n}`).join(', ');
+      return out(`${head}\nKnown buyers: ${g.length}. Every other event's buyer is unknown.\n\n${g.map((b) => `${party(b)} [${b.kind}]: ${b.total} event(s), latest ${b.latest}\n    by kind: ${kv(b.byKind)}\n    by property type: ${kv(b.byPropertyType)}\n    by metro: ${kv(b.byMetro)}\n    by quarter: ${kv(b.byPeriod)}`).join('\n')}`);
+    }
+    if (sub === 'pricing') {
+      const pr = pricing(ledger);
+      return out(`${head}\n${pr.label}\n\n${pr.groups.map((g) => `${g.propertyType} · ${label.get(g.metro) ?? g.metro ?? 'metro not stated'}: ${g.events} liquidation(s), ${g.withRecovery} with balance and loss; implied recovery ${pctOf(g.impliedRecovery)}${g.withRecovery > 1 ? `, range ${(g.min * 100).toFixed(1)}–${(g.max * 100).toFixed(1)}%` : ''}`).join('\n')}${pr.rows.length ? `\n\n${pr.rows.map((r) => `${r.date}  ${r.kind.padEnd(20)} ${r.propertyType} · ${label.get(r.metro) ?? r.metro ?? ''}  balance ${money(r.balance)}  loss ${money(r.loss)}  ${pctOf(r.impliedRecovery)}  (${r.seller ?? ''}; ${r.id})`).join('\n')}` : '\nNo CMBS liquidation recorded yet.'}`);
     }
   }
 

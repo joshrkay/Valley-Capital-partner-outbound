@@ -26,8 +26,8 @@ function retryAfterMs(res, now = Date.now()) {
 
 // Reads at most maxBytes of a body, then stops the download. A source that ignores HTTP range requests (SEC EDGAR does) still costs
 // only what is read: the rest of the file is never transferred.
-async function readCapped(res, maxBytes) {
-  if (!maxBytes || !res.body?.getReader) return { text: await res.text(), truncated: false };
+async function readCappedBytes(res, maxBytes) {
+  if (!maxBytes || !res.body?.getReader) return { bytes: Buffer.from(await res.arrayBuffer()), truncated: false };
   const reader = res.body.getReader();
   const chunks = []; let n = 0, truncated = false;
   for (;;) {
@@ -37,7 +37,12 @@ async function readCapped(res, maxBytes) {
     if (n >= maxBytes) { truncated = true; await reader.cancel().catch(() => {}); break; }
   }
   const buf = Buffer.concat(chunks.map((c) => Buffer.from(c)));
-  return { text: buf.subarray(0, Math.min(buf.length, maxBytes || buf.length)).toString('utf8'), truncated };
+  return { bytes: buf.subarray(0, Math.min(buf.length, maxBytes || buf.length)), truncated };
+}
+async function readCapped(res, maxBytes) {
+  if (!maxBytes || !res.body?.getReader) return { text: await res.text(), truncated: false };
+  const { bytes, truncated } = await readCappedBytes(res, maxBytes);
+  return { text: bytes.toString('utf8'), truncated };
 }
 
 async function request(url, params, { as, maxBytes, accept, fetchImpl = globalThis.fetch, timeoutMs = 60000, retries = 3, backoffMs = 1000, maxBackoffMs = 30000, userAgent, sleep = realSleep } = {}) {
@@ -58,6 +63,7 @@ async function request(url, params, { as, maxBytes, accept, fetchImpl = globalTh
     }
     if (res.ok) {
       if (as === 'text') return readCapped(res, maxBytes);
+      if (as === 'bytes') return readCappedBytes(res, maxBytes);
       try { return await res.json(); } catch (e) { throw new HttpError(`Response from ${url} was not JSON: ${e.message}`, { status: res.status, url, attempts: attempt }); }
     }
     lastErr = new HttpError(`HTTP ${res.status} from ${url}`, { status: res.status, url, attempts: attempt });
@@ -72,6 +78,9 @@ export const getJson = (url, params = {}, opts = {}) => request(url, params, { .
 
 // Text (XML, HTML, an index file). Returns { text, truncated }. With maxBytes, stops reading once that much has arrived.
 export const getText = (url, params = {}, opts = {}) => request(url, params, { ...opts, as: 'text', accept: opts.accept ?? '*/*' });
+
+// Raw bytes (a PDF). Returns { bytes: Buffer, truncated }. With maxBytes, stops reading once that much has arrived.
+export const getBytes = (url, params = {}, opts = {}) => request(url, params, { ...opts, as: 'bytes', accept: opts.accept ?? '*/*' });
 
 // Spaces calls at least `minIntervalMs` apart. Sources are read sequentially, so this is the whole rate limit.
 export function pacer(minIntervalMs = 0, { sleep = realSleep, now = () => Date.now() } = {}) {

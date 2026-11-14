@@ -3,6 +3,8 @@
 // servicer's workout strategy. This adapter finds the latest filing per trust through EDGAR's quarterly form index, reads the EX-102
 // of every trust whose file is CMBS (by its XML namespace), keeps the loans with a property in a buy-box metro and a buy-box sector,
 // and names each trust's special servicer from the cover of its monthly distribution report (10-D, exhibit 99.1), firm name only.
+// A kept loan whose report shows a disposition (liquidation code 3) or a DPO (6) is also recorded in sources/edgar/dispositions.json,
+// and kept there: the loan drops out of the next report, so the month that carries the code is the only chance (PRD E16-S1).
 //
 // Every loan is ASSET-LEVEL: property names, addresses and tenants are context for a principal and never reach the drafter. The
 // signal attaches to the servicer. Code meanings are from the SEC's ABS XML Technical Specification v3.1 (eis_ABS_CMBSAssetData.xsd).
@@ -20,7 +22,15 @@ export const CODES = Object.freeze({
   workout: { 1: 'Modification', 2: 'Foreclosure', 3: 'Bankruptcy', 4: 'Extension', 5: 'Note sale', 6: 'Discounted payoff', 7: 'REO', 8: 'Resolved', 9: 'Pending return to master servicer', 10: 'Deed in lieu of foreclosure', 11: 'Full payoff', 12: 'Reps and warranties', 13: 'To be determined', 98: 'Other' },
   propertyStatus: { 1: 'In foreclosure', 2: 'REO', 3: 'Defeased', 4: 'Partial release', 5: 'Substituted', 6: 'Same as at securitization' },
   modification: { 1: 'Maturity date extension', 2: 'Amortization change', 3: 'Principal write-off', 5: 'Temporary rate reduction', 6: 'Capitalization of interest', 7: 'Capitalization of taxes', 8: 'Combination', 10: 'Forbearance', 98: 'Other' },
+  // Item 2(i)(1), liquidationPrepaymentCode: unscheduled payments or liquidation proceeds received during the reporting period.
+  liquidationPrepayment: { 1: 'Partial liquidation (curtailment)', 2: 'Payoff prior to maturity', 3: 'Disposition/liquidation', 4: 'Repurchase/substitution', 5: 'Full payoff at maturity', 6: 'DPO', 7: 'Liquidated before 7/1/2006', 8: 'Payoff with penalty', 9: 'Payoff with yield maintenance', 10: 'Curtailment with penalty', 11: 'Curtailment with yield maintenance' },
 });
+// Codes after which the loan has left the trust. A curtailment (1, 10, 11) is a partial payment: the loan stays, and so do its signals.
+export const LOAN_GONE_CODES = Object.freeze(['2', '3', '4', '5', '6', '7', '8', '9']);
+// Codes that make a completed sale event in the ledger (src/sales.mjs): 3 a disposition or liquidation, 6 a discounted payoff.
+export const DISPOSITION_CODES = Object.freeze(['3', '6']);
+// Elements the schema lets repeat (maxOccurs="unbounded", unique within a loan). Every value is kept, not only the last.
+export const REPEATABLE = Object.freeze(['workoutStrategyCode', 'modificationCode']);
 // Which property types are buy-box sectors. Mixed use may hold retail; it is kept and marked, never counted as a sure fit.
 export const SECTOR_OF_TYPE = Object.freeze({ LO: 'hospitality', MF: 'multifamily', RT: 'retail', MU: 'mixed (may include retail)' });
 const code = (table, v) => (v === undefined || v === null || v === '' ? null : { code: String(v), label: CODES[table][String(v)] ?? `Unknown code ${v}` });
@@ -88,6 +98,15 @@ function leaves(body) {
   for (const m of body.matchAll(re)) out[m[1]] = m[2] === undefined ? '' : decodeEntities(m[2]).trim();
   return out;
 }
+// Every value of each repeatable element, in file order. `leaves` keeps only the last one.
+function lists(body) {
+  const out = {};
+  for (const name of REPEATABLE) {
+    const vals = [...body.matchAll(new RegExp(`<${P}${name}\\b[^>]*>([^<]*)</${P}${name}>`, 'g'))].map((m) => decodeEntities(m[1]).trim()).filter(Boolean);
+    if (vals.length) out[name] = [...new Set(vals)];
+  }
+  return out;
+}
 export function parseCmbsAssets(xml) {
   // The root's own namespace: xmlns="..." for an unprefixed <assetData>, xmlns:p="..." for <p:assetData>. Attribute order varies by
   // filing agent (seen 2026-11-13: some put xmlns:xsi first, some last), so the attribute is looked up by name, never by position.
@@ -98,7 +117,7 @@ export function parseCmbsAssets(xml) {
   for (const m of xml.matchAll(new RegExp(`<${P}assets\\b[^>]*>([\\s\\S]*?)</${P}assets>`, 'g'))) {
     const properties = [];
     const body = m[1].replace(new RegExp(`<${P}property\\b[^>]*>([\\s\\S]*?)</${P}property>`, 'g'), (_, inner) => { properties.push(leaves(inner)); return ''; });
-    assets.push({ fields: leaves(body), properties });
+    assets.push({ fields: leaves(body), lists: lists(body), properties });
   }
   return { namespace, assets };
 }
@@ -148,17 +167,78 @@ export function toLoan({ asset, trust, idx, sectors, src }) {
   });
   const inMarket = props.filter((p) => p.metro && p.sector && (sectors.includes(p.sector) || p.sector.startsWith('mixed')));
   if (!inMarket.length) return null;
+  const liquidation = code('liquidationPrepayment', f.liquidationPrepaymentCode);
+  const workoutList = asset.lists?.workoutStrategyCode ?? (f.workoutStrategyCode ? [f.workoutStrategyCode] : []);
   return {
     key: `cmbs:${trust.cik}:${f.assetNumber}`, cik: trust.cik, trust: trust.name, assetNumber: f.assetNumber,
     period: mdy(f.reportingPeriodEndDate), originated: mdy(f.originationDate), originalBalance: num(f.originalLoanAmount),
     balance: num(f.reportPeriodEndActualBalanceAmount), rate: num(f.reportPeriodInterestRatePercentage ?? f.originalInterestRatePercentage),
     maturity: mdy(f.maturityDate), postModificationMaturity: mdy(f.postModificationMaturityDate),
     paymentStatus: code('paymentStatus', f.paymentStatusLoanCode), workout: code('workout', f.workoutStrategyCode),
+    workouts: workoutList.map((w) => code('workout', w)),   // the full list: the schema lets the code repeat
     specialServicingSince: mdy(f.mostRecentSpecialServicerTransferDate), returnedToMasterOn: mdy(f.mostRecentMasterServicerReturnDate),
     modification: code('modification', f.modificationCode), lastModified: mdy(f.lastModificationDate),
-    paidOff: f.liquidationPrepaymentCode ? true : false, primaryServicer: f.primaryServicerName ?? null,
+    paidOff: !!liquidation && LOAN_GONE_CODES.includes(liquidation.code), primaryServicer: f.primaryServicerName ?? null,
+    // Completed dispositions (PRD E16-S1). All optional in the schema and often absent; null when the filing leaves them out.
+    liquidationPrepayment: liquidation, liquidationPrepaymentDate: mdy(f.liquidationPrepaymentDate),
+    realizedLossToTrust: num(f.realizedLossToTrustAmount), beginningScheduledBalance: num(f.reportPeriodBeginningScheduleLoanBalanceAmount),
+    originator: f.originatorName ?? null, originalTermMonths: num(f.originalTermLoanNumber),
     metros: [...new Set(inMarket.map((p) => p.metro.cbsa))], sectors: [...new Set(inMarket.map((p) => p.sector))],
     properties: props, assetLevel: true, _source: src,
+  };
+}
+
+// The field check for the optional fields above (PRD E16-S1). Absent is allowed and counted; a value that is present but not in the
+// schema's form (an unknown code, a date that is not MM-DD-YYYY, an amount that is not a number) is an issue for the run notes.
+export const OPTIONAL_LOAN_FIELDS = Object.freeze(['liquidationPrepaymentCode', 'liquidationPrepaymentDate', 'realizedLossToTrustAmount', 'workoutStrategyCode', 'originatorName', 'originationDate', 'originalLoanAmount', 'originalTermLoanNumber', 'reportPeriodBeginningScheduleLoanBalanceAmount']);
+export function checkLoanFields(asset) {
+  const f = asset.fields ?? {};
+  const absent = OPTIONAL_LOAN_FIELDS.filter((k) => f[k] === undefined || f[k] === '');
+  const issues = [];
+  const isNum = (v) => v !== undefined && v !== '' && Number.isFinite(Number(v));
+  if (f.liquidationPrepaymentCode && !CODES.liquidationPrepayment[f.liquidationPrepaymentCode]) issues.push({ field: 'liquidationPrepaymentCode', problem: 'unknown code' });
+  for (const w of asset.lists?.workoutStrategyCode ?? []) if (!CODES.workout[w]) issues.push({ field: 'workoutStrategyCode', problem: 'unknown code' });
+  for (const k of ['liquidationPrepaymentDate', 'originationDate']) if (f[k] && !mdy(f[k])) issues.push({ field: k, problem: 'not MM-DD-YYYY' });
+  for (const k of ['realizedLossToTrustAmount', 'originalLoanAmount', 'originalTermLoanNumber', 'reportPeriodBeginningScheduleLoanBalanceAmount']) if (f[k] && !isNum(f[k])) issues.push({ field: k, problem: 'not a number' });
+  return { absent, issues };
+}
+
+// Every workout code a loan has shown, with the first reporting period it was seen in. Carried from run to run, so a note-sale
+// workout coded months before a loan was liquidated is still known when the liquidation is reported.
+export function workoutHistory(previous = [], loan) {
+  const out = new Map((previous ?? []).map((w) => [w.code, w]));
+  for (const w of loan.workouts ?? []) if (w && !out.has(w.code)) out.set(w.code, { code: w.code, label: w.label, firstSeen: loan.period });
+  return [...out.values()].sort((a, b) => (a.firstSeen ?? '').localeCompare(b.firstSeen ?? '') || a.code.localeCompare(b.code));
+}
+// Two histories as one: every code either has seen, each with the earlier first sighting.
+export function mergeWorkoutHistory(a = [], b = []) {
+  const out = new Map();
+  for (const w of [...(a ?? []), ...(b ?? [])]) {
+    const o = out.get(w.code);
+    if (!o || (w.firstSeen && (!o.firstSeen || w.firstSeen < o.firstSeen))) out.set(w.code, { code: w.code, label: w.label, firstSeen: w.firstSeen ?? o?.firstSeen ?? null });
+  }
+  return [...out.values()].sort((x, y) => (x.firstSeen ?? '').localeCompare(y.firstSeen ?? '') || x.code.localeCompare(y.code));
+}
+
+// A loan whose report carries a disposition code (3) or a DPO (6) becomes a disposition record, kept in sources/edgar/dispositions.json
+// for good: the loan leaves the next month's report, so this is the only time the event can be recorded. Names and addresses of the
+// properties are kept here as context for a principal; they never go in a log or reach the drafter. `previous` is the loan as the last
+// run stored it, for the balance before liquidation when the report has no beginning balance.
+export function dispositionOf(loan, previous = null) {
+  const c = loan.liquidationPrepayment?.code;
+  if (!DISPOSITION_CODES.includes(c)) return null;
+  const history = loan.workoutHistory ?? workoutHistory(previous?.workoutHistory, loan);
+  return {
+    key: `cmbs-liquidation:${loan.cik}:${loan.assetNumber}`, loanKey: loan.key, cik: loan.cik, trust: loan.trust, assetNumber: loan.assetNumber,
+    period: loan.period, liquidation: loan.liquidationPrepayment, liquidationDate: loan.liquidationPrepaymentDate,
+    realizedLossToTrust: loan.realizedLossToTrust, beginningScheduledBalance: loan.beginningScheduledBalance,
+    previousBalance: previous?.balance ?? null, previousPeriod: previous?.period ?? null,
+    workoutsNow: loan.workouts ?? [], workoutHistory: history, noteSaleSeen: history.some((w) => w.code === '5') || (loan.workouts ?? []).some((w) => w?.code === '5'),
+    specialServicer: loan.specialServicer ?? null, specialServicerMatched: loan.specialServicerMatched ?? null, primaryServicer: loan.primaryServicer,
+    originator: loan.originator, originated: loan.originated, originalBalance: loan.originalBalance, originalTermMonths: loan.originalTermMonths,
+    metros: loan.metros, sectors: loan.sectors,
+    properties: (loan.properties ?? []).map((p) => ({ name: p.name, city: p.city, state: p.state, county: p.county, metro: p.metro?.cbsa ?? null, type: p.type, sector: p.sector })),
+    assetLevel: true, contextOnly: true, _source: loan._source,
   };
 }
 
@@ -169,11 +249,12 @@ export function loanSignals(loan, { now = new Date(), maturityMonths = 18 } = {}
   if (loan.paidOff) return s;
   const inSS = loan.specialServicingSince && !(loan.returnedToMasterOn && loan.returnedToMasterOn >= loan.specialServicingSince);
   if (inSS) add('special_servicing', `In special servicing since ${loan.specialServicingSince}`);
-  const w = loan.workout?.code;
-  if (w === '5') add('note_sale', 'Workout strategy: note sale');
-  if (w === '6') add('dpo', 'Workout strategy: discounted payoff');
-  if (w === '7' || loan.properties.some((p) => p.status?.code === '2')) add('reo', 'REO');
-  if (w === '2' || loan.properties.some((p) => p.status?.code === '1')) add('foreclosure', 'In foreclosure');
+  // The workout code repeats in the schema; every listed code counts.
+  const ws = new Set([...(loan.workouts ?? []), loan.workout].filter(Boolean).map((x) => x.code));
+  if (ws.has('5')) add('note_sale', 'Workout strategy: note sale');
+  if (ws.has('6')) add('dpo', 'Workout strategy: discounted payoff');
+  if (ws.has('7') || loan.properties.some((p) => p.status?.code === '2')) add('reo', 'REO');
+  if (ws.has('2') || loan.properties.some((p) => p.status?.code === '1')) add('foreclosure', 'In foreclosure');
   if (['1', '2', '3'].includes(loan.paymentStatus?.code)) add('delinquent', loan.paymentStatus.label);
   if (loan.paymentStatus?.code === '5') add('matured_nonperforming', loan.paymentStatus.label);
   const mat = loan.postModificationMaturity ?? loan.maturity;
@@ -224,6 +305,7 @@ export function specialServicerFromReport(html, known = []) {
 export const edgarPaths = (dir) => ({
   loans: join(dir, 'sources', 'edgar', 'loans.json'), trusts: join(dir, 'sources', 'edgar', 'trusts.json'),
   servicers: join(dir, 'sources', 'edgar', 'servicers.json'), state: join(dir, 'sources', 'edgar', 'state.json'),
+  dispositions: join(dir, 'sources', 'edgar', 'dispositions.json'),
 });
 
 export async function runEdgar({ dir, metros, buybox, sec, scoring = {}, fetchImpl = globalThis.fetch, now = new Date(), clock = () => new Date(), sleep = realSleep, maxTrusts = Infinity }) {
@@ -240,7 +322,9 @@ export async function runEdgar({ dir, metros, buybox, sec, scoring = {}, fetchIm
   const sectors = buybox?.sectors?.include ?? [];
   const idx = metroIndex(metros);
   const notes = [], errors = [];
-  const counts = { filings: 0, notCmbsSized: 0, notCmbs: 0, noEx102: 0, cmbsTrusts: 0, loansRead: 0, loansKept: 0, trustErrors: 0, reports: 0 };
+  const counts = { filings: 0, notCmbsSized: 0, notCmbs: 0, noEx102: 0, cmbsTrusts: 0, loansRead: 0, loansKept: 0, trustErrors: 0, reports: 0, dispositions: 0, dispositionsNew: 0, fieldIssues: 0 };
+  // The optional-field check (E16-S1), over the loans kept: how many lack each field, and values that are present but malformed.
+  const absent = Object.fromEntries(OPTIONAL_LOAN_FIELDS.map((k) => [k, 0]));
 
   try {
     // 1. Which trusts filed lately.
@@ -285,7 +369,12 @@ export async function runEdgar({ dir, metros, buybox, sec, scoring = {}, fetchIm
         for (const a of parsed.assets) {
           counts.loansRead++;
           const loan = toLoan({ asset: a, trust, idx, sectors, src: src(a) });
-          if (loan) { loan.signals = loanSignals(loan, { now, maturityMonths: scoring?.cmbs?.maturityMonths ?? 18 }); loans[loan.key] = loan; kept++; }
+          if (loan) {
+            loan.signals = loanSignals(loan, { now, maturityMonths: scoring?.cmbs?.maturityMonths ?? 18 }); loans[loan.key] = loan; kept++;
+            const fc = checkLoanFields(a);
+            for (const k of fc.absent) absent[k]++;
+            for (const i of fc.issues) { counts.fieldIssues++; if (counts.fieldIssues <= 20) notes.push(`trust ${f.cik} asset ${a.fields.assetNumber}: ${i.field} ${i.problem}`); }
+          }
         }
         counts.loansKept += kept;
         outcomes.push({ cik, company, outcome: 'cmbs', accession: f.accession, records, loans: parsed.assets.length, propertyRecordsMerged: folded.merged, kept, ...(f.form === 'ABS-EE/A' ? { amendment: true } : {}), ...(tried.length > 1 ? { fellBackFrom: tried.slice(0, -1) } : {}) });
@@ -316,9 +405,29 @@ export async function runEdgar({ dir, metros, buybox, sec, scoring = {}, fetchIm
     let changed = 0;
     for (const [k, loan] of Object.entries(loans)) {
       loan.specialServicer = trusts[loan.cik]?.specialServicer ?? null;
+      loan.specialServicerMatched = trusts[loan.cik]?.specialServicerMatched ?? null;
+      // Loans stored before the workout list was kept carry one code; it seeds the history.
+      const before = prev[k]?.workoutHistory ?? (prev[k]?.workout ? [{ code: prev[k].workout.code, label: prev[k].workout.label, firstSeen: prev[k].period }] : []);
+      loan.workoutHistory = workoutHistory(before, loan);
       const r = upsertWithChanges(prev[k], loan, { key: k, runId: run.runId, dir, now });
       loans[k] = r.record; changed += r.changed;
     }
+    // Completed dispositions (E16-S1): recorded from the report that carries the code, and kept after the loan leaves the reports.
+    const prevDisp = readJson(p.dispositions, {});
+    const dispositions = { ...prevDisp };
+    for (const [k, loan] of Object.entries(loans)) {
+      const d = dispositionOf(loan, prev[k] ?? null);
+      if (!d) continue;
+      const old = prevDisp[d.key];
+      // The balance before liquidation is fixed once known: a later report of the same liquidation shows the loan already paid down.
+      const rec = { ...d, previousBalance: old?.previousBalance ?? d.previousBalance, previousPeriod: old?.previousPeriod ?? d.previousPeriod,
+        workoutHistory: mergeWorkoutHistory(old?.workoutHistory, d.workoutHistory),
+        noteSaleSeen: !!(d.noteSaleSeen || old?.noteSaleSeen), firstSeenAt: old?.firstSeenAt ?? fetchedAt, firstRunId: old?.firstRunId ?? run.runId };
+      const u = upsertWithChanges(old, rec, { key: d.key, runId: run.runId, dir, now, contextFields: ['properties'] });
+      dispositions[d.key] = u.record; changed += u.changed;
+      if (!old) counts.dispositionsNew++;
+    }
+    counts.dispositions = Object.keys(dispositions).length;
     const servicers = {};
     for (const l of Object.values(loans)) {
       const name = l.specialServicer ?? 'Unknown';
@@ -330,9 +439,11 @@ export async function runEdgar({ dir, metros, buybox, sec, scoring = {}, fetchIm
     writeJson(p.loans, loans);
     writeJson(p.trusts, trusts);
     writeJson(p.servicers, servicers);
-    writeJson(p.state, { lastRun: run.runId, ranAt: fetchedAt, since, counts, outcomes });
+    writeJson(p.dispositions, dispositions);
+    writeJson(p.state, { lastRun: run.runId, ranAt: fetchedAt, since, counts, outcomes, fieldCoverage: { loansKept: counts.loansKept, absent } });
+    if (counts.dispositionsNew) notes.push(`${counts.dispositionsNew} new completed disposition(s) or DPO(s) recorded (sources/edgar/dispositions.json)`);
     const suspect = counts.cmbsTrusts === 0 || counts.trustErrors > Math.max(3, counts.cmbsTrusts * 0.1);
-    const line = finishRun(dir, run, { rowsRead: counts.loansRead, rowsWritten: Object.keys(loans).length, rowsChanged: changed, outcome: 'ok', suspect, notes: notes.slice(0, 50), errors, now: clock() });
+    const line = finishRun(dir, run, { rowsRead: counts.loansRead, rowsWritten: Object.keys(loans).length, rowsChanged: changed, outcome: 'ok', suspect, notes: notes.slice(0, 50), errors, nullCounts: absent, now: clock() });
     return { runId: run.runId, outcome: line.outcome, ...counts, changed, servicers: Object.keys(servicers).length, notes: notes.length };
   } catch (e) {
     const line = finishRun(dir, run, { rowsRead: counts.loansRead, outcome: 'failed', errors: [String(e.message).slice(0, 300)], notes: notes.slice(0, 50), now: clock() });
