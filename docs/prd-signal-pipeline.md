@@ -480,9 +480,44 @@ Every adapter (E3–E5) is built on this shared framework.
 - [ ] Suppressed institutions, including aliases and affiliates in `suppression.json`, never appear as candidates. A test covers it.
 - [ ] No code path creates an account without a principal's name on it. A test covers it.
 
-**E6-S5. Weekly digest.** *As a principal, I want one weekly summary so that I don't have to remember to look.* P1, R2.
-- [ ] It lists new candidates, tier changes, a newly published FDIC quarter, and runs that failed or look suspect.
-- [ ] It is written to the data folder. How it is delivered to the principal is an open question (Q13). It goes only to the firm's own people, never to a prospect.
+**E6-S5. Weekly triage.** *As a principal, I want one triage every Monday of what changed across every source, grouped by institution and sorted into act now, watch and already in conversation, so that I know where to spend the week without having to remember to look.* P1, R2. **Built** (`src/triage.mjs`, `triage.json`, `outbound triage run|show`, worker job `triage.run`, the web app's **This week** page). Tested on invented data; not yet run on the live data folder.
+- [x] **Rules** live in `triage.json`, committed, with no prospect data. Every value is a placeholder with a `_note`: the window, what counts as act now and as watch, the in-conversation and opt-out events, the order within a category, the calendar settings, and when a source counts as stale.
+- [x] **Code only, no model.** Every sentence comes from a fixed template filled with computed values. The same inputs give the same triage, byte for byte (a test).
+- [x] **It compares with the previous triage's snapshot,** `triage/state.json`: each candidate's tier and signal ids, and every event seen.
+  - The first run has no snapshot and says "first triage, no comparison". It reports only events dated in the window, plus baseline counts.
+  - A second run on the same day compares with the same snapshot as the first, so re-running Monday's triage does not empty it.
+- [x] **The window** runs from the last triage, or from `--since DATE`, or over the last 7 days (placeholder). Both edges are in.
+  - With a snapshot, an event is new when the snapshot has not seen it, so an event FDIC indexed late is still caught, with a note saying so.
+  - An event dated more than 90 days back (placeholder) is never new, so a backfill does not flood the list.
+- [x] **What it finds:**
+  - new candidates, and candidates that dropped out;
+  - tier changes;
+  - state signals that turned on or off, compared by type, so a new quarter alone changes nothing;
+  - new SEC filings, by `firstSeenAt`;
+  - acquisitions;
+  - failures in our metros, with the FDIC as the seller;
+  - CMBS loans newly coded for a note sale (workout code 5) or newly in special servicing, with their servicer;
+  - a newly published FDIC quarter;
+  - source runs in the window that failed or look suspect.
+- [x] **Act now:** a CMBS note sale; a failure in our metros; an SEC filing that matched a loan-sale or held-for-sale search; a move to Tier A, new or from Tier B; a Tier A bank crossing the concentration screen. It applies only at an institution that is not in conversation, suppressed, opted out, dismissed or snoozed. A bank that fails a hard filter is listed under watch instead.
+- [x] **Watch:** other SEC filings, acquisitions, CMBS loans newly in special servicing, a new Tier B candidate, a move down to Tier B, state signals that turned on or off, and candidates that dropped out.
+- [x] **Already in conversation:** an institution with a reply, meeting or handoff in `touches.jsonl`. It is shown apart, with its latest touch date and the week's findings, and is never act now. A hand-picked account counts too.
+- [x] **Left out, and counted:**
+  - Opt-outs are matched by institution key or name and left out of every list, so neither the person nor the institution is surfaced again.
+  - Suppressed institutions are left out the same way.
+  - Snoozed candidates stay out until the snooze ends. Dismissed ones stay out until a new signal fires after the dismissal (E6-S4).
+- [x] **Each item** carries the institution key and name, the category, a one-line reason, the signal or event ids and their dates, and links: the candidate or account page, the servicer page, the SEC filing index and the FDIC loan-sale page. Items are sorted by category, then strength, then date.
+- [x] **System health:** failed and suspect runs in the window; sources whose last ok run is older than a limit (placeholders: FDIC 8 days, CMBS 35, SEC filings 4); scoring that is stale or behind the FDIC data.
+- [x] **The calendar:** the next quarter-end and the days until it; whether the review window is open (placeholder: 6 weeks before the quarter-end); when the next FDIC quarter is expected (placeholder lag: 60 days); when the next CMBS reporting cycle lands (placeholder: the 15th). Like E10-S1, it decides **when** a principal looks, never what a message says. The triage never feeds the drafter or the briefer: a test checks their load lists and their code.
+- [x] **Output:** `triage/<date>.json` and `.md` in the data folder, the updated snapshot, and an audit line with counts only. The data-rule test also refuses a tracked `triage/` file.
+- [x] **Surfaces:**
+  - `outbound triage run [--since D]` and `outbound triage show [--date D]`;
+  - worker job `triage.run`, whose result holds counts only. Its unit of work loads the snapshot and the day's two files, never past triages;
+  - every Monday the workflow queues it after the FDIC check and a scoring run. Scoring uses `--draft-buybox` (a PROVISIONAL list while the buy box has placeholders) unless the repository variable `SCORING_STRICT` is `true`;
+  - the web app's **This week** page (`/triage`), first in the nav, server-rendered from the stored record.
+- [ ] The database's job-kind list gains `triage.run` in the merge migration. This change adds no migration. Until it lands, `enqueue triage.run` is refused, and the Monday queue step fails with it.
+- [ ] Delivery beyond the data folder and the web app is still Q13. It goes only to the firm's principals, never to a prospect.
+- [ ] A principal reviews `triage.json`: the act-now rules, the window, the calendar settings and the staleness limits.
 
 **E6-S6. The paper profile.** *As a principal, I want to see what paper an institution likely holds, how distressed each part of it is, and where it lends, so that I approach it knowing what it probably has to sell.* P0, R1.
 - [ ] Each candidate carries a profile, computed in code. For each CRE category (construction, multifamily, nonfarm nonresidential, with owner-occupied and other shown separately where the fields allow), it shows:
@@ -653,8 +688,8 @@ Every adapter (E3–E5) is built on this shared framework.
 
 **E12-S4. The worker.** *As a principal, I want to start research, drafting, data pulls and scoring from the web and have them run in the background so that a ten-minute research run never times out a page.* P0, R2. **Built** (`src/platform/worker.mjs`, `.github/workflows/platform-worker.yml`).
 - [ ] `outbound worker --once` claims the oldest queued job (skip-locked) and runs the same function the command line runs, in a unit of work. It records the result and frees the job.
-- [ ] Job kinds: `sources.fdic`, `score.run`, `research.run`, `draft.run`.
-- [x] A scheduled GitHub Actions workflow runs the worker hourly on weekdays (12:17 to 23:17 UTC) and queues the weekly FDIC check on Mondays (E11-S1). Logs carry job ids, kinds and outcomes only. Keys live in Actions secrets. It is off until the repository variable `PLATFORM_ENABLED` is `true`.
+- [ ] Job kinds: `sources.fdic`, `score.run`, `research.run`, `draft.run`, and `triage.run` (E6-S5).
+- [x] A scheduled GitHub Actions workflow runs the worker hourly on weekdays (12:17 to 23:17 UTC) and queues the weekly FDIC check on Mondays (E11-S1), then scoring and the weekly triage (E6-S5). Logs carry job ids, kinds and outcomes only. Keys live in Actions secrets. It is off until the repository variable `PLATFORM_ENABLED` is `true`.
 - [ ] **Known limit:** a job queued from the web waits up to an hour for the next run. A "run now" trigger from the app needs a GitHub token on the server (P1).
 - [ ] The kill switch, a `KILL` document or the config flag, stops every job that could create a draft or touch a mailbox.
 
@@ -899,7 +934,7 @@ Rules across the epic:
 | Q10 | More than one entity using this? | Principals | E8-S1 | **Decided:** principals of one firm only; no partner workspaces or outside customers |
 | Q11 | Which contact name and email go in the SEC User-Agent? | Principals | E4 | E4 waits |
 | Q12 | Is the buy box confidential (data folder) or a rule file (committed)? | Principals | none | Committed |
-| Q13 | How is the weekly digest delivered to the principal? | Principals | E6-S5 | A file in the data folder |
+| Q13 | How is the weekly triage delivered to the principal? | Principals | E6-S5 | A file in the data folder, and the web app's This week page |
 | Q14 | Which Supabase organization and project? Is the existing connection the firm's? | Principals | E8 | E8 waits |
 | Q15 | Is the sending mailbox on Google Workspace, and can an administrator approve API access? | Principals | E9 | E9 waits |
 | Q16 | Channel and state rules, privacy notice, deletion process (research agenda G1) | Counsel | R2 sending | Nothing sends before counsel |

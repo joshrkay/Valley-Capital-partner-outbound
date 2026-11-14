@@ -237,3 +237,15 @@ export async function servicerDetail(client, name) {
   return { summary, loans: loansFor(snap.docs['sources/edgar/loans.json'] ?? {}, n) };
 }
 export const queueScore = (client, { draftBuybox }) => client.enqueue('score.run', { draftBuybox: !!draftBuybox });
+
+// ---- The weekly triage (PRD E6-S5) -------------------------------------------------------------------------------------------------
+// The stored triage for `date`, or the latest: the snapshot (triage/state.json) names the latest date, and only that day's record is
+// loaded. Internal, for the principals; the worker's triage.run job writes it, and it is never sent anywhere.
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+export async function latestTriage(client, { date } = {}) {
+  let d = typeof date === 'string' && DATE.test(date) ? date : null;
+  if (!d) d = (await client.load(['triage/state.json'])).docs['triage/state.json']?.date ?? null;
+  if (typeof d !== 'string' || !DATE.test(d)) return null;
+  return (await client.load([`triage/${d}.json`])).docs[`triage/${d}.json`] ?? null;
+}
+export const queueTriage = (client) => client.enqueue('triage.run', {});

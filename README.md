@@ -181,6 +181,27 @@ npm run outbound -- outcomes report                                     # which 
 
 On the platform, the account page does the same: queue a brief, paste notes, confirm or reject.
 
+### The weekly triage (PRD E6-S5)
+
+Every Monday, one page of what changed since the last triage, across every source, for the firm's principals only. It is never sent to anyone and never given to the drafter.
+
+```bash
+npm run outbound -- triage run                           # compare with the last triage; writes triage/<date>.json and .md in the data folder
+npm run outbound -- triage run --since 2026-11-01        # start the window on a day instead
+npm run outbound -- triage show                          # print the latest; --date YYYY-MM-DD for an earlier one
+```
+
+- **Grouped by institution**, each with one line of reasoning from a fixed template. No model is used, and the same inputs give the same triage.
+  - **Act now:** a CMBS note sale, a failure in our metros (the FDIC sells), an SEC loan-sale or held-for-sale filing, a move to Tier A, or a Tier A bank crossing the concentration screen.
+  - **Watch:** every other new signal, Tier B movements, state signals that turned on or off, and drop-outs.
+  - **Already in conversation:** a reply, meeting or handoff in `touches.jsonl`. Shown apart, with the latest touch date.
+- **Left out, and counted:** opted-out and suppressed institutions (never listed), and snoozed or dismissed candidates until they come back.
+- **It compares with a snapshot,** `triage/state.json`: each candidate's tier and signals, and every event seen. The first run has none and says "first triage, no comparison".
+- **Also shown:** where we are in the calendar (the next quarter-end, the review window, the next FDIC quarter and CMBS cycle), and source health (failed or suspect runs, stale sources, stale scoring).
+- **The rules** are in `triage.json`, every value a placeholder for a principal to review.
+
+On the platform, the job is `triage.run`. The worker workflow queues it every Monday after the FDIC check and a scoring run, and the web app shows the latest on its **This week** page.
+
 ### Checking the scrapers
 
 Tests use fakes, so they prove the code does what we meant, not that the sources say what we think. `sources verify` checks the stored data against the live sources. It is read-only and exits 1 on any failure:
@@ -228,12 +249,12 @@ OUTBOUND_TEST_PG="host=/tmp/pg port=5432 user=postgres" npm run test:db    # the
 # Operators and the worker use the service key (never in the web app):
 export SUPABASE_URL=https://<project>.supabase.co SUPABASE_SERVICE_ROLE_KEY=...
 npm run outbound -- platform push --from ~/valley-outbound-data           # copy a data folder in (safe to re-run)
-npm run outbound -- enqueue sources.fdic                                  # or sources.edgar, score.run --draft-buybox, research.run --account ID
+npm run outbound -- enqueue sources.fdic                                  # or sources.edgar, score.run --draft-buybox, triage.run, research.run --account ID
 npm run outbound -- worker --max 20                                       # run queued jobs; prints ids and outcomes only
 npm run outbound -- platform pull --to ~/valley-outbound-backup           # a full copy back out, to a new folder
 ```
 
-- **Worker schedule:** `.github/workflows/platform-worker.yml` runs the worker hourly on weekdays and queues the weekly FDIC check. It is off until the repository variable `PLATFORM_ENABLED` is `true`. It needs the Actions secrets `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` and `ANTHROPIC_API_KEY`.
+- **Worker schedule:** `.github/workflows/platform-worker.yml` runs the worker hourly on weekdays and queues the weekly FDIC check, then scoring and the weekly triage. The Monday scoring uses `--draft-buybox` unless the repository variable `SCORING_STRICT` is `true`. It is off until the repository variable `PLATFORM_ENABLED` is `true`. It needs the Actions secrets `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` and `ANTHROPIC_API_KEY`.
 - **The web app:** see `web/README.md` for local development, the Supabase Auth settings (sign-ups off, invite principals) and Vercel.
 
 ## What each agent does, and how
@@ -293,10 +314,11 @@ It stores no message text, and writes an audit line for every decision.
 | `metros.json` | The six target metros by CBSA code, with counties from the Census 2023 delineation |
 | `buybox.json` | What the firm buys. `[CONFIRM]` fields block scoring until a principal fills them |
 | `scoring.json` | Score components (distress, fit, timing), signal rules, tier cuts and the CMBS maturity window; every number a placeholder |
+| `triage.json` | The weekly triage: the window, what counts as act now and watch, the calendar settings and staleness limits; every value a placeholder |
 | `supabase/migrations/` | The platform's tables, access rules and functions. Structure only, no data |
 | `web/` | The principals' web app (Next.js) |
 | `.github/workflows/` | The platform worker's schedule (off until enabled) |
-| `src/` | `guard`, `research`, `draft`, `lint`, `model` (the only file that calls the Anthropic API), `rules`, `store`, `paths`, plus the pipeline: `sources/` (`http`, `runlog`, `fdic`, `edgar`), `metrics`, `score`, `paper` (the paper estimate), `candidates`, `pilot`, call prep and outcomes: `calls`, `outcomes`, and the platform: `uow`, `platform/` (`client`, `worker`, `move`) |
+| `src/` | `guard`, `research`, `draft`, `lint`, `model` (the only file that calls the Anthropic API), `rules`, `store`, `paths`, plus the pipeline: `sources/` (`http`, `runlog`, `fdic`, `edgar`), `metrics`, `score`, `paper` (the paper estimate), `candidates`, `triage`, `pilot`, call prep and outcomes: `calls`, `outcomes`, and the platform: `uow`, `platform/` (`client`, `worker`, `move`) |
 | `scripts/sync-site.mjs` | Refreshes `site-snapshot/` from the website repository (see below) |
 | `site-snapshot/` | A copy of the 7 website files the rules depend on, a list of the site's pages, and a record of the commit it came from. Committed. Refresh it; do not edit it. |
 | `docs/` | The plan, the research agenda, and the PRD for the signal pipeline |
@@ -305,7 +327,7 @@ It stores no message text, and writes an audit line for every decision.
 In `$OUTBOUND_DATA_DIR`:
 
 - `senders.json`, `suppression.json`, `accounts/`, `research/`, `facts/`, `briefs/`, `drafts/<account>/`, `touches.jsonl`, `audit.jsonl`;
-- for the pipeline: `sources/` (FDIC data, the run log and the change log), `candidates/` (the latest list and principals' decisions), `paper/` (one paper estimate per bank), and `pilot/` (truth sheets, verdicts, the pass).
+- for the pipeline: `sources/` (FDIC data, the run log and the change log), `candidates/` (the latest list and principals' decisions), `paper/` (one paper estimate per bank), `triage/` (each week's triage and its snapshot), and `pilot/` (truth sheets, verdicts, the pass).
 - for calls: `calls/<account>/` (call briefs, notes, proposals and follow-ups), `outcomes.jsonl` (confirmed outcomes) and `reports/`.
 
 ## Changing it

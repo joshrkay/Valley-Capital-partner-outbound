@@ -8,13 +8,14 @@ import { runFdic } from '../sources/fdic.mjs';
 import { runEdgar } from '../sources/edgar.mjs';
 import { runFilings, loadFilingRules } from '../sources/filings.mjs';
 import { runScoring } from '../score.mjs';
+import { runTriage, triageLoads, triageSummary, ymd } from '../triage.mjs';
 import { runBriefer } from '../research.mjs';
 import { runDrafter } from '../draft.mjs';
 import { loadContext } from '../guard.mjs';
 import { researchGate } from '../pilot.mjs';
 import { runCallPrep, runCallExtract, callLoads, needDate } from '../calls.mjs';
 
-export const JOB_KINDS = ['sources.fdic', 'sources.edgar', 'sources.filings', 'score.run', 'research.run', 'draft.run', 'call.prep', 'call.extract'];
+export const JOB_KINDS = ['sources.fdic', 'sources.edgar', 'sources.filings', 'score.run', 'triage.run', 'research.run', 'draft.run', 'call.prep', 'call.extract'];
 const ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const CHANNELS = ['email', 'letter', 'call', 'linkedin_note'];
 
@@ -49,6 +50,11 @@ export async function runJob({ client, job, rules, deps = {} }) {
       const { result } = await client.unitOfWork(LOADS.score, (dir) => runScoring({ dir, buybox: rules.buybox, scoring: rules.scoring, metros: rules.metros, allowPlaceholders: !!p.draftBuybox, now: deps.now?.() ?? new Date() }));
       const n = (t) => result.items.filter((i) => i.tier === t).length;
       return { ok: true, summary: { banks: result.items.length, tierA: n('A'), tierB: n('B'), untiered: n(null), provisional: result.provisional, latestRepdte: result.latestRepdte } };
+    }
+    case 'triage.run': {   // the weekly triage (PRD E6-S5): internal, for the principals; its result holds counts only, never names
+      const now = deps.now?.() ?? new Date();
+      const { result } = await client.unitOfWork(triageLoads(ymd(now)), (dir) => runTriage({ dir, rules: rules.triage, metros: rules.metros, scoring: rules.scoring, since: p.since, now }));
+      return { ok: true, summary: triageSummary(result) };
     }
     case 'research.run': {
       const model = deps.makeModelClient ? await deps.makeModelClient({ timeout: rules.models.research.timeoutMs }) : null;
