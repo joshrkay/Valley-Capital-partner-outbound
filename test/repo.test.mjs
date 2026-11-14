@@ -64,16 +64,23 @@ test('every configured model has a price, so cost is always reported', () => {
 // sources/ would sit at the root of a misplaced data dir. The data-folder names are checked for data formats only: web/app/accounts/page.jsx
 // is a route, not an account. contacts/ holds the known list and vendor tests (PRD E7-S2); contacts.json at the root is a rule file.
 // network/ and routes/ (PRD E22) hold the firm's own relationships and the routes built from them: web/app/network/page.jsx is a page, not
-// the network.
+// the network. backtest/ (PRD E17) holds the point-in-time panel, the labels and the reports, which name banks: src/backtest/ is code.
 const dataFormat = (f) => /(\.(json|jsonl|md|txt)|\/[^/.]+)$/.test(f);
 const isDataFile = (f) => /(^|\/)(suppression\.json|touches\.jsonl|audit\.jsonl|senders\.json|runs\.jsonl|changes\.jsonl|KILL|\.env)$/.test(f)
-  || (dataFormat(f) && /(^|\/)(accounts|research|briefs|drafts|facts|data|candidates|pilot|paper|triage|sales|contacts|network|routes)\//.test(f))
+  || (dataFormat(f) && /(^|\/)(accounts|research|briefs|drafts|facts|data|candidates|pilot|paper|triage|sales|contacts|network|routes|backtest)\//.test(f))
   || /^sources\//.test(f);
 
 test('DATA RULE: the data-folder names cover the firm\'s network and the routes, and leave code and rule files alone', () => {
   for (const f of ['network/network.json', 'routes/acme-bank.json', 'routes/acme-bank.md', 'backup/network/network.json', 'web/routes/x.json', 'network/people'])
     assert.equal(isDataFile(f), true, `${f} is a data file`);
   for (const f of ['routes.json', 'src/routes.mjs', 'src/network.mjs', 'web/app/network/page.jsx', 'web/app/network/actions.js', 'web/app/accounts/[id]/routes.jsx', 'test/routes.test.mjs'])
+    assert.equal(isDataFile(f), false, `${f} is code or a rule file`);
+});
+
+test('DATA RULE: the backtest (PRD E17) is a data folder: its panel, labels and reports name banks, and are never tracked', () => {
+  for (const f of ['backtest/labels.json', 'backtest/panel/state.json', 'backtest/panel/financials/12345.json', 'backtest/panel/sod/2025.json', 'backtest/report-0123456789abcdef.json', 'backtest/report-0123456789abcdef.md', 'backtest/runs.jsonl', 'backtest/holdout.jsonl', 'data/backtest/labels.json'])
+    assert.equal(isDataFile(f), true, `${f} is a data file`);
+  for (const f of ['src/backtest/panel.mjs', 'src/backtest/run.mjs', 'test/backtest-run.test.mjs', 'test/backtest-kit.mjs', 'docs/prd-next-five.md'])
     assert.equal(isDataFile(f), false, `${f} is code or a rule file`);
 });
 

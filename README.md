@@ -13,7 +13,7 @@ The agents in `docs/outbound-plan.md` that exist so far:
 
 **The goal** (PRD section 0): purposeful outreach to the right person at the right time, backed by research into what paper the institution holds, what those loans look like, and where the firm has an advantage. **Nothing in this folder can send a message.** A principal sends; the guard then records it.
 
-Start with `docs/prd-signal-pipeline.md` for the pipeline, and `docs/research-agenda.md` for the briefer. The next epics (E17 to E21: a backtest of the score, enforcement orders and merger applications, intermediaries, a market note, and credit unions and non-bank lenders) are in `docs/prd-next-five.md`; none is built yet. The briefer's questions (`playbooks.json`) are that agenda turned into data.
+Start with `docs/prd-signal-pipeline.md` for the pipeline, and `docs/research-agenda.md` for the briefer. The next epics (E17 to E21: a backtest of the score, enforcement orders and merger applications, intermediaries, a market note, and credit unions and non-bank lenders) are in `docs/prd-next-five.md`. Of those, the backtest (E17-S1 to S4, from the command line) and the coverage report (E18-S1, `outbound coverage` and the Status page) are built; the backtest's web page (E17-S5) and the rest are not. The briefer's questions (`playbooks.json`) are that agenda turned into data.
 
 ## Status: read this first
 
@@ -74,6 +74,7 @@ npm run outbound -- sources run fdic                     # bank list, deposit fo
 npm run outbound -- score run                            # refuses until buybox.json is filled; add --draft-buybox for a PROVISIONAL list
 npm run outbound -- candidates list --tier A             # tier, score by axis, and the "why now" card for each bank
 npm run outbound -- candidates show --key fdic:12345     # the paper profile and every score component, each with its FDIC field and date
+npm run outbound -- coverage                             # PRD E18-S1: how many Tier A, Tier B and all candidates each signal source can see (counts only; --json; also on the Status page)
 npm run outbound -- candidates promote --key fdic:12345 --by "Pat Example"
 npm run outbound -- research run --account <id>          # institution research: brings back who decides (refused until the pilot passes)
 npm run outbound -- account set-person --account <id> --name "..." --title "..." --by "Pat Example" --finding F3   # the candidate's finding in the brief
@@ -283,6 +284,34 @@ npm run outbound -- network remove --id np-1 --by "Pat Example"   # also removes
 - **A route relaxes no guard rule.** A route through a suppressed party is held. Choosing is refused after an opt-out or a suppression of the bank. Choosing changes no account, drafts nothing, records no touch; the checklist says who to ask, what to cite (with links), what never to mention, and what comes after an introduction.
 - On the platform, the account page has a routes section and `/network` is its own page. Both run in units of work as the principal; there is no new job kind. Neither `network/` nor `routes/` is ever loaded by the briefer, the drafter or call prep (`test/routes-handoff.test.mjs`), and neither is `contacts/` (`test/private-stores-handoff.test.mjs`).
 
+### A backtest of the score (PRD E17)
+
+Every weight in `scoring.json` is a placeholder. The backtest asks whether the score, run on the data that existed at the time, ranked banks under pressure a few quarters before the event. Every setting is a placeholder in `config.json` `backtest` (decisions D-B1 to D-B5).
+
+```bash
+npm run outbound -- backtest panel                       # the point-in-time panel (free, no key): window and lookback in config.json
+npm run outbound -- backtest panel --from 2021-03-31 --to 2026-06-30
+npm run outbound -- backtest verify                      # coverage: rows for at least minCoverage of each quarter's universe
+npm run outbound -- backtest labels                      # failures, assisted mergers, FDIC loan sales, from sources the score does not read
+npm run outbound -- backtest run                         # the training quarters; writes backtest/report-<hash>.json and .md
+npm run outbound -- backtest run --scoring alt.json      # another scoring file; the committed one is untouched
+npm run outbound -- backtest run --compare a.json b.json # two side by side, training quarters only
+npm run outbound -- backtest run --holdout               # the declared holdout, once, for the scoring file a principal chose
+npm run outbound -- backtest run --rolling               # rolling origin, when the holdout holds too few labelled banks
+npm run outbound -- backtest report                      # the latest report's summary (--hash H for another)
+```
+
+- **The panel** (`backtest/panel/` in the data folder) is the FDIC data as it stood at each past quarter-end. It covers every bank headquartered in our five states or with a Summary of Deposits branch in the six metros, **including banks that have since failed or merged**. A Call Report counts as known from quarter-end plus 60 days, the Summary of Deposits from its release date, and an event from its own date. The panel run has a run-log line, field checks and the change log, like every adapter. It is suspect when a quarter has rows for less than 95% of its universe.
+- **Labels** (`backtest/labels.json`) are dated events from sources the score never reads: a failure (all three FDIC sources), an assisted merger, and an FDIC loan sale. Ordinary mergers are off. `disclosed_sale` is listed as unavailable until the SEC contact (Q11) and confirmed filers exist; an 8-K Item 2.01 hit is never a label on its own. A test proves that no label derives from a scored field. A bank with no label is unlabelled, not safe.
+- **The replay** imports `scoreBank` from `src/score.mjs` (a test changes a weight and sees the output move). It uses no model and no network. Each run records the scoring and buy-box hashes and the panel and labels run ids. While the buy box has placeholders, every report is marked **PROVISIONAL**.
+- **The report's headline leaves out fit.** Its groups are the top K by distress and timing points, and the banks at or above the Tier A distress threshold.
+  - It gives the base rate, then for each group the observed-label yield, its lift and the share of observed labels captured, and the lead time. Each figure is split by whether the bank has a confirmed SEC filer, and repeated for the metro subset.
+  - It adds a table per component, and the all-axis tiers as context.
+  - It never says "precision" or "recall". Below `minLabels` labelled banks, a figure says "too few to tune on".
+  - Every report states its known limits.
+- **It never writes `scoring.json`.** A PR that changes weights adds a `_calibration` note, `{ report, evaluation, by, on }`, naming a holdout report's 16-character hash. A test checks its form.
+- It runs from the command line only, with no worker job kind. The full panel is about 45 to 50 MB; the PRD (E17) has the estimate and the platform follow-up.
+
 ### Checking the scrapers
 
 Tests use fakes, so they prove the code does what we meant, not that the sources say what we think. `sources verify` checks the stored data against the live sources. It is read-only and exits 1 on any failure:
@@ -400,7 +429,7 @@ It stores no message text, and writes an audit line for every decision.
 | `supabase/migrations/` | The platform's tables, access rules and functions. Structure only, no data |
 | `web/` | The principals' web app (Next.js) |
 | `.github/workflows/` | The platform worker's schedule (off until enabled) |
-| `src/` | `guard`, `research`, `draft`, `lint`, `model` (the only file that calls the Anthropic API), `rules`, `store`, `paths`, plus the pipeline: `sources/` (`http`, `runlog`, `fdic`, `edgar`, `fdicsales`), `metrics`, `score`, `paper` (the paper estimate), `candidates`, `triage`, `sales`, `pilot`, call prep and outcomes: `calls`, `outcomes`, routes to the decision-maker: `network`, `routes`, and the platform: `uow`, `platform/` (`client`, `worker`, `move`) |
+| `src/` | `guard`, `research`, `draft`, `lint`, `model` (the only file that calls the Anthropic API), `rules`, `store`, `paths`, plus the pipeline: `sources/` (`http`, `runlog`, `fdic`, `edgar`, `fdicsales`), `metrics`, `score`, `paper` (the paper estimate), `candidates`, `triage`, `sales`, `pilot`, call prep and outcomes: `calls`, `outcomes`, routes to the decision-maker: `network`, `routes`, the backtest: `backtest/` (`panel`, `labels`, `run`), and the platform: `uow`, `platform/` (`client`, `worker`, `move`) |
 | `scripts/sync-site.mjs` | Refreshes `site-snapshot/` from the website repository (see below) |
 | `site-snapshot/` | A copy of the 7 website files the rules depend on, a list of the site's pages, and a record of the commit it came from. Committed. Refresh it; do not edit it. |
 | `docs/` | The plan, the research agenda, and the PRD for the signal pipeline |
@@ -412,6 +441,7 @@ In `$OUTBOUND_DATA_DIR`:
 - for the pipeline: `sources/` (FDIC data, the run log and the change log), `candidates/` (the latest list and principals' decisions), `paper/` (one paper estimate per bank), `sales/` (the sale ledger), `triage/` (each week's triage and its snapshot), and `pilot/` (truth sheets, verdicts, the pass).
 - for calls: `calls/<account>/` (call briefs, notes, proposals and follow-ups), `outcomes.jsonl` (confirmed outcomes) and `reports/`.
 - for routes (PRD E22): `network/` (the firm's own relationships: private, never given to a model) and `routes/` (each account's routes and the chosen route's checklist).
+- for the backtest (PRD E17): `backtest/panel/` (the point-in-time panel), `backtest/labels.json`, `backtest/report-<hash>.json` and `.md`, and the logs `backtest/runs.jsonl` and `backtest/holdout.jsonl`.
 
 ## Changing it
 

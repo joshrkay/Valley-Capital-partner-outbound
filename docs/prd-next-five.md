@@ -51,47 +51,73 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 - The FDIC API serves Call Report figures as amended, not as first filed **[verify how often amendments move the fields we score]**. That is a small look-ahead leak, and the report states it.
 
 **E17-S1. A point-in-time panel.** *As a principal, I want the bank data as it stood at each past quarter-end, including banks that have since failed or merged, so that the backtest is not flattered by survivors.* P0, Now.
-- [ ] `outbound backtest panel --from 2021-03-31 --to 2026-06-30` pulls financials for every quarter in the window plus `scoring.json` `lookbackQuarters` before it, reusing `pullFinancials` and the FDIC client. The window is a placeholder.
-- [ ] **Universe** (placeholder, decision D-B3): every bank active at any as-of date that was headquartered in our five states (`metros.json` `hqStates`), plus every bank with a Summary of Deposits branch in the six metros in the June before that date. Banks that later failed, merged or closed are **included**. A test with a fixture proves that a bank inactive today is in the panel for the quarters it was active.
-- [ ] **Availability dates.** A quarter's Call Report counts as known only from quarter-end plus `config.backtest.callReportLagDays` (placeholder 60). Summary of Deposits counts as known from its release date, not from June 30. An event signal counts from its own date.
-- [ ] Stored in `backtest/panel/` in the data folder, with the run log, field checks and the change log (E2). The panel is public data, but it is kept in the data folder with everything else, so no backtest file names a bank in the repository.
-- [ ] A verify check: every as-of quarter has rows for at least `config.backtest.minCoverage` (placeholder 0.95) of its universe, or the run is `suspect`.
+- [x] `outbound backtest panel --from 2021-03-31 --to 2026-06-30` pulls financials for every quarter in the window plus `scoring.json` `lookbackQuarters` before it, reusing `pullFinancials` and the FDIC client. The window is a placeholder.
+- [x] **Universe** (placeholder, decision D-B3): every bank active at any as-of date that was headquartered in our five states (`metros.json` `hqStates`), plus every bank with a Summary of Deposits branch in the six metros in the June before that date. Banks that later failed, merged or closed are **included**. A test with a fixture proves that a bank inactive today is in the panel for the quarters it was active.
+- [x] **Availability dates.** A quarter's Call Report counts as known only from quarter-end plus `config.backtest.callReportLagDays` (placeholder 60). Summary of Deposits counts as known from its release date, not from June 30. An event signal counts from its own date.
+- [x] Stored in `backtest/panel/` in the data folder, with the run log, field checks and the change log (E2). The panel is public data, but it is kept in the data folder with everything else, so no backtest file names a bank in the repository.
+- [x] A verify check: every as-of quarter has rows for at least `config.backtest.minCoverage` (placeholder 0.95) of its universe, or the run is `suspect`.
 
 **E17-S2. Labels.** *As a principal, I want each label to be a dated event from a source the score does not read, so that the backtest is not grading the score on its own inputs.* P0, Now.
-- [ ] A label is `{ key: 'fdic:CERT', kind, date, sources: [{ source, ids, link, date }] }`, written to `backtest/labels.json`.
-- [ ] **Label kinds** (placeholders, decision D-B2):
+- [x] A label is `{ key: 'fdic:CERT', kind, date, sources: [{ source, ids, link, date }] }`, written to `backtest/labels.json`.
+- [x] **Label kinds** (placeholders, decision D-B2):
   - `failure`, from `sources/fdic/failed.json` (all three failure sources, E3-S5);
   - `assisted_merger`, from `sources/fdic/events.json`;
   - `disclosed_sale`, from the filings listener's held-for-sale, loan-sale and note-sale searches only (E13-S1). EDGAR full-text search reaches back to 2001, so `outbound backtest labels --filings` runs those saved searches over the window for **confirmed filers only**. An 8-K Item 2.01 hit is **never** a label on its own: it reports an acquisition or a disposition, so the bank may have bought (E16-S3). It becomes a label only when a principal has read the filing and recorded that the bank sold. **This label kind needs the SEC contact (Q11) and confirmed filers.** Until both exist it is off, and the report lists it as unavailable rather than leaving it out silently;
   - `fdic_loan_sale`, an FDIC loan-sale announcement whose receivership matched the bank (E16-S2);
   - `enforcement_order`, once E18-S2 is built.
-- [ ] Ordinary mergers are **not** labels by default. A merger may follow pressure or may not, and counting every merger would reward size.
-- [ ] **No leakage.** A test checks that no label kind is derived from a Call Report field in `scoring.json` `components`. A charge-off spike, for example, is a feature, never a label.
-- [ ] A bank with no label is **unlabelled**, not "safe". The report never calls it a true negative.
+- [x] Ordinary mergers are **not** labels by default. A merger may follow pressure or may not, and counting every merger would reward size.
+- [x] **No leakage.** A test checks that no label kind is derived from a Call Report field in `scoring.json` `components`. A charge-off spike, for example, is a feature, never a label.
+- [x] A bank with no label is **unlabelled**, not "safe". The report never calls it a true negative.
 
 **E17-S3. The replay.** *As a principal, I want the current score run as it would have run at each past quarter-end so that I see what it would have told us.* P0, Now.
-- [ ] `outbound backtest run [--scoring PATH] [--horizon 4]` runs, for each as-of quarter in the panel, `scoreBank` from `src/score.mjs` with only the data available on that date (S1), and an `asOf` set to that date.
-- [ ] **One scorer.** The backtest imports `scoreBank`. It never copies or forks it. A test proves it, by checking that a change to a component's weight changes the backtest's output.
-- [ ] Hard filters that depend on the buy box run with the buy box as it stands. Placeholders are allowed here, because the output is an analysis, not a list. Every output is marked `PROVISIONAL` while the buy box has placeholders, as `--draft-buybox` does today.
-- [ ] `--scoring PATH` runs an alternative scoring file without touching the committed one. `--compare A B` runs two and reports them side by side.
-- [ ] **A holdout, declared first.** `config.backtest.holdoutFrom` (placeholder: the last 4 as-of quarters in the window) is set before any comparison is run, and each run records it. `--compare` reports the training quarters only. The holdout quarters are scored once, for the scoring file a principal has chosen, with `--holdout`. A run with `--holdout` is recorded, and a second holdout run on the same quarters with a different scoring file is marked `reused holdout` in its report. A `_calibration` note may cite holdout figures only. If the holdout has fewer than `minLabels` labelled banks, the report says so and a rolling-origin split (train on quarters up to T, test on T+1 to T+4, for each T) is offered instead.
-- [ ] Each run records the hash of each scoring file, the buy box hash, the panel's run id and the labels' run id, so a report can always be traced to its inputs.
-- [ ] Cost: deterministic, with no model and no network after S1 and S2.
+- [x] `outbound backtest run [--scoring PATH] [--horizon 4]` runs, for each as-of quarter in the panel, `scoreBank` from `src/score.mjs` with only the data available on that date (S1), and an `asOf` set to that date.
+- [x] **One scorer.** The backtest imports `scoreBank`. It never copies or forks it. A test proves it, by checking that a change to a component's weight changes the backtest's output.
+- [x] Hard filters that depend on the buy box run with the buy box as it stands. Placeholders are allowed here, because the output is an analysis, not a list. Every output is marked `PROVISIONAL` while the buy box has placeholders, as `--draft-buybox` does today.
+- [x] `--scoring PATH` runs an alternative scoring file without touching the committed one. `--compare A B` runs two and reports them side by side.
+- [x] **A holdout, declared first.** `config.backtest.holdoutFrom` (placeholder: the last 4 as-of quarters in the window) is set before any comparison is run, and each run records it. `--compare` reports the training quarters only. The holdout quarters are scored once, for the scoring file a principal has chosen, with `--holdout`. A run with `--holdout` is recorded, and a second holdout run on the same quarters with a different scoring file is marked `reused holdout` in its report. A `_calibration` note may cite holdout figures only. If the holdout has fewer than `minLabels` labelled banks, the report says so and a rolling-origin split (train on quarters up to T, test on T+1 to T+4, for each T) is offered instead.
+- [x] Each run records the hash of each scoring file, the buy box hash, the panel's run id and the labels' run id, so a report can always be traced to its inputs.
+- [x] Cost: deterministic, with no model and no network after S1 and S2.
 
 **E17-S4. The report.** *As a principal, I want one report that says whether the score ranks pressure well, which components carry it, and how early, so that I can choose weights from evidence.* P0, Now.
-- [ ] Written to `backtest/report-<hash>.json` and `.md` in the data folder. `outbound backtest report` prints the summary.
-- [ ] **The headline rank leaves out fit.** Tier A needs a fit threshold (`tierFor` in `src/score.mjs`), and fit has no history to test. So every headline figure ranks banks by their **distress and timing points only**. The backtest's groups are the top K by that rank (K placeholder 25) and the banks at or above the Tier A distress threshold. The current all-axis tiers are shown in a separate table, labelled context, and a `_calibration` note may never cite them.
-- [ ] **Labels are incomplete, and the words say so.** Public sources miss many real sales, so the report never says "precision" or "recall". It reports:
+- [x] Written to `backtest/report-<hash>.json` and `.md` in the data folder. `outbound backtest report` prints the summary.
+- [x] **The headline rank leaves out fit.** Tier A needs a fit threshold (`tierFor` in `src/score.mjs`), and fit has no history to test. So every headline figure ranks banks by their **distress and timing points only**. The backtest's groups are the top K by that rank (K placeholder 25) and the banks at or above the Tier A distress threshold. The current all-axis tiers are shown in a separate table, labelled context, and a `_calibration` note may never cite them.
+- [x] **Labels are incomplete, and the words say so.** Public sources miss many real sales, so the report never says "precision" or "recall". It reports:
   - the base rate: the share of banks in the universe with an observed label inside the horizon;
   - per group: the **observed-label yield** (the share of the group with an observed label), its lift over the base rate, and the **share of observed labels captured** (labelled banks that were in the group, out of all labelled banks);
   - **lead time**: for each labelled bank, how many quarters before its label it first entered the top K, as a distribution;
   - each figure **stratified by label coverage**: banks with a confirmed SEC filer (every label kind can be observed) apart from banks without one (only the FDIC kinds can). A difference between the strata is shown as a coverage effect, not a scoring effect;
   - the same figures for the metro subset, with its sample size.
-- [ ] **Per component:** for each component in `scoring.json`, the labelled rate among banks where it scored more than zero against the rest, with counts. This shows which components carry the score and which add nothing.
-- [ ] **Small numbers.** Below `config.backtest.minLabels` labelled banks (placeholder 20), a figure is shown with its count and the words "too few to tune on". The metro subset will usually say this.
-- [ ] The report states its known limits every time, in fixed text: amended figures, labels that are forced events, the fit axis not tested, and unlabelled banks not being negatives.
-- [ ] **It never writes `scoring.json`.** A PR that changes weights adds a `_calibration` note to `scoring.json` naming the report hash it relied on, and that report must be a holdout run. A test checks that the note, when present, names a hash of the right form.
-- [ ] Job logs carry counts and run ids only (E11-S1).
+- [x] **Per component:** for each component in `scoring.json`, the labelled rate among banks where it scored more than zero against the rest, with counts. This shows which components carry the score and which add nothing.
+- [x] **Small numbers.** Below `config.backtest.minLabels` labelled banks (placeholder 20), a figure is shown with its count and the words "too few to tune on". The metro subset will usually say this.
+- [x] The report states its known limits every time, in fixed text: amended figures, labels that are forced events, the fit axis not tested, and unlabelled banks not being negatives.
+- [x] **It never writes `scoring.json`.** A PR that changes weights adds a `_calibration` note to `scoring.json` naming the report hash it relied on, and that report must be a holdout run. A test checks that the note, when present, names a hash of the right form.
+- [x] Job logs carry counts and run ids only (E11-S1).
+
+**As built (S1 to S4, November 14, 2026).** `src/backtest/panel.mjs`, `labels.mjs` and `run.mjs`; the commands are in the README. It runs from the command line against the data folder. Choices the stories left open, each a placeholder in `config.json` `backtest`:
+- **Active on an as-of date** is read from FDIC's own dates: established (`ESTYMD`) on or before the end of the quarter known on that date, and not ended (`ENDEFYMD`) on or before the date. The HQ state is FDIC's state for the charter today, or when it closed.
+- **The Summary of Deposits release date.** The API carries none, so June 30 data counts from June 30 plus `sodReleaseLagDays` (120 **[verify]**; FDIC's search index holding the 2026 data was built on September 18, 2026). The universe and the footprint use the latest Summary of Deposits *released* by the as-of date. That is the June before, except between June 30 and the release. Branches come from its branch rows, since `/locations` only says where branches are today.
+- **The labels reach back.** The panel pulls failures (all three sources) and structure events from the window's start, because the live pull keeps only 36 months. `fdic_loan_sale` labels come from `sources/fdic/sales.json`, which holds only the announcements the E16-S2 adapter has read, so older sales are missing. `disclosed_sale` is listed in `labelKinds` (the D-B2 default) and stays unavailable; `outbound backtest labels --filings` refuses and gives the reasons.
+- **The unit is the bank-quarter.** "Labelled banks", the count compared with `minLabels`, is distinct banks. The top K holds banks with more than 0 distress and timing points, ties broken by FDIC cert, so it holds fewer than K when fewer banks score.
+- **Not replayed:** event signals from SEC filings and the sale ledger. They add no points, so no figure would change.
+- **Rolling origin is built** (`outbound backtest run --rolling`). The holdout log, `backtest/holdout.jsonl`, also records rolling runs, so a later holdout run with another scoring file counts as reused.
+- **The default holdout's horizon runs past today.** The window ends on June 30, 2026 and the horizon is 4 quarters. So for three of the four holdout quarters (December 31, 2025 to June 30, 2026), the horizon ends after November 14, 2026, and the report flags their labels as incomplete. A principal deciding D-B5 can end the window on June 30, 2025, or wait.
+
+**Live check, November 14, 2026.** One state (TX), the Austin metro, as-of March 31 and June 30, 2023, with 8 quarters of lookback. Results: 407 banks (388 headquartered in TX, 19 through an Austin branch only), every requested field present, and coverage of 1.0 on both dates. 44 banks inactive today were in the universe on March 31, 2023. It took 6 seconds, and nothing was kept. The first try, with no lookback, found a bug that is now fixed and tested: the pull must start early enough to cover the quarter known on the first as-of date.
+
+**The size of the full panel (an estimate from live counts on November 14, 2026).** The default window has 22 as-of quarters (March 31, 2021 to June 30, 2026). With 8 quarters of lookback, that is 30 quarters of Call Reports.
+- **The universe** over the window is about 769 banks:
+  - 669 headquartered in the five states: 549 open today and 120 closed since March 2021;
+  - about 100 more with only a branch in the six metros. Each year from 2020 to 2025, 261 to 274 banks had a branch there.
+- **On disk:** at most about 23,000 bank-quarter records. A stored record is about 2 KB, measured on the live check (405 banks × 10 quarters took 8.4 MB). So the panel is about 45 to 50 MB, plus under 1 MB of Summary of Deposits, institutions and events.
+- **The pull** is about 70 requests.
+- **The replay** scores about 16,000 bank-quarters at about 0.4 ms each (measured), which is under 10 seconds per scoring file.
+
+**Follow-up for the platform (not in this pass: no worker job kind, no migration).** A unit of work holds every document it loads in memory and writes back in one transaction (E12-S1). About 770 financials documents of about 60 KB each, 45 MB in all, is too much for one. The steps:
+1. Split the pull into units by state or by a chunk of certs, each writing its own `backtest/panel/financials/` documents.
+2. Have the replay read a compact panel: only the 32 of the 78 Call Report fields that `scoreBank` reads, or a table.
+3. Then add the `backtest.panel`, `backtest.labels` and `backtest.run` job kinds, a line in the schedule, and the Calibration page (S5).
+
+`LOADS.backtestPanel`, `backtestLabels` and `backtestRun` in `src/uow.mjs` already name what each step reads.
 
 **E17-S5. Calibration page.** *As a principal, I want to read the latest backtest in the web app so that I don't need the command line to see whether the score works.* P2, R2.
 - [ ] A Calibration page, server-rendered from the stored report, linked from Status. It shows the headline table and the per-component table, with their counts.
@@ -112,10 +138,17 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 
 **Why.** The direct-sale route in the plan is for banks under about $10 billion in assets. Many of those banks are privately held and file nothing with the SEC, so the filings listener (E13-S1) cannot see them. For those banks, the score has only quarterly Call Report data, which arrives one to two months after quarter-end. Three free sources add dated events for them: enforcement orders, merger applications, and order terminations.
 
-**E18-S1. Measure the gap.** *As a principal, I want to see how many candidates each signal source can see so that we build the sources that close the biggest gap.* P0, Now.
-- [ ] `outbound coverage` reports, for Tier A, Tier B and all candidates: the count and share with a confirmed SEC filer, a rejected or unmapped one, any CMBS link (servicers), a sale-ledger event, and, once built, an enforcement record.
-- [ ] Deterministic, from stored data, with no network. Shown on the Status page.
+**E18-S1. Measure the gap.** *As a principal, I want to see how many candidates each signal source can see so that we build the sources that close the biggest gap.* P0, Now. **Built** (`src/coverage.mjs`, `outbound coverage [--json]`, the coverage card on the Status page). Its first result is not in yet: it needs real data.
+- [x] `outbound coverage` reports, for Tier A, Tier B and all candidates: the count and share with a confirmed SEC filer, a rejected or unmapped one, any CMBS link (servicers), a sale-ledger event, and, once built, an enforcement record.
+  - Each share states its denominator ("3 of 12 (25.0%)"). A group with no bank shows "0 of 0" and no share. With no candidate list, every count is 0 and the report says there are no candidates yet.
+  - "All candidates" is every bank in the latest scoring run, untiered ones included. Suppressed banks, and banks a principal has snoozed, dismissed or promoted, are counted too.
+  - A CMBS link is the bank named as a special servicer, in `sources/edgar/servicers.json` or as the servicer of a CMBS liquidation in the sale ledger. The match is by exact name or by an alias a principal added. Primary servicers and originators are not counted.
+  - A sale-ledger event is the bank as the seller that acted, as `outbound sales sellers` shows. An acquirer is not counted.
+  - The enforcement line says "not built", never 0, until E18-S2 is built.
+  - A store that does not exist yet (the filer map, the CMBS pull, the sale ledger) is named as "not run yet", so a 0 on its lines is not read as a measurement.
+- [x] Deterministic, from stored data, with no network. Shown on the Status page. The report has counts only and names no bank. The load list is `LOADS.coverage`: five exact files and no folder.
 - [ ] Its first result goes in this PRD, replacing the **[verify]** in section 0.
+  - A principal fills this in from the first `outbound coverage` run on the real data folder. The tests use invented banks only, so they cannot fill it. The Tier A share with a confirmed SEC filer from that run is also the baseline for the "Coverage of private banks" metric in section 3.
 
 **E18-S2. Enforcement orders.** *As a principal, I want every public enforcement order against a bank in our universe recorded, with its type and date, so that I know when an examiner has told a bank to cut its problem assets.* P0, Now (no-key sources), R2 (OCC).
 - [ ] **Sources**, from `docs/data-sources.md` 2.2, built in this order:

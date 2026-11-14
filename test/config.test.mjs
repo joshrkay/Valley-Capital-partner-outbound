@@ -44,3 +44,28 @@ test('scoring.json: valid, every component on an axis, every axis used, every me
   assert.ok(scoring.tiers.A.distress > 0 && scoring.tiers.A.fit > 0, 'Tier A needs both distress and fit');
   assert.equal('requirePilotPass' in scoring, false, 'the pilot gate lives in config.json');
 });
+
+// PRD E17: the backtest's settings. Every value is a placeholder a principal sets (D-B1 to D-B5), and the block's _note names each one.
+test('config.json backtest: every setting present, sane, a PLACEHOLDER, and named in the block\'s _note', () => {
+  const b = loadJson('config.json').backtest;
+  assert.ok(b, 'config.backtest is missing');
+  assert.match(b._note, /PLACEHOLDER/);
+  for (const k of Object.keys(b).filter((x) => !x.startsWith('_'))) assert.ok(b._note.includes(k), `the _note does not explain ${k}`);
+  assert.match(b.window._note, /PLACEHOLDER/);
+  assert.match(b.window.from, /^\d{4}-(03-31|06-30|09-30|12-31)$/);
+  assert.match(b.window.to, /^\d{4}-(03-31|06-30|09-30|12-31)$/);
+  assert.ok(b.window.from < b.window.to);
+  assert.equal(b.callReportLagDays, 60);
+  assert.equal(b.minCoverage, 0.95);
+  assert.equal(b.minLabels, 20);
+  assert.equal(b.topK, 25);
+  assert.equal(b.horizonQuarters, 4);
+  assert.ok(Number.isInteger(b.sodReleaseLagDays) && b.sodReleaseLagDays > 0);
+  // The holdout is declared before any comparison: the last 4 as-of quarters of the window.
+  const q = (d) => Number(d.slice(0, 4)) * 4 + ['03-31', '06-30', '09-30', '12-31'].indexOf(d.slice(5));
+  assert.equal(q(b.window.to) - q(b.holdoutFrom), 3);
+  assert.deepEqual(b.labelKinds, ['failure', 'assisted_merger', 'disclosed_sale', 'fdic_loan_sale']);
+  assert.ok(!b.labelKinds.includes('merger'), 'ordinary mergers are off by default (D-B2)');
+  assert.equal(b.universe, 'hq-states-and-metro-footprint');
+  for (const d of ['D-B1', 'D-B2', 'D-B3', 'D-B4', 'D-B5']) assert.match(b._note, new RegExp(d));
+});
