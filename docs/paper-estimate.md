@@ -88,7 +88,7 @@ Checked live on November 14, 2026, on 40 banks with $1–5 billion in assets in 
   - `P3COMRE` is titled "30-89 days past due, commercial RE", with no description. **Checked** on every bank at June 30, 2026 (4,313 banks) and December 31, 2025 (4,411): it is above 0 at 47 and 49 banks, never above `LNCOMRE`, never above 0 where `LNCOMRE` is 0, and never equal to the secured CRE 30–89 total. It is filled every quarter, small banks included. So it is taken as the not-secured line's 30–89 stage, with that note on the page. FDIC's title is still all it says.
   - Not pulled, and open: FDIC also lists `NCCOMRE` ("NC COMMERCIAL RE/COMMERCIAL RE"), which behaves like a noncurrent amount for the same line (present for all 880 banks with `LNCOMRE`, never above it), and `NTCOMRE`, its net charge-offs, year to date only.
 - **Charge-offs are flows, not a stage.** They are shown separately: for the quarter, and for the year to date. They are never added to, or shown as part of, the outstanding balance.
-- Each category has eight quarters of trend, and restructured balances by type, with the 2023 break marked.
+- Each category has eight quarters of trend, and restructured balances by type, with the 2023 break marked. These are the latest eight quarters on file: the stored financials keep every quarter ever pulled, and older ones are not shown. The quarter before the window is read on its own, for the first quarter's net change.
 - **Unused commitments are portfolio-level only.** `UCCOMRES` (secured) and `UCCOMREU` (unsecured) are not split by category, so they are shown once for the whole CRE book, never per category.
 
 **Q2. Property types.** Tried in order:
@@ -138,6 +138,8 @@ A mix is never inferred from fewer than 5 observed loans: show the loans, not a 
   2. **Bounds, from reported breakdowns.** For each buy-box condition *i*, let *sᵢ* be the share of the book that meets it.
      - **Upper bound:** the smallest *sᵢ*, times the book.
      - **Lower bound:** max(0, Σ *sᵢ* − (k − 1)), times the book, for k conditions. It is often zero, and the page says so.
+     - **Every condition the buy box restricts counts**, measured or not. One the data cannot measure enters as anywhere from none to all of the book, [0, 1], so while any is unmeasured the lower bound is 0. Today the Call Report measures none of status, lien or exclusions, and no size for multifamily. A dimension that allows everything (every size, every status, any lien, no exclusions) is not a condition. One still a placeholder may restrict, so it counts. The record lists the unknown conditions (`unknownConditions`), and the page says they are why the floor is 0.
+     - **Each condition names its tier.** Reported only for a direct, same-period Call Report share, such as multifamily against the CRE book. Inferred for the deposit share (a proxy for where the loans are), for hotel and retail (known only to lie between 0 and the nonfarm nonresidential share), and for a June or December size mix applied to a later quarter's balance. The bounds take the weakest tier of their measured conditions.
   3. **No base figure** until a dependence model has been calibrated against real tapes (E14-S6). Until then the page shows the observed figure and the two bounds.
 - **Edge statements:** chosen only from approved claims in `claims.json` that match the profile. These are for the principal, not the message.
 

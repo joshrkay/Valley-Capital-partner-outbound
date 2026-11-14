@@ -159,11 +159,12 @@ export default function PaperEstimate({ paper }) {
           <h3 style={{ marginTop: 0 }}>{s.label} <span className="muted small">inside {s.category}</span></h3>
           <p>In the buy box: <V v={s.bounds} full /></p>
           {s.bounds?.lowNote ? <p className="small muted">{s.bounds.lowNote}</p> : null}
+          {s.unknownConditions?.length ? <Notes items={s.unknownConditions.map((u) => `Cannot be measured, ${u.label}: ${u.reason}`)} /> : null}
           {s.why ? <p className="small">{s.why}</p> : null}
           <div className="scroll">
             <table>
-              <thead><tr><th>Condition used</th><th className="num">Share of the CRE book</th><th>Basis</th></tr></thead>
-              <tbody>{s.conditions.map((c) => <tr key={c.id}><td>{c.label}</td><td className="num" title={(c.share.sources ?? []).map((x) => `${x.field} ${x.repdte}`).join('; ')}>{shareText(c.share)}</td><td className="small">{c.basis}</td></tr>)}</tbody>
+              <thead><tr><th>Condition used</th><th className="num">Share of the CRE book</th><th>Tier</th><th>Basis</th></tr></thead>
+              <tbody>{s.conditions.map((c) => <tr key={c.id}><td>{c.label}</td><td className="num" title={(c.share.sources ?? []).map((x) => `${x.field} ${x.repdte}`).join('; ')}>{shareText(c.share)}</td><td className="small">{c.share.tier ?? 'unknown: 0 to all'}</td><td className="small">{c.basis}</td></tr>)}</tbody>
             </table>
           </div>
           <Notes items={(s.notUsed ?? []).map((n) => `Not used, ${n.id}: ${n.reason}`)} />

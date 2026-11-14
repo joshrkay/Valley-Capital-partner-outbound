@@ -2,7 +2,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fakeClient, put, makeDir, REPO } from './kit.mjs';
 import { rules, ID, KEY, SIG1, SIG2, NOTES, PROPOSAL_REPLY, GOOD_BRIEF, PAPER, ACCOUNT, setup, reply } from './calls-kit.mjs';
@@ -11,7 +12,7 @@ import { loadContext, checkTouch, touchFromAccount } from '../src/guard.mjs';
 import { runDrafter } from '../src/draft.mjs';
 import {
   runCallPrep, gatherCallInputs, buildCallPrompt, checkCallBrief, numbersIn, paperInputs, readPaper, saveNotes, runCallExtract, processProposal,
-  confirmProposal, rejectProposal, listCalls, buildFollowUp, originOf, callLoads, OUTCOME_CODES, NOT_SAY, UNCONFIRMED_PERSON,
+  confirmProposal, confirmInFolder, commitSteps, rejectProposal, listCalls, buildFollowUp, originOf, callLoads, OUTCOME_CODES, NOT_SAY, UNCONFIRMED_PERSON,
 } from '../src/calls.mjs';
 import { buildOutcomesReport, runOutcomesReport, renderOutcomesReport, leadTimeBucket, HAND_PICKED } from '../src/outcomes.mjs';
 import { withUnitOfWork, snapshotFromDir, applyPlanToDir } from '../src/uow.mjs';
@@ -19,8 +20,9 @@ import { JOB_KINDS, work } from '../src/platform/worker.mjs';
 import { platformClient } from '../src/platform/client.mjs';
 import { fakePostgrest } from './postgrest-fake.mjs';
 
-const NOW = new Date('2026-11-14T15:00:00Z');
+const NOW = new Date('2026-11-14T15:00:00Z');   // before the call: the brief is prepared
 const DATE = '2026-11-17';
+const AFTER = new Date('2026-11-20T15:00:00Z'); // after it: the notes are logged and confirmed
 const acct = (dir) => readJson(join(dir, 'accounts', `${ID}.json`));
 const prep = (dir, client, over = {}) => runCallPrep({ client, dir, account: acct(dir), date: DATE, rules, now: NOW, ...over });
 const codes = (r) => r.problems.map((e) => e.code);
@@ -211,11 +213,13 @@ test('a model failure writes no brief and is reported', async () => {
 });
 
 // ---- E15-S2: recording the call -----------------------------------------------------------------------------------------------
-async function logged(dir = setup(), replyObj = PROPOSAL_REPLY) {
-  saveNotes({ dir, id: ID, date: DATE, notes: NOTES, by: 'Pat Example', now: NOW });
-  const r = await runCallExtract({ client: fakeClient([reply(replyObj)]), dir, id: ID, date: DATE, by: 'Pat Example', models: rules.models, now: NOW });
+async function logged(dir = setup(), replyObj = PROPOSAL_REPLY, date = DATE) {
+  saveNotes({ dir, id: ID, date, notes: NOTES, by: 'Pat Example', now: AFTER });
+  const r = await runCallExtract({ client: fakeClient([reply(replyObj)]), dir, id: ID, date, by: 'Pat Example', models: rules.models, now: AFTER });
   return { dir, r };
 }
+const proposalFile = (dir, pid) => join(dir, 'calls', ID, 'proposals', `${pid}.json`);
+const meetings = (dir) => readJsonl(join(dir, 'touches.jsonl')).filter((t) => t.type === 'meeting');
 
 test('notes are kept in the data folder; the model\'s proposal is stored as pending and nothing else is recorded', async () => {
   const dir = setup();
@@ -250,7 +254,7 @@ test('the proposal is checked: fixed codes only, quotes looked for in the notes,
 test('confirming records the meeting, the outcome (linked to the origin signals) and the follow-up; named people stay unconfirmed', async () => {
   const { dir, r } = await logged();
   const personBefore = acct(dir).person;
-  const c = confirmProposal({ dir, id: ID, proposalId: r.proposalId, by: 'Pat Example', rules, now: NOW });
+  const c = confirmProposal({ dir, id: ID, proposalId: r.proposalId, by: 'Pat Example', rules, now: AFTER });
   const touches = readJsonl(join(dir, 'touches.jsonl'));
   assert.deepEqual([touches.at(-1).type, touches.at(-1).date, touches.at(-1).accountId], ['meeting', DATE, ID], 'a guard meeting event');
   const [line] = readJsonl(join(dir, 'outcomes.jsonl'));
@@ -267,10 +271,10 @@ test('confirming records the meeting, the outcome (linked to the origin signals)
   assert.equal(readJson(join(dir, 'calls', ID, 'proposals', `${r.proposalId}.json`)).status, 'confirmed');
   assert.ok(existsSync(join(dir, 'calls', ID, `${DATE}-followup.md`)));
   assert.equal(c.followUp.items, 2);
-  assert.throws(() => confirmProposal({ dir, id: ID, proposalId: r.proposalId, by: 'Pat Example', rules }), /already confirmed/);
-  assert.throws(() => saveNotes({ dir, id: ID, date: DATE, notes: 'again', by: 'Pat' }), /already confirmed/);
+  assert.throws(() => confirmProposal({ dir, id: ID, proposalId: r.proposalId, by: 'Pat Example', rules, now: AFTER }), /already confirmed/);
+  assert.throws(() => saveNotes({ dir, id: ID, date: DATE, notes: 'again', by: 'Pat', now: AFTER }), /already confirmed/);
   const again = await runCallExtract({ client: fakeClient([reply(PROPOSAL_REPLY)]), dir, id: ID, date: DATE, by: 'Pat', models: rules.models });
-  assert.throws(() => confirmProposal({ dir, id: ID, proposalId: again.proposalId, by: 'Pat', rules }), /already confirmed .*Reject this proposal/, 'one outcome per call');
+  assert.throws(() => confirmProposal({ dir, id: ID, proposalId: again.proposalId, by: 'Pat', rules, now: AFTER }), /already confirmed .*Reject this proposal/, 'one outcome per call');
 });
 
 test('confirming needs a name and a pending proposal; a rejected proposal records nothing and cannot be confirmed', async () => {
@@ -289,7 +293,7 @@ test('confirming needs a name and a pending proposal; a rejected proposal record
 
 test('logs carry counts only: no prospect name and no note text in the audit log', async () => {
   const { dir, r } = await logged();
-  confirmProposal({ dir, id: ID, proposalId: r.proposalId, by: 'Pat Example', rules, now: NOW });
+  confirmProposal({ dir, id: ID, proposalId: r.proposalId, by: 'Pat Example', rules, now: AFTER });
   await prep(dir, fakeClient([reply(GOOD_BRIEF)]));
   const lines = readFileSync(join(dir, 'audit.jsonl'), 'utf8');
   for (const leak of ['Jordan', 'Riley', 'confidentiality', 'borrowers', 'loan tape', 'the tape', 'Acme Community Bank', 'special assets', '30 minutes']) assert.ok(!lines.includes(leak), `audit log contains "${leak}"`);
@@ -299,16 +303,102 @@ test('logs carry counts only: no prospect name and no note text in the audit log
 
 test('notes are refused when empty or too long, and the date must be a real date', () => {
   const dir = setup();
-  assert.throws(() => saveNotes({ dir, id: ID, date: DATE, notes: '  ', by: 'Pat' }), /empty/);
-  assert.throws(() => saveNotes({ dir, id: ID, date: DATE, notes: 'x'.repeat(50001), by: 'Pat' }), /limit is 50000/);
-  assert.throws(() => saveNotes({ dir, id: ID, date: '2026-02-30', notes: 'x', by: 'Pat' }), /YYYY-MM-DD/);
-  assert.throws(() => saveNotes({ dir, id: ID, date: DATE, notes: 'x' }), /A name is required/);
+  assert.throws(() => saveNotes({ dir, id: ID, date: DATE, notes: '  ', by: 'Pat', now: AFTER }), /empty/);
+  assert.throws(() => saveNotes({ dir, id: ID, date: DATE, notes: 'x'.repeat(50001), by: 'Pat', now: AFTER }), /limit is 50000/);
+  assert.throws(() => saveNotes({ dir, id: ID, date: '2026-02-30', notes: 'x', by: 'Pat', now: AFTER }), /YYYY-MM-DD/);
+  assert.throws(() => saveNotes({ dir, id: ID, date: DATE, notes: 'x', now: AFTER }), /A name is required/);
+});
+
+test('a call date later than today is refused when the notes are saved, and again at confirmation; a brief may be for a future call', async () => {
+  const dir = setup();
+  assert.throws(() => saveNotes({ dir, id: ID, date: DATE, notes: NOTES, by: 'Pat', now: NOW }), /2026-11-17 is later than today \(2026-11-14\)/);
+  assert.equal(existsSync(join(dir, 'calls', ID, `${DATE}-notes.md`)), false, 'nothing saved');
+  saveNotes({ dir, id: ID, date: DATE, notes: NOTES, by: 'Pat', now: new Date('2026-11-17T23:00:00Z') });   // the day of the call itself
+  const ex = await runCallExtract({ client: fakeClient([reply(PROPOSAL_REPLY)]), dir, id: ID, date: DATE, by: 'Pat', models: rules.models, now: AFTER });
+  // Confirmed with a clock before the call (a wrong clock, or a proposal from before this check): refused, and nothing is recorded.
+  assert.throws(() => confirmProposal({ dir, id: ID, proposalId: ex.proposalId, by: 'Pat', rules, now: NOW }), /2026-11-17 is later than today \(2026-11-14\)/);
+  assert.deepEqual(meetings(dir), [], 'no meeting, so the sequence is not stopped by a call that has not happened');
+  assert.equal(readJson(proposalFile(dir, ex.proposalId)).status, 'pending');
+  assert.equal(existsSync(join(dir, 'outcomes.jsonl')), false);
+  assert.equal((await prep(dir, fakeClient([reply(GOOD_BRIEF)]))).usable, true, 'call prep still takes a future date');
+  confirmProposal({ dir, id: ID, proposalId: ex.proposalId, by: 'Pat', rules, now: AFTER });
+  assert.equal(meetings(dir).length, 1);
+});
+
+test('replacing the notes supersedes the proposals read from the old ones, and a proposal whose notes changed cannot be confirmed', async () => {
+  const { dir, r } = await logged();
+  assert.match(readJson(proposalFile(dir, r.proposalId)).notesDigest, /^[0-9a-f]{64}$/, 'the proposal names the notes it was read from');
+  const replaced = 'They are not selling now. Maybe next year.';
+  assert.deepEqual(saveNotes({ dir, id: ID, date: DATE, notes: replaced, by: 'Pat Example', now: AFTER }).superseded, [r.proposalId]);
+  assert.equal(readJson(proposalFile(dir, r.proposalId)).status, 'superseded');
+  assert.throws(() => confirmProposal({ dir, id: ID, proposalId: r.proposalId, by: 'Pat', rules, now: AFTER }), /superseded: its notes were replaced/);
+  assert.throws(() => rejectProposal({ dir, id: ID, proposalId: r.proposalId, by: 'Pat' }), /already superseded/);
+  assert.deepEqual(meetings(dir), []);
+  // Saving the same text again supersedes nothing.
+  const fresh = await runCallExtract({ client: fakeClient([reply(PROPOSAL_REPLY)]), dir, id: ID, date: DATE, by: 'Pat', models: rules.models, now: AFTER });
+  assert.deepEqual(saveNotes({ dir, id: ID, date: DATE, notes: replaced, by: 'Pat Example', now: AFTER }).superseded, []);
+  // Notes changed by any other route are caught at confirmation, by the digest.
+  const notesFile = join(dir, 'calls', ID, `${DATE}-notes.md`);
+  writeFileSync(notesFile, 'Edited by hand.\n');
+  assert.throws(() => confirmProposal({ dir, id: ID, proposalId: fresh.proposalId, by: 'Pat', rules, now: AFTER }), /notes for the call of 2026-11-17 changed after proposal/);
+  assert.deepEqual(meetings(dir), []);
+  writeFileSync(notesFile, `${replaced}\n`);
+  confirmProposal({ dir, id: ID, proposalId: fresh.proposalId, by: 'Pat', rules, now: AFTER });
+  assert.deepEqual(listCalls({ dir, id: ID }).proposals.map((p) => p.status).sort(), ['confirmed', 'superseded']);
+  const saved = readJsonl(join(dir, 'audit.jsonl')).filter((a) => a.type === 'call_notes_saved');
+  assert.deepEqual(saved.map((a) => a.superseded ?? []), [[], [r.proposalId], []], 'the audit names superseded proposals by id only');
+});
+
+test('an interrupted confirmation is finished by a retry, after any number of writes, and nothing is written twice', async () => {
+  let steps = null;
+  for (let k = 0; steps === null || k < steps; k++) {
+    const { dir, r } = await logged();
+    const crash = (plan, d) => { const ws = commitSteps(plan); steps = ws.length; for (const w of ws.slice(0, k)) applyPlanToDir(w, d); throw new Error('disk full'); };
+    await assert.rejects(confirmInFolder({ dir, id: ID, proposalId: r.proposalId, by: 'Pat Example', rules, now: AFTER, commit: crash }), /stopped partway \(disk full\)\. Run the same command again/);
+    assert.equal(readJson(proposalFile(dir, r.proposalId)).status, 'pending', `after ${k} write(s): the proposal still reads pending`);
+    if (k === 0) assert.deepEqual([meetings(dir).length, existsSync(join(dir, 'outcomes.jsonl')), acct(dir).outcomes], [0, false, undefined], 'staged: nothing is written before the commit');
+    // A retry by another principal finishes it as it was confirmed.
+    const done = await confirmInFolder({ dir, id: ID, proposalId: r.proposalId, by: 'Sam Example', rules, now: new Date('2026-11-21T09:00:00Z') });
+    assert.deepEqual(meetings(dir).map((m) => [m.date, m.ref]), [[DATE, `call:${r.proposalId}`]], `after ${k} write(s): one meeting, keyed to the proposal`);
+    assert.deepEqual(readJsonl(join(dir, 'outcomes.jsonl')).map((l) => l.id), [r.proposalId], `after ${k} write(s): one outcome line`);
+    assert.deepEqual(acct(dir).outcomes.map((o) => o.id), [r.proposalId]);
+    const p = readJson(proposalFile(dir, r.proposalId));
+    assert.equal(p.status, 'confirmed');
+    const line = readJsonl(join(dir, 'outcomes.jsonl'))[0];
+    assert.deepEqual([line.confirmedBy, acct(dir).outcomes[0].confirmedBy, p.confirmedBy], k === 0 ? ['Sam Example', 'Sam Example', 'Sam Example'] : ['Pat Example', 'Pat Example', 'Pat Example']);
+    assert.equal(done.followUp.path, join(dir, 'calls', ID, `${DATE}-followup.md`));
+    assert.match(readFileSync(done.followUp.path, 'utf8'), /The automated sequence is over/);
+    await assert.rejects(confirmInFolder({ dir, id: ID, proposalId: r.proposalId, by: 'Pat Example', rules, now: AFTER }), /already confirmed/);
+    assert.equal(meetings(dir).length, 1);
+  }
+  assert.ok(steps >= 7, `${steps} writes`);
+  // While a confirmation is unfinished, the proposal cannot be rejected and the notes cannot be replaced.
+  const { dir, r } = await logged();
+  await assert.rejects(confirmInFolder({ dir, id: ID, proposalId: r.proposalId, by: 'Pat Example', rules, now: AFTER, commit: (plan, d) => { applyPlanToDir(commitSteps(plan)[0], d); throw new Error('disk full'); } }), /stopped partway/);
+  assert.throws(() => rejectProposal({ dir, id: ID, proposalId: r.proposalId, by: 'Pat' }), /confirmation is unfinished/);
+  assert.throws(() => saveNotes({ dir, id: ID, date: DATE, notes: 'again', by: 'Pat', now: AFTER }), /already confirmed/);
+  assert.equal(listCalls({ dir, id: ID }).proposals[0].unfinished, true);
+});
+
+test('the command line confirms through the folder\'s unit of work, so a second run finishes an interrupted confirmation', async () => {
+  const day = '2026-11-12';   // a past date, since the command line reads the real clock
+  const { dir, r } = await logged(setup(), PROPOSAL_REPLY, day);
+  await assert.rejects(confirmInFolder({ dir, id: ID, proposalId: r.proposalId, by: 'Pat Example', rules, now: AFTER, commit: (plan, d) => { for (const w of commitSteps(plan).slice(0, 2)) applyPlanToDir(w, d); throw new Error('disk full'); } }), /stopped partway/);
+  const env = { ...process.env, OUTBOUND_DATA_DIR: dir };
+  const cli = (...args) => execFileSync(process.execPath, [join(REPO, 'cli.mjs'), ...args], { env, encoding: 'utf8', stdio: 'pipe' });
+  const out = cli('call', 'confirm', '--account', ID, '--proposal', r.proposalId, '--by', 'Pat Example');
+  assert.match(out, /Recorded the call of 2026-11-12/);
+  assert.ok(out.includes(join(dir, 'calls', ID, `${day}-followup.md`)), out);
+  assert.equal(meetings(dir).length, 1);
+  assert.deepEqual(readJsonl(join(dir, 'outcomes.jsonl')).map((l) => l.id), [r.proposalId]);
+  assert.equal(readJson(proposalFile(dir, r.proposalId)).status, 'confirmed');
+  assert.throws(() => cli('call', 'confirm', '--account', ID, '--proposal', r.proposalId, '--by', 'Pat Example'), /already confirmed/);
 });
 
 // ---- E15-S3: the follow-up ----------------------------------------------------------------------------------------------------
 test('the follow-up is a checklist of what was agreed; the email is deferred and the guard\'s stop rule holds', async () => {
   const { dir, r } = await logged();
-  confirmProposal({ dir, id: ID, proposalId: r.proposalId, by: 'Pat Example', rules, now: NOW });
+  confirmProposal({ dir, id: ID, proposalId: r.proposalId, by: 'Pat Example', rules, now: AFTER });
   const f = readJson(join(dir, 'calls', ID, `${DATE}-followup.json`));
   assert.deepEqual(f.items.map((i) => [i.who, i.what]), [['us', 'Send our confidentiality agreement'], ['them', 'Send the loan tape after the agreement is signed']]);
   assert.deepEqual(f.claims.map((c) => c.id), ['nda-first']);
@@ -370,11 +460,24 @@ test('the report counts confirmed outcomes by signal type, tier and lead time, d
   assert.match(renderOutcomesReport(r), /By the signal types that started the account/);
 });
 
+test('--since chooses which calls are counted, not an account\'s first meeting: lead time still runs to its first held call', () => {
+  const lines = [
+    line({ id: 'p1', accountId: 'a1', firstSignalDate: '2026-06-30', date: '2026-09-10', codes: ['held'] }),
+    line({ id: 'p2', accountId: 'a1', firstSignalDate: '2026-06-30', date: '2026-10-15', codes: ['held', 'nda_signed'] }),
+    line({ id: 'p3', accountId: 'a2', firstSignalDate: '2026-06-30', date: '2026-08-01', codes: ['held'] }),   // before since: not counted
+  ];
+  const r = buildOutcomesReport({ lines, since: '2026-10-01', now: NOW });
+  assert.deepEqual([r.outcomes, r.totals.accounts, r.totals.calls, r.totals.reached.nda_signed], [1, 1, 1, 1]);
+  assert.deepEqual(r.leadTimeDays, { accounts: 1, min: 72, median: 72, max: 72 }, 'June 30 to September 10, its first held call, though that call is before --since');
+  assert.deepEqual(Object.keys(r.byLeadTime), ['31-90 days']);
+  assert.match(r.counting, /first held call ever/);
+});
+
 test('the report is written to reports/, reads only confirmed outcomes, and never changes the weights', async () => {
   const hash = () => createHash('sha256').update(readFileSync(join(REPO, 'scoring.json'))).digest('hex');
   const h0 = hash();
   const { dir, r } = await logged();
-  confirmProposal({ dir, id: ID, proposalId: r.proposalId, by: 'Pat Example', rules, now: NOW });
+  confirmProposal({ dir, id: ID, proposalId: r.proposalId, by: 'Pat Example', rules, now: AFTER });
   await runCallExtract({ client: fakeClient([reply(PROPOSAL_REPLY)]), dir, id: ID, date: DATE, by: 'Pat', models: rules.models });   // pending: not counted
   const before = snapshotFromDir(dir);
   const { report, path } = runOutcomesReport({ dir, config: rules.config, now: NOW });
@@ -399,18 +502,18 @@ test('the origin of an account: signal types and the first signal date, from the
 // ---- Plumbing: units of work, the worker, the migration -------------------------------------------------------------------------
 test('the load lists cover every call action: each runs in a unit of work exactly as on a data folder', async () => {
   const seedDir = setup();
-  saveNotes({ dir: seedDir, id: ID, date: DATE, notes: NOTES, by: 'Pat', now: NOW });
-  const ex = await runCallExtract({ client: fakeClient([reply(PROPOSAL_REPLY)]), dir: seedDir, id: ID, date: DATE, by: 'Pat', models: rules.models, now: NOW });
+  saveNotes({ dir: seedDir, id: ID, date: DATE, notes: NOTES, by: 'Pat', now: AFTER });
+  const ex = await runCallExtract({ client: fakeClient([reply(PROPOSAL_REPLY)]), dir: seedDir, id: ID, date: DATE, by: 'Pat', models: rules.models, now: AFTER });
   const snap = snapshotFromDir(seedDir);
   const uow = (prefixes, fn) => { const out = makeDir(); applyPlanToDir({ docs: [...Object.entries(snap.docs).map(([p, body]) => ({ path: p, kind: 'json', body })), ...Object.entries(snap.texts).map(([p, text]) => ({ path: p, kind: 'text', text }))], lines: Object.entries(snap.logs).flatMap(([p, ls]) => ls.map((l) => ({ path: p, line: l }))) }, out); return withUnitOfWork({ load: async () => structuredClone(snap), flush: async (plan) => applyPlanToDir(plan, out) }, prefixes, fn).then((x) => ({ ...x, out })); };
-  const confirmed = await uow(callLoads('callConfirm', ID), (dir) => confirmProposal({ dir, id: ID, proposalId: ex.proposalId, by: 'Pat', rules, now: NOW }));
+  const confirmed = await uow(callLoads('callConfirm', ID), (dir) => confirmProposal({ dir, id: ID, proposalId: ex.proposalId, by: 'Pat', rules, now: AFTER }));
   assert.ok(confirmed.plan.lines.some((l) => l.path === 'outcomes.jsonl') && confirmed.plan.lines.some((l) => l.path === 'touches.jsonl' && l.line.type === 'meeting'));
   assert.ok(confirmed.plan.docs.some((d) => d.path === `accounts/${ID}.json`) && confirmed.plan.docs.some((d) => d.path === `calls/${ID}/${DATE}-followup.md`));
   const prepped = await uow(callLoads('callPrep', ID), (dir) => runCallPrep({ client: fakeClient([reply(GOOD_BRIEF)]), dir, account: readJson(join(dir, 'accounts', `${ID}.json`)), date: DATE, rules, now: NOW }));
   assert.equal(prepped.result.usable, true);
-  const noted = await uow(callLoads('callNotes', ID), (dir) => saveNotes({ dir, id: ID, date: '2026-11-18', notes: 'Second call.', by: 'Pat' }));
+  const noted = await uow(callLoads('callNotes', ID), (dir) => saveNotes({ dir, id: ID, date: '2026-11-18', notes: 'Second call.', by: 'Pat', now: AFTER }));
   assert.ok(noted.plan.docs.some((d) => d.path === `calls/${ID}/2026-11-18-notes.md`));
-  await uow(callLoads('callExtract', ID), (dir) => runCallExtract({ client: fakeClient([reply(PROPOSAL_REPLY)]), dir, id: ID, date: DATE, by: 'Pat', models: rules.models, now: NOW }));
+  await uow(callLoads('callExtract', ID), (dir) => runCallExtract({ client: fakeClient([reply(PROPOSAL_REPLY)]), dir, id: ID, date: DATE, by: 'Pat', models: rules.models, now: AFTER }));
   const reported = await uow(['outcomes.jsonl', 'reports/'], (dir) => runOutcomesReport({ dir, config: rules.config, now: NOW }).report);
   assert.equal(reported.result.outcomes, 0);
   assert.throws(() => callLoads('callPrep', '../x'), /Invalid id/);
@@ -421,7 +524,7 @@ test('the worker runs call.prep and call.extract; their results hold codes and c
   const pat = platformClient({ url: 'https://example-project.supabase.test', key: 'anon-key', accessToken: 'user:pat@example.test', fetchImpl: fake.fetchImpl });
   const worker = platformClient({ url: 'https://example-project.supabase.test', key: 'service', fetchImpl: fake.fetchImpl });
   const dir = setup();
-  saveNotes({ dir, id: ID, date: DATE, notes: NOTES, by: 'Pat Example', now: NOW });
+  saveNotes({ dir, id: ID, date: DATE, notes: NOTES, by: 'Pat Example', now: AFTER });
   const snap = snapshotFromDir(dir);
   await pat.flush({ docs: [...Object.entries(snap.docs).map(([p, body]) => ({ path: p, kind: 'json', body, baseVersion: 0 })), ...Object.entries(snap.texts).map(([p, text]) => ({ path: p, kind: 'text', text, baseVersion: 0 }))], lines: Object.entries(snap.logs).flatMap(([p, ls]) => ls.map((l) => ({ path: p, line: l }))) });
   await pat.enqueue('call.prep', { account: ID, date: DATE });

@@ -87,10 +87,16 @@ function derive(op, a, b, { unit, kind = 'stock', method, note }) {
 const share = (a, b, method = 'share') => derive('ratio', a, b, { unit: 'pct', method });
 
 // ---- Inputs ------------------------------------------------------------------------------------------------------------------------
+// The sections cover the latest eight quarters. The financials file keeps every quarter the FDIC pull ever stored (each run adds the new
+// one and drops none), so `reps`, which every series and list walks, is that window. `quarters` stays whole for the one read outside
+// it, the quarter before the window, which gives the first point its net change. The growth base (sources/fdic, kept apart) is not used.
+export const PAPER_QUARTERS = 8;
 function finCtx(cert, financials) {
   const quarters = financials?.quarters ?? {};
-  const reps = Object.keys(quarters).filter(validRep).sort();
-  return { cert: String(cert), file: finFile(cert), quarters, reps, latest: reps.at(-1) ?? null };
+  const all = Object.keys(quarters).filter(validRep).sort();
+  const latest = all.at(-1) ?? null;
+  const reps = latest ? all.filter((r) => quarterIndex(latest) - quarterIndex(r) < PAPER_QUARTERS) : [];
+  return { cert: String(cert), file: finFile(cert), quarters, reps, latest };
 }
 // The latest June or December report on file, at or before `rep`.
 const latestSemiannual = (ctx, rep = ctx.latest) => [...ctx.reps].reverse().find((r) => r <= rep && isSemiannualReport(r)) ?? null;
@@ -383,6 +389,33 @@ export function sizeShareInterval({ minUsd, maxUsd }, buckets) {
 const SECTOR_CATEGORY = { multifamily: 'multifamily', hospitality: 'nonfarmNonresidential', retail: 'nonfarmNonresidential' };
 const SECTOR_LABEL = { multifamily: 'Multifamily', hospitality: 'Hotel (hospitality)', retail: 'Retail' };
 const clamp01 = (x) => Math.min(1, Math.max(0, x));
+const weakest = (tiers) => tiers.reduce((a, b) => (TIERS.indexOf(b) > TIERS.indexOf(a) ? b : a));   // TIERS runs strongest to weakest
+
+// The buy box's loan-level dimensions beyond sector and metro (buybox.json; validateBuybox in src/score.mjs requires all four keys). A
+// dimension that allows everything is not a condition. One that restricts is, whether or not the data can measure it; so is one still a
+// [CONFIRM] placeholder or not stated, since it may restrict. The filters (assets, active) choose banks, not loans, so they are not here.
+const word = (v) => String(v ?? '').toLowerCase().replace(/[^a-z]/g, '');
+const words = (v) => (Array.isArray(v) ? v : [v]).map(word);
+const anyOf = (ws) => ws.some((w) => w === 'any' || w === 'all');
+const open = (x) => x === null || x === undefined;
+export const BUYBOX_DIMENSIONS = Object.freeze({
+  size: { key: 'loanSize', label: 'loan size', everything: 'every loan size',
+    allowsAll: (v) => !!v && typeof v === 'object' && (open(v.minUsd) || (typeof v.minUsd === 'number' && v.minUsd <= 0)) && open(v.maxUsd) },
+  status: { key: 'statuses', label: 'status', everything: 'every status (performing, sub-performing, non-performing and foreclosed)',
+    allowsAll: (v) => { const ws = words(v); return anyOf(ws) || (['performing', 'subperforming', 'nonperforming'].every((s) => ws.includes(s)) && ws.some((w) => w.startsWith('foreclosed') || w === 'reo')); } },
+  lien: { key: 'lien', label: 'lien position', everything: 'every lien position',
+    allowsAll: (v) => { const ws = words(v); return anyOf(ws) || (ws.includes('first') && ws.some((w) => ['junior', 'second', 'subordinate'].includes(w))); } },
+  exclusions: { key: 'exclusions', label: 'exclusions', everything: 'every loan (it excludes nothing)',
+    allowsAll: (v) => (Array.isArray(v) ? v.length === 0 : v === null || ['', 'none'].includes(word(v))) },
+});
+// { restricts, why }: `why` says why a dimension that may not restrict still counts, or is null when the buy box plainly restricts.
+export function buyboxRestricts(buybox, id) {
+  const dim = BUYBOX_DIMENSIONS[id];
+  const v = buybox?.[dim.key];
+  if (v === undefined) return { restricts: true, why: 'The buy box does not state it, so it may restrict.' };
+  if (/\[confirm/i.test(JSON.stringify(v))) return { restricts: true, why: 'The buy box\'s value is still a placeholder, so it may restrict.' };
+  return dim.allowsAll(v) ? { restricts: false, why: null } : { restricts: true, why: null };
+}
 
 function q7Block(ctx, q1, q3, q4, buybox, placeholders) {
   const L = ctx.latest;
@@ -393,57 +426,80 @@ function q7Block(ctx, q1, q3, q4, buybox, placeholders) {
   const sizeUsable = typeof loanSize.minUsd === 'number' && typeof loanSize.maxUsd === 'number' && loanSize.minUsd <= loanSize.maxUsd;
   const out = sectors.map((sector) => {
     const cat = SECTOR_CATEGORY[sector];
-    const conditions = [], notUsed = [];
-    const cond = (id, label, low, high, basis, sources, asOf) => conditions.push({ id, label, share: { low: clamp01(low), high: clamp01(high), unit: 'pct', kind: 'stock', asOf, tier: 'reported', sources, method: low === high ? 'share' : 'share-interval' }, basis });
+    const conditions = [], notUsed = [], unknownConditions = [];
+    // A measured condition names its tier: "reported" only for a direct, same-period Call Report share; "inferred" for a proxy, an
+    // interval standing in for a share the data cannot split, or a mix from another report date.
+    const cond = (id, label, low, high, basis, sources, asOf, tier) => conditions.push({ id, label, share: { low: clamp01(low), high: clamp01(high), unit: 'pct', kind: 'stock', asOf, tier, sources, method: low === high ? 'share' : 'share-interval' }, basis });
     // A condition whose share is unknown still counts: it enters as 0 to all (0 for the lower bound, 1 for the upper), since possibly none of
-    // the book meets it. It is not a measurement, so it carries a status instead of a tier.
-    const unknownCond = (id, label, reason) => conditions.push({ id, label, share: { low: 0, high: 1, unit: 'pct', kind: 'stock', asOf: null, tier: null, status: 'unknown', reason, sources: [], method: 'unknown-share: 0 to all' }, basis: reason });
+    // the book meets it. It is not a measurement, so it carries a status instead of a tier, and it is listed, since it alone sets the floor to 0.
+    const unknownCond = (id, short, label, reason) => {
+      conditions.push({ id, label, share: { low: 0, high: 1, unit: 'pct', kind: 'stock', asOf: null, tier: null, status: 'unknown', reason, sources: [], method: 'unknown-share: 0 to all' }, basis: reason });
+      unknownConditions.push({ id, label: short, reason });
+    };
+    const allowsAll = (id) => notUsed.push({ id, reason: `The buy box allows ${BUYBOX_DIMENSIONS[id].everything}, so it is not a condition.` });
+    const also = (r) => (r.why ? ` ${r.why}` : '');
     let why = null;
     if (isGap(book) || book.value === 0) {
-      return { sector, label: SECTOR_LABEL[sector], category: cat, book, conditions, notUsed, bounds: gap(isGap(book) ? 'unknown' : 'zero-denominator', isGap(book) ? book.reason : 'The CRE book is 0.', { asOf: book.asOf, sources: book.sources }) };
+      return { sector, label: SECTOR_LABEL[sector], category: cat, book, conditions, unknownConditions, notUsed, bounds: gap(isGap(book) ? 'unknown' : 'zero-denominator', isGap(book) ? book.reason : 'The CRE book is 0.', { asOf: book.asOf, sources: book.sources }) };
     }
     // 1. The category.
     if (cat === 'multifamily') {
       const s = share(fromFields(ctx, L, ['LNREMULT']), book);
       if (isGap(s)) notUsed.push({ id: 'category', reason: s.reason });
-      else cond('category', 'Multifamily share of the CRE book', s.value, s.value, 'Multifamily has its own Call Report line.', s.sources, s.asOf);
+      else cond('category', 'Multifamily share of the CRE book', s.value, s.value, 'Multifamily has its own Call Report line.', s.sources, s.asOf, s.tier);
     } else {
       const s = share(nfnr, book);
       why = `${SECTOR_LABEL[sector]} loans are inside nonfarm nonresidential, together with office, industrial and other commercial property, and Call Report data cannot split them. Their share is unknown: anywhere from none to all of nonfarm nonresidential. So the upper bound takes all of nonfarm nonresidential as the category's share, and the lower bound is 0.`;
       if (isGap(s)) notUsed.push({ id: 'category', reason: s.reason });
-      else cond('category', `${SECTOR_LABEL[sector]} share of the CRE book: unknown, between 0 and the nonfarm nonresidential share`, 0, s.value, why, s.sources, s.asOf);
+      else cond('category', `${SECTOR_LABEL[sector]} share of the CRE book: unknown, between 0 and the nonfarm nonresidential share`, 0, s.value, why, s.sources, s.asOf, 'inferred');
     }
     // 2. The metro, by the deposit proxy.
     const m = q3.buyboxShare;
-    if (isGap(m)) unknownCond('metro', 'Share in the buy-box metros: unknown (no usable deposit data), so between 0 and all', `${m.reason} A loan's location is unknown without it.`);
-    else cond('metro', 'Share in the buy-box metros, by the deposit proxy', m.value, m.value, 'Deposits in the buy-box metros as a share of all deposits (Summary of Deposits), applied to the CRE book: a proxy, not loans.', m.sources, m.asOf);
-    // 3. Size, for nonfarm nonresidential only.
-    if (cat !== 'nonfarmNonresidential') notUsed.push({ id: 'size', reason: 'The Call Report has no loan-size data for multifamily.' });
-    else if (!sizeUsable) notUsed.push({ id: 'size', reason: placeholders.some((p) => p.startsWith('loanSize')) ? 'The buy box\'s loan size is still a placeholder.' : 'The buy box has no usable loan size (minUsd and maxUsd).' });
-    else if (isGap(q4.under1m.dollars) || isGap(q4.over1m.dollars) || isGap(q4.nonfarmNonresidential) || !(q4.nonfarmNonresidential.value > 0)) notUsed.push({ id: 'size', reason: q4.under1m.dollars.reason ?? q4.over1m.dollars.reason ?? 'No usable size data.' });
+    if (isGap(m)) unknownCond('metro', 'metro', 'Share in the buy-box metros: unknown (no usable deposit data), so between 0 and all', `${m.reason} A loan's location is unknown without it.`);
+    else cond('metro', 'Share in the buy-box metros, by the deposit proxy', m.value, m.value, 'Deposits in the buy-box metros as a share of all deposits (Summary of Deposits), applied to the CRE book: a proxy, not loans.', m.sources, m.asOf, 'inferred');
+    // 3. Size: measured for nonfarm nonresidential, from the size buckets; unknown for multifamily, which has no size data.
+    const size = buyboxRestricts(buybox, 'size');
+    const sizeUnknown = (reason) => unknownCond('size', 'loan size', 'Share in the buy box\'s loan size range: unknown, so between 0 and all', `${reason}${also(size)}`);
+    if (!size.restricts) allowsAll('size');
+    else if (cat !== 'nonfarmNonresidential') sizeUnknown('The Call Report has no loan-size data for multifamily.');
+    else if (!sizeUsable) sizeUnknown(placeholders.some((p) => p.startsWith('loanSize')) ? 'The buy box\'s loan size is still a placeholder.' : 'The buy box has no usable loan size (minUsd and maxUsd).');
+    else if (isGap(q4.under1m.dollars) || isGap(q4.over1m.dollars) || isGap(q4.nonfarmNonresidential) || !(q4.nonfarmNonresidential.value > 0)) sizeUnknown(q4.under1m.dollars.reason ?? q4.over1m.dollars.reason ?? 'No usable size data.');
     else {
       const bks = [...q4.buckets.map((b, i) => ({ id: b.id, lo: SIZE_BUCKETS[i].lo, hi: SIZE_BUCKETS[i].hi, dollars: b.dollars.value })), { id: OVER_1M.id, lo: OVER_1M.lo, hi: OVER_1M.hi, dollars: q4.over1m.dollars.value }];
       const iv = sizeShareInterval(loanSize, bks);
       const S = q4.nonfarmNonresidential;
-      // The size mix of nonfarm nonresidential at the June or December report, applied to its latest balance, as a share of the book.
+      // The size mix of nonfarm nonresidential at the June or December report, applied to its latest balance, as a share of the book. On a
+      // later quarter's balance, that mix is an assumption: inferred.
       const scale = nfnr.value / S.value / book.value;
       const sameDate = S.asOf === nfnr.asOf;
       cond('size', `Nonfarm nonresidential loans that can be in the buy box's size range ($${loanSize.minUsd.toLocaleString('en-US')} to $${loanSize.maxUsd.toLocaleString('en-US')})`, iv.lowDollars * scale, iv.highDollars * scale,
         `From the size buckets (original amounts; a current balance is at most its original amount). Buckets that may hold loans in range: ${iv.may.join(', ') || 'none'}; wholly in range: ${iv.surely.join(', ') || 'none'}.${sameDate ? '' : ` The ${periodLabel(compact(S.asOf))} size mix is applied to the ${periodLabel(compact(nfnr.asOf))} balance.`}`,
-        [...q4.buckets.flatMap((b) => b.dollars.sources), ...q4.over1m.dollars.sources, ...nfnr.sources, ...book.sources], q4.asOf);
+        [...q4.buckets.flatMap((b) => b.dollars.sources), ...q4.over1m.dollars.sources, ...nfnr.sources, ...book.sources], q4.asOf, sameDate ? 'reported' : 'inferred');
     }
-    notUsed.push({ id: 'status', reason: 'Which Call Report stages count as the buy box\'s statuses is a principal\'s decision (D-P3); not used yet.' },
-      { id: 'lien', reason: 'The Call Report does not report lien position for these loans.' }, { id: 'exclusions', reason: 'The Call Report cannot tell which loans the buy box excludes.' });
-    const b = frechetBounds(conditions.map((c) => c.share));
-    const bounds = b ? { low: Math.round(b.low * book.value), high: Math.round(b.high * book.value), lowShare: b.low, highShare: b.high, k: b.k, unit: 'usd', kind: 'stock', asOf: book.asOf, tier: 'inferred',
-      sources: [...new Map(conditions.flatMap((c) => c.share.sources).concat(book.sources).map((s) => [`${s.field}|${s.file}|${s.repdte}`, s])).values()], method: BOUNDS_METHOD,
-      ...(b.low === 0 ? { lowNote: 'The lower bound is 0: the reported shares are consistent with none of the book meeting every condition at once.' } : {}) } : gap('unknown', 'No condition could be measured.');
-    return { sector, label: SECTOR_LABEL[sector], category: cat, book, conditions, notUsed, bounds, ...(why ? { why } : {}) };
+    // 4-6. Status, lien and exclusions: the Call Report measures none of them, so each one the buy box restricts is unknown.
+    for (const [id, label, reason] of [
+      ['status', 'Share with a status the buy box buys', 'Which Call Report stages count as the buy box\'s statuses is a principal\'s decision (D-P3); until then the share is unknown.'],
+      ['lien', 'Share with a lien position the buy box buys', 'The Call Report does not report lien position for these loans.'],
+      ['exclusions', 'Share outside the buy box\'s exclusions', 'The Call Report cannot tell which loans the buy box excludes.'],
+    ]) {
+      const r = buyboxRestricts(buybox, id);
+      if (r.restricts) unknownCond(id, BUYBOX_DIMENSIONS[id].label, `${label}: unknown, so between 0 and all`, `${reason}${also(r)}`); else allowsAll(id);
+    }
+    // The bounds, over every condition, measured or not. Their tier is the weakest of the measured ones.
+    const measured = conditions.filter((c) => c.share.tier);
+    const b = measured.length ? frechetBounds(conditions.map((c) => c.share)) : null;
+    const lowNote = b?.low === 0 ? (unknownConditions.length
+      ? `The lower bound is 0 because these buy-box conditions cannot be measured: ${unknownConditions.map((u) => u.label).join(', ')}. Each may hold for none of the book.`
+      : 'The lower bound is 0: the measured shares are consistent with none of the book meeting every condition at once.') : null;
+    const bounds = b ? { low: Math.round(b.low * book.value), high: Math.round(b.high * book.value), lowShare: b.low, highShare: b.high, k: b.k, unit: 'usd', kind: 'stock', asOf: book.asOf, tier: weakest(measured.map((c) => c.share.tier)),
+      sources: [...new Map(measured.flatMap((c) => c.share.sources).concat(book.sources).map((s) => [`${s.field}|${s.file}|${s.repdte}`, s])).values()], method: BOUNDS_METHOD,
+      ...(lowNote ? { lowNote } : {}) } : gap('unknown', 'No condition could be measured.');
+    return { sector, label: SECTOR_LABEL[sector], category: cat, book, conditions, unknownConditions, notUsed, bounds, ...(why ? { why } : {}) };
   });
   return {
     provisional: placeholders.length > 0, placeholders: [...placeholders],
     method: BOUNDS_METHOD, formula: BOUNDS_FORMULA,
-    note: 'Bounds only, from reported shares and the deposit proxy. Separate breakdowns are never multiplied: knowing half the book is in one metro and half is in one category says nothing about how much is both. No base figure until a dependence model is calibrated against real tapes (E14-S6).',
+    note: 'Bounds only, from Call Report shares and the deposit proxy. Each condition names its tier, and the bounds take the weakest. Separate breakdowns are never multiplied: knowing half the book is in one metro and half is in one category says nothing about how much is both. A buy-box condition the data cannot measure enters as anywhere from none to all of the book, so while one is unmeasured the lower bound is 0. No base figure until a dependence model is calibrated against real tapes (E14-S6).',
     observed: gap('unknown', 'The observed layer (loans seen one by one) is not built yet (E14-S4).', { asOf: null }),
     sectors: out,
   };
@@ -487,7 +543,9 @@ function q8Block(record, ctx) {
   if (notPulled.length) add('not-pulled', `Figures FDIC has but this layer does not pull: ${notPulled.join(' ')}`);
   if (record.q1.restructured.seriesBreak.spansTotal || record.q1.restructured.seriesBreak.spansByType) add('series-break', `The restructured series spans the 2023 accounting change (${SERIES_BREAK_2023.standard}); values before and after are not comparable.`, ['Modification history']);
   if (record.q7.provisional) add('buy-box-placeholders', `The in-box bounds are provisional: the buy box still has placeholders (${record.q7.placeholders.join(', ')}).`);
-  for (const s of record.q7.sectors) for (const n of s.notUsed ?? []) if (n.id === 'status') add('status-mapping', `In-box bounds do not use the buy box's statuses: ${n.reason}`, ['Payment status', 'Modification history']);
+  for (const s of record.q7.sectors) for (const u of s.unknownConditions ?? []) if (u.id === 'status') add('status-mapping', `In-box bounds cannot measure the buy box's statuses: ${u.reason}`, ['Payment status', 'Modification history']);
+  const floor = [...new Set(record.q7.sectors.flatMap((s) => (s.unknownConditions ?? []).map((u) => u.label)))];
+  if (floor.length) add('in-box-floor', `The in-box lower bounds are 0 while these buy-box conditions cannot be measured: ${floor.join(', ')}. Each may hold for none of the book.`, ['Property type', 'Payment status', 'Lien position']);
   if (!ctx.latest) add('no-financials', 'No FDIC financial data is on file for this bank.');
   return { unknowns, tapeRequest: { when: 'After the confidentiality agreement.', items: [...TAPE_REQUEST] } };
 }
@@ -507,7 +565,7 @@ export function buildPaper({ cert, name = '', financials, footprint = {}, events
     schema: PAPER_SCHEMA, key: `fdic:${ctx.cert}`, cert: ctx.cert, name, scope: 'charter', layer: 'reported (E14-S1)', runId, scoredAt,
     latestRepdte: ctx.latest, asOf: ctx.latest ? iso(ctx.latest) : null, provisional: placeholders.length > 0, placeholders: [...placeholders],
     rules: ['An estimate from public reports, not the loan tape.', 'For the principals and the briefer only: it never appears in a message, and the drafter never sees it.', 'Every number names its fields, file, report date, tier and method; "unknown" is never a guess.'],
-    units: UNITS, kinds: KINDS, tiers: { reported: 'reported to a regulator or the SEC', observed: 'built from individual loans we can see', inferred: 'a model, a proxy or bounds; always a range' },
+    units: UNITS, kinds: KINDS, tiers: { reported: 'reported to a regulator or the SEC', observed: 'built from individual loans we can see', inferred: 'a model or a proxy, and any bounds resting on one; always a range' },
     summary: [], q1, q2: { built: false, note: 'Property types inside nonfarm nonresidential are not reported apart. This layer does not estimate them; see the unknowns (E14-S3 adds public-bank breakdowns and peer priors).' }, q3, q4, q5, q6, q7,
   };
   record.q8 = q8Block(record, ctx);
@@ -614,7 +672,7 @@ export function renderPaper(record) {
   L.push('', `Q7. FIT: BOUNDS ONLY${q7.provisional ? ' (PROVISIONAL)' : ''}. ${q7.note} Method: ${q7.formula}.`);
   for (const s of q7.sectors) {
     L.push(`  ${s.label} (inside ${s.category})`); line('In the buy box', s.bounds, '    ');
-    for (const c of s.conditions) L.push(`    Condition ${c.id}: ${c.label}: ${c.share.low === c.share.high ? fmtUnit(c.share.low, 'pct') : `${fmtUnit(c.share.low, 'pct')} to ${fmtUnit(c.share.high, 'pct')}`}. ${c.basis}`);
+    for (const c of s.conditions) L.push(`    ${c.share.tier ? 'Condition' : 'Unknown condition'} ${c.id}: ${c.label} [${c.share.tier ?? 'unknown'}]: ${c.share.low === c.share.high ? fmtUnit(c.share.low, 'pct') : `${fmtUnit(c.share.low, 'pct')} to ${fmtUnit(c.share.high, 'pct')}`}. ${c.basis}`);
     for (const n of s.notUsed) L.push(`    Not used, ${n.id}: ${n.reason}`);
     if (s.bounds.lowNote) L.push(`    ${s.bounds.lowNote}`);
   }

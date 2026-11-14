@@ -26,7 +26,7 @@ import { setPerson, confirmRole } from './src/accounts.mjs';
 import { work, JOB_KINDS } from './src/platform/worker.mjs';
 import { push, pull } from './src/platform/move.mjs';
 import { smoke } from './src/platform/smoke.mjs';
-import { runCallPrep, saveNotes, runCallExtract, buildExtractPrompt, confirmProposal, rejectProposal, listCalls, renderProposal, needDate, MAX_NOTES } from './src/calls.mjs';
+import { runCallPrep, saveNotes, runCallExtract, buildExtractPrompt, confirmInFolder, rejectProposal, listCalls, renderProposal, needDate, MAX_NOTES } from './src/calls.mjs';
 import { runOutcomesReport, renderOutcomesReport } from './src/outcomes.mjs';
 import { readFileSync } from 'node:fs';
 
@@ -120,9 +120,11 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
                                                   checked in code; a failed check marks it NOT USABLE (calls/ID/DATE-prep.md)
   outbound call show --account ID [--date D]      print the latest call brief (or the one for that date)
   outbound call log --account ID --date D --by NAME --notes FILE|- [--dry-run]   save your notes (calls/ID/DATE-notes.md, principals
-                                                  only), and a model proposes the outcome. Nothing is recorded until a principal confirms it
+                                                  only), and a model proposes the outcome. Nothing is recorded until a principal confirms it.
+                                                  D may not be later than today. New notes for a date supersede its pending proposals
   outbound call confirm --account ID --proposal PID --by NAME      record it: a guard meeting event (it stops the sequence), the
-                                                  outcome on the account and in outcomes.jsonl, and a follow-up checklist
+                                                  outcome on the account and in outcomes.jsonl, and a follow-up checklist. If it stops
+                                                  partway, run it again: it finishes what is missing and writes nothing twice
   outbound call reject  --account ID --proposal PID --by NAME [--reason TEXT]
   outbound call list --account ID                 briefs, proposals and confirmed outcomes for an account
   outbound outcomes report [--since YYYY-MM-DD]   confirmed outcomes by signal type, tier and lead time (no model; never changes
@@ -450,16 +452,17 @@ async function main() {
       else notes = readFileSync(src, 'utf8');
       if (notes.length > MAX_NOTES) throw new Error(`The notes are ${notes.length} characters; the limit is ${MAX_NOTES}.`);
       if (flags['dry-run']) { const p = buildExtractPrompt({ account: loadAccount(dir, id), date, notes }); return out(`--- SYSTEM ---\n${p.system}\n\n--- USER ---\n${p.user}\n(nothing saved)`); }
-      saveNotes({ dir, id, date, notes, by });
+      const saved = saveNotes({ dir, id, date, notes, by });
+      const replaced = saved.superseded.length ? `The new notes supersede ${saved.superseded.length} pending proposal(s) for ${date}: ${saved.superseded.join(', ')}.\n\n` : '';
       let client;
       try { client = await makeClient(); } catch (e) { throw new Error(`The notes are saved (calls/${id}/${date}-notes.md), but reading them needs a model: ${e.message} Or queue it on the platform: outbound enqueue call.extract --account ${id} --date ${date} --by NAME`); }
       const r = await runCallExtract({ client, dir, id, date, by, models: rules.models });
-      if (!r.ok) { process.exitCode = 1; return out(`The notes are saved, but the model call failed: ${r.reason}${r.detail ? ` (${r.detail})` : ''}. Nothing was recorded.`); }
-      return out(renderProposal(r.proposal, id));
+      if (!r.ok) { process.exitCode = 1; return out(`${replaced}The notes are saved, but the model call failed: ${r.reason}${r.detail ? ` (${r.detail})` : ''}. Nothing was recorded.`); }
+      return out(`${replaced}${renderProposal(r.proposal, id)}`);
     }
     if (sub === 'confirm') {
-      const r = confirmProposal({ dir, id, proposalId: need(flags, 'proposal'), by: need(flags, 'by'), rules });
-      return out(`Recorded the call of ${r.outcome.date} for ${id}: ${r.outcome.codes.join(', ') || 'no outcome codes'}.\n- A meeting event is in the touch log. The automated sequence for this bank is over; any follow-up is a principal's own message.\n- The outcome is on the account and in outcomes.jsonl, linked to ${r.outcome.originSignals.length} origin signal(s).\n- People named in the notes stay unconfirmed. Add one only with: outbound account set-person, then confirm-role.\n${r.followUp.hardStops.length ? `STOP before any follow-up: ${r.followUp.hardStops.join(', ')}.\n` : ''}Follow-up checklist (no email is drafted): ${r.followUp.path}`);
+      const r = await confirmInFolder({ dir, id, proposalId: need(flags, 'proposal'), by: need(flags, 'by'), rules });
+      return out(`${r.resumed ? 'Finished a confirmation that had stopped partway; nothing was written twice.\n' : ''}Recorded the call of ${r.outcome.date} for ${id}: ${r.outcome.codes.join(', ') || 'no outcome codes'}.\n- A meeting event is in the touch log. The automated sequence for this bank is over; any follow-up is a principal's own message.\n- The outcome is on the account and in outcomes.jsonl, linked to ${r.outcome.originSignals.length} origin signal(s).\n- People named in the notes stay unconfirmed. Add one only with: outbound account set-person, then confirm-role.\n${r.followUp.hardStops.length ? `STOP before any follow-up: ${r.followUp.hardStops.join(', ')}.\n` : ''}Follow-up checklist (no email is drafted): ${r.followUp.path}`);
     }
     if (sub === 'reject') return out(rejectProposal({ dir, id, proposalId: need(flags, 'proposal'), by: need(flags, 'by'), reason: flags.reason === true ? '' : flags.reason }));
     if (sub === 'list') {
@@ -467,7 +470,7 @@ async function main() {
       return out([
         `${l.account.name}: ${l.briefs.length} call brief(s), ${l.proposals.filter((p) => p.status === 'pending').length} pending proposal(s), ${l.outcomes.length} confirmed outcome(s).`,
         ...l.briefs.map((b) => `brief    ${b.date}  ${b.usable ? 'usable' : 'NOT USABLE'}${b.problems.length ? ` (${b.problems.map((e) => e.code).join(', ')})` : ''}`),
-        ...l.proposals.map((p) => `proposal ${p.id}  ${p.status}  ${p.outcomes.map((o) => o.code).join(', ')}`),
+        ...l.proposals.map((p) => `proposal ${p.id}  ${p.status}${p.unfinished ? ' (confirmation unfinished: run call confirm again)' : ''}  ${p.outcomes.map((o) => o.code).join(', ')}`),
         ...l.outcomes.map((o) => `outcome  ${o.date}  ${o.codes.join(', ')}  confirmed by ${o.confirmedBy}`),
       ].join('\n'));
     }

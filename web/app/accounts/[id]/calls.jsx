@@ -60,7 +60,7 @@ export async function Calls({ client, id }) {
           <h3 style={{ marginTop: 0 }}>After the call</h3>
           <form action={logCallAction}>
             <input type="hidden" name="id" value={id} />
-            <label>Call date<input type="date" name="date" defaultValue={today()} required /></label>
+            <label>Call date<input type="date" name="date" defaultValue={today()} max={today()} required /></label>
             <label style={{ marginTop: 8 }}>Your notes<textarea name="notes" required maxLength={50000} rows={8} /></label>
             <p style={{ marginTop: 8 }}><button type="submit">Save notes and propose an outcome</button></p>
           </form>

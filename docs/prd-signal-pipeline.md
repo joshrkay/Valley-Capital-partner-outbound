@@ -835,6 +835,8 @@ Rules across the epic:
 
 **E15-S2. Recording the call.** *As a principal, I want to paste my notes after a call and confirm what they say so that the outcome is on record and linked to the signals that started the account.* P0, R2. **Built.**
 - [x] `outbound call log --account ID --date D --by NAME --notes FILE` (or `-` for stdin). The notes are saved to `calls/<id>/<date>-notes.md`, for principals only. Then a model call (`models.json` `callExtract`) turns them into a **proposal**. On the platform, saving is a quick action, and reading the notes is the job `call.extract`.
+- [x] **Only a call that has happened is recorded.** A call date later than today (UTC) is refused when the notes are saved, and again at confirmation, since the guard stops on any meeting whatever its date. Call prep still takes a future date.
+- [x] **A proposal matches its notes.** Each proposal keeps a digest of the notes it was read from. New notes for a date mark that date's pending proposals `superseded`, and a proposal whose notes no longer match cannot be confirmed.
 - [x] The proposal holds:
   - outcome codes from a fixed list: `held`, `nda_requested`, `nda_signed`, `tape_promised`, `tape_received`, `not_selling_now` (with a when, if stated), `wrong_person` (with a referral, if any), `interested_later`, `pricing_discussed`, `declined`;
   - objections;
@@ -847,6 +849,7 @@ Rules across the epic:
   - appends a line to `outcomes.jsonl`: the account, `institutionKey`, `originSignals` with their types, the first signal's date, the tier, the call date, the codes, counts and the confirmer;
   - adds the outcome, with its details, to the account (`outcomes`);
   - writes the follow-up checklist (E15-S3).
+- [x] **A confirmation that stops partway is finished by running it again.** It is keyed to the proposal id: the outcome on the account and the line in `outcomes.jsonl` carry it as their id, and the meeting event carries `ref: call:<id>`. A rerun writes only what is missing, as the first run confirmed it, and never a second meeting or line. On the platform it is one transaction. The command line stages it in a unit of work over the folder and writes nothing until every step has run. It then writes the outcome on the account first, which locks the date. The proposal is written last, so it reads pending until the rest is written. Meanwhile it cannot be rejected, and `call list` marks it unfinished.
 - [x] One confirmed outcome per call date. A confirmed or rejected proposal cannot be confirmed. A confirmed call's notes are not replaced. `outbound call reject` and `outbound call list` complete the set.
 - [x] **People named in the notes are never added automatically.** They stay on the proposal and the outcome as "unconfirmed, from call notes". A principal adds one through `account set-person`, then `account confirm-role` (E7).
 - [x] Logs carry counts only. Audit lines and job results hold codes, counts and ids, never a name or note text. The outcome line holds no name either. A test checks both.
@@ -869,7 +872,7 @@ Rules across the epic:
 - [ ] **A decision for a principal.** The guard has no record type for a principal's own message after a meeting. Recorded with `guard record`, it is logged with the violation `SEQUENCE_STOPPED`. That is right for the sequence, but it reads as a broken rule. One option: a `correspondence` record that the guard logs outside the sequence, still under the kill switch, suppression and opt-out. A post-call email could then go through the drafter with the agreed facts as its only facts. Not built.
 
 **E15-S4. What led to conversations.** *As a principal, I want to see which signals led to conversations, confidentiality agreements and tapes so that the score can be tuned on outcomes, not guesses.* P1, R2. **Built.**
-- [x] `outbound outcomes report [--since D]`. Deterministic, with no model. It reads confirmed outcomes only (`outcomes.jsonl`).
+- [x] `outbound outcomes report [--since D]`. Deterministic, with no model. It reads confirmed outcomes only (`outcomes.jsonl`). `--since` chooses which calls are counted. An account's first signal and first held call still come from all its confirmed calls, so the window never moves its lead time.
 - [x] For each group it counts the accounts, the confirmed calls, and the accounts that reached each outcome code:
   - by the signal types in `originSignals`. An account started by several types counts once under each. An account picked by hand has its own row.
   - by tier;
@@ -881,7 +884,7 @@ Rules across the epic:
 
 **Plumbing.**
 - [x] Migration `20261114120000_jobs_calls.sql` adds `call.prep` and `call.extract` to `jobs_kind_check`, with every earlier kind. `test/db.test.mjs` runs it on Postgres 16, and `test/postgrest-fake.mjs` knows the kinds. A test checks that the newest migration lists exactly the worker's kinds.
-- [x] Units of work (`src/uow.mjs`, `LOADS`): `callPrep`, `callNotes`, `callExtract`, `callConfirm` and `outcomes`, each narrowed to one account's folders.
+- [x] Units of work (`src/uow.mjs`, `LOADS`): `callPrep`, `callNotes`, `callExtract`, `callConfirm` and `outcomes`, each narrowed to one account's folders. `callConfirm` also reads `outcomes.jsonl`, to finish an interrupted confirmation without a second line.
 - [x] **Web**, on the account page, through `web/lib/ops.mjs` and the principal's session:
   - the latest call brief, marked NOT USABLE with its reasons when a check failed;
   - a form to paste notes, which saves them as the principal and queues `call.extract`;

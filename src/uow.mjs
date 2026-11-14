@@ -21,11 +21,11 @@ export const LOADS = Object.freeze({
   sources: ['sources/'],
   score: ['sources/', 'candidates/', 'paper/', 'sales/'],
   // Call prep and outcomes (PRD E15, src/calls.mjs). calls/, drafts/ and research/ are narrowed to one account by callLoads().
-  // outcomes.jsonl is only appended to by a confirmation, so only the report loads it.
+  // A confirmation reads outcomes.jsonl (one short line per confirmed call) to finish an interrupted one without writing a line twice.
   callPrep: [...GUARD, 'accounts/', 'research/', 'drafts/', 'candidates/latest.json', 'paper/', 'calls/'],
   callNotes: ['accounts/', 'calls/'],
   callExtract: ['accounts/', 'calls/'],
-  callConfirm: [...GUARD, 'accounts/', 'calls/', 'paper/'],
+  callConfirm: [...GUARD, 'accounts/', 'calls/', 'paper/', 'outcomes.jsonl'],
   outcomes: ['outcomes.jsonl', 'reports/'],
   // The weekly triage (src/triage.mjs): the candidate list and decisions, accounts, the guard's log and suppression list, the run log, the
   // few source files it reads, and its own snapshot. The day's two output files are added per run (triageLoads), so past triages are
@@ -88,15 +88,18 @@ export function memoryBackend({ docs = {}, texts = {}, logs = {}, versions = {},
   };
 }
 
-// Reads a data folder into a snapshot: for tests, and for copying a folder into the platform (E12-S6). Every file starts at version 0.
-export function snapshotFromDir(dir) {
+// Reads a data folder into a snapshot: for tests, for copying a folder into the platform (E12-S6), and for running an action on a folder
+// as a unit of work (the command line's call confirmation). `prefixes` (as in LOADS) limits it to what the action loads; the default is
+// everything. Every file starts at version 0.
+export function snapshotFromDir(dir, prefixes = ['']) {
   const snap = { docs: {}, texts: {}, logs: {}, versions: {} };
   if (!existsSync(dir)) return snap;
+  const into = (r) => prefixes.some((p) => covers(p, r) || p.startsWith(`${r}/`));   // a folder that holds, or is inside, a prefix
   const walk = (abs, rel) => {
     for (const name of readdirSync(abs).sort()) {
       const a = join(abs, name), r = rel ? `${rel}/${name}` : name;
-      if (statSync(a).isDirectory()) { walk(a, r); continue; }
-      if (/\.tmp-\d+$/.test(name)) continue;   // a write in progress
+      if (statSync(a).isDirectory()) { if (into(r)) walk(a, r); continue; }
+      if (/\.tmp-\d+$/.test(name) || !prefixes.some((p) => covers(p, r))) continue;   // a write in progress, or not loaded
       const raw = readFileSync(a, 'utf8');
       const k = kindOf(r);
       if (k === 'json') snap.docs[r] = JSON.parse(raw);

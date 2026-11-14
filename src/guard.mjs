@@ -165,11 +165,12 @@ export function recordObservedSend(dir, touch, ctx) {
   return { rec, violations: r.errors };
 }
 
-// A reply, opt-out, bounce, meeting or handoff. An opt-out suppresses the person and address at once.
-export function recordEvent(dir, { accountId, institution, type, date, note, person }, ctx) {
+// A reply, opt-out, bounce, meeting or handoff. An opt-out suppresses the person and address at once. `ref` names the record that caused
+// the event (a confirmed call's meeting carries "call:<proposal id>"), so a retried action can see that its event is already logged.
+export function recordEvent(dir, { accountId, institution, type, date, note, person, ref }, ctx) {
   const allowed = ['reply', 'opt_out', 'bounce', 'meeting', 'handoff'];
   if (!allowed.includes(type)) throw new Error(`Unknown event "${type}". Use ${allowed.join(', ')}.`);
-  const rec = { type, accountId, institution, date: ymd(date ?? new Date()), note: note ? String(note).slice(0, 200) : undefined, recordedAt: new Date().toISOString() };
+  const rec = { type, accountId, institution, date: ymd(date ?? new Date()), note: note ? String(note).slice(0, 200) : undefined, ...(ref ? { ref: String(ref) } : {}), recordedAt: new Date().toISOString() };
   appendJsonl(join(dir, 'touches.jsonl'), rec);
   ctx.touches.push(rec);
   if (type === 'opt_out' && person) {
