@@ -282,6 +282,28 @@ export async function statusOverview(rest, client) {
   return { runs: lines.slice(0, 20), jobs, kill: { config: !!rules.config.killSwitch, document: killDoc }, edgar: edgarStatus({ state: snap.docs['sources/edgar/state.json'] ?? null, runs: lines, jobs }) };
 }
 
+// Signal coverage (PRD next-five E18-S1): the engine's own report (src/coverage.mjs), from stored data. The candidates come from their
+// projection (the candidates table, summary columns only), as on the Candidates page, so the whole candidate list is not loaded on
+// every Status view; the other files are LOADS.coverage's exact paths. The projection carries no run id, so the card shows none.
+export async function coverageOverview(client, { pageSize = 1000 } = {}) {
+  const [{ LOADS }, coverage] = await Promise.all([engine('src/uow.mjs'), engine('src/coverage.mjs')]);
+  const rows = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const page = await client.candidates({ limit: pageSize, offset });
+    rows.push(...page);
+    if (page.length < pageSize) break;
+  }
+  const P = coverage.COVERAGE_PATHS;
+  const snap = await client.load(LOADS.coverage.filter((p) => p !== P.latest));
+  const doc = (p) => snap.docs[p] ?? null;
+  const latest = rows.length ? {
+    runId: null, scoredAt: null, provisional: rows.some((r) => r.provisional),
+    latestRepdte: rows.map((r) => r.period).filter((p) => /^\d{8}$/.test(String(p ?? ''))).sort().at(-1) ?? null,
+    items: rows.map((r) => ({ key: r.key, tier: r.tier ?? null, name: r.name ?? '' })),
+  } : null;
+  return coverage.buildCoverage({ latest, aliases: doc(P.aliases), filers: doc(P.filers), servicers: doc(P.servicers), ledger: doc(P.ledger) });
+}
+
 export const queueSources = (client) => client.enqueue('sources.fdic', {});
 export const queueEdgar = (client) => client.enqueue('sources.edgar', {});
 

@@ -16,6 +16,7 @@ import { runScoring } from './src/score.mjs';
 import { listCandidates, getCandidate, promote, dismiss, snooze } from './src/candidates.mjs';
 import { readPaper, renderPaper, paperPath } from './src/paper.mjs';
 import { runTriage, readTriage, renderTriage, triagePaths } from './src/triage.mjs';
+import { coverageReport, renderCoverage } from './src/coverage.mjs';
 import { loadContext, checkTouch, recordObservedSend, recordEvent, addSuppression, dueList, touchFromAccount } from './src/guard.mjs';
 import { runBriefer } from './src/research.mjs';
 import { runDrafter, approveDraft } from './src/draft.mjs';
@@ -139,6 +140,12 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
                                                   who was left out (snoozed, dismissed, opted out, suppressed), the calendar and source
                                                   health. Writes triage/<date>.json and .md and the snapshot triage/state.json
   outbound triage show [--date YYYY-MM-DD]       print a stored triage (default: the latest)
+
+  Signal coverage (PRD next-five E18-S1): how many candidates each signal source can see. Stored data only: no network, no model.
+  outbound coverage [--json]                      for Tier A, Tier B and all candidates, the count and share (of the group) with a
+                                                  confirmed SEC filer, a rejected or unmapped one, a CMBS link (as a special servicer),
+                                                  a sale-ledger event, and an enforcement record (not built yet). Counts only; it names
+                                                  no bank and writes nothing. --json prints the record
 
   Pilot (PRD E1): check the briefer on accounts you already know before it researches any account the pipeline found.
   outbound pilot template --account ID            write a "what is true" sheet to fill in (pilot/ID.truth.json)
@@ -507,6 +514,11 @@ async function main() {
       const t = readTriage({ dir, date: flags.date });
       return out(t?.markdown ?? `No triage${flags.date ? ` for ${flags.date}` : ''} yet. Run: outbound triage run`);
     }
+  }
+
+  if (cmd === 'coverage') {   // PRD next-five E18-S1: read-only, from stored data; counts only
+    const r = coverageReport({ dir });
+    return out(flags.json ? r : renderCoverage(r));
   }
 
   if (cmd === 'pilot') {

@@ -74,6 +74,7 @@ npm run outbound -- sources run fdic                     # bank list, deposit fo
 npm run outbound -- score run                            # refuses until buybox.json is filled; add --draft-buybox for a PROVISIONAL list
 npm run outbound -- candidates list --tier A             # tier, score by axis, and the "why now" card for each bank
 npm run outbound -- candidates show --key fdic:12345     # the paper profile and every score component, each with its FDIC field and date
+npm run outbound -- coverage                             # PRD E18-S1: how many Tier A, Tier B and all candidates each signal source can see (counts only; --json; also on the Status page)
 npm run outbound -- candidates promote --key fdic:12345 --by "Pat Example"
 npm run outbound -- research run --account <id>          # institution research: brings back who decides (refused until the pilot passes)
 npm run outbound -- account set-person --account <id> --name "..." --title "..." --by "Pat Example" --finding F3   # the candidate's finding in the brief

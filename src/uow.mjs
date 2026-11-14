@@ -33,6 +33,9 @@ export const LOADS = Object.freeze({
   triage: ['candidates/', 'accounts/', 'suppression.json', 'touches.jsonl', 'sources/runs.jsonl', 'sources/fdic/state.json', 'sources/fdic/failed.json',
     'sources/edgar/loans.json', 'sources/edgar/filings.json', 'sources/edgar/filers.json', 'triage/state.json'],
   sales: ['sources/', 'sales/'],   // the CMBS and FDIC loan-sale pulls rebuild the sale ledger (sales/ledger.json) when they finish
+  // Signal coverage (PRD next-five E18-S1, src/coverage.mjs): read-only, five exact files and no folder. The candidate list and its
+  // aliases, the bank-to-filer map, the CMBS servicer summary and the sale ledger. It writes nothing. E18-S2 adds its enforcement store.
+  coverage: ['candidates/latest.json', 'candidates/aliases.json', 'sources/edgar/filers.json', 'sources/edgar/servicers.json', 'sales/ledger.json'],
   // Routes to the decision-maker (PRD E22, src/routes.mjs): the guard's files (for its view: an opt-out or a suppression stops a route),
   // the account, its research, the sale ledger, the firm's network and the account's own routes file. accounts/, research/ and routes/
   // are narrowed to one account by routesLoads(). No model-facing action (research, draft, call prep) loads network/ or routes/.

@@ -92,6 +92,13 @@ export const rejectFiler = ({ dir, bank, cik, by, reason, now }) => decide({ dir
 
 const universeOf = (inst) => Object.values(inst ?? {}).filter((i) => i?.inUniverse && i.status === 'active').sort((a, b) => Number(a.CERT) - Number(b.CERT));
 
+// One bank's mapping, from its entry in the map (or none): 'confirmed' if any filer is confirmed, 'rejected' if it has filers and
+// every one was rejected, 'unmapped' if it has none. The filings listener searches confirmed filers only.
+export function mappingStatus(entry) {
+  const ds = Object.values(entry?.ciks ?? {});
+  return ds.some((d) => d?.status === 'confirmed') ? 'confirmed' : ds.length ? 'rejected' : 'unmapped';
+}
+
 // Every bank in the list, with its mapping: confirmed (and to which filers), rejected only, or not mapped yet.
 export function filerStatus({ dir }) {
   const p = filerPaths(dir);
@@ -101,8 +108,7 @@ export function filerStatus({ dir }) {
   const rows = universeOf(inst).map((i) => {
     const key = `fdic:${i.CERT}`;
     const ciks = Object.entries(map[key]?.ciks ?? {}).map(([cik, d]) => ({ cik, status: d.status, filer: d.filer ?? null, by: d.by, at: d.at }));
-    const status = ciks.some((c) => c.status === 'confirmed') ? 'confirmed' : ciks.length ? 'rejected' : 'unmapped';
-    return { bank: key, name: i.NAME ?? null, status, ciks };
+    return { bank: key, name: i.NAME ?? null, status: mappingStatus(map[key]), ciks };
   });
   const outside = Object.keys(map).filter((k) => !rows.some((r) => r.bank === k) && Object.values(map[k].ciks ?? {}).some((d) => d.status === 'confirmed'));
   const n = (s) => rows.filter((r) => r.status === s).length;

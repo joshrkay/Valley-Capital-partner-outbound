@@ -112,10 +112,17 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 
 **Why.** The direct-sale route in the plan is for banks under about $10 billion in assets. Many of those banks are privately held and file nothing with the SEC, so the filings listener (E13-S1) cannot see them. For those banks, the score has only quarterly Call Report data, which arrives one to two months after quarter-end. Three free sources add dated events for them: enforcement orders, merger applications, and order terminations.
 
-**E18-S1. Measure the gap.** *As a principal, I want to see how many candidates each signal source can see so that we build the sources that close the biggest gap.* P0, Now.
-- [ ] `outbound coverage` reports, for Tier A, Tier B and all candidates: the count and share with a confirmed SEC filer, a rejected or unmapped one, any CMBS link (servicers), a sale-ledger event, and, once built, an enforcement record.
-- [ ] Deterministic, from stored data, with no network. Shown on the Status page.
+**E18-S1. Measure the gap.** *As a principal, I want to see how many candidates each signal source can see so that we build the sources that close the biggest gap.* P0, Now. **Built** (`src/coverage.mjs`, `outbound coverage [--json]`, the coverage card on the Status page). Its first result is not in yet: it needs real data.
+- [x] `outbound coverage` reports, for Tier A, Tier B and all candidates: the count and share with a confirmed SEC filer, a rejected or unmapped one, any CMBS link (servicers), a sale-ledger event, and, once built, an enforcement record.
+  - Each share states its denominator ("3 of 12 (25.0%)"). A group with no bank shows "0 of 0" and no share. With no candidate list, every count is 0 and the report says there are no candidates yet.
+  - "All candidates" is every bank in the latest scoring run, untiered ones included. Suppressed banks, and banks a principal has snoozed, dismissed or promoted, are counted too.
+  - A CMBS link is the bank named as a special servicer, in `sources/edgar/servicers.json` or as the servicer of a CMBS liquidation in the sale ledger. The match is by exact name or by an alias a principal added. Primary servicers and originators are not counted.
+  - A sale-ledger event is the bank as the seller that acted, as `outbound sales sellers` shows. An acquirer is not counted.
+  - The enforcement line says "not built", never 0, until E18-S2 is built.
+  - A store that does not exist yet (the filer map, the CMBS pull, the sale ledger) is named as "not run yet", so a 0 on its lines is not read as a measurement.
+- [x] Deterministic, from stored data, with no network. Shown on the Status page. The report has counts only and names no bank. The load list is `LOADS.coverage`: five exact files and no folder.
 - [ ] Its first result goes in this PRD, replacing the **[verify]** in section 0.
+  - A principal fills this in from the first `outbound coverage` run on the real data folder. The tests use invented banks only, so they cannot fill it. The Tier A share with a confirmed SEC filer from that run is also the baseline for the "Coverage of private banks" metric in section 3.
 
 **E18-S2. Enforcement orders.** *As a principal, I want every public enforcement order against a bank in our universe recorded, with its type and date, so that I know when an examiner has told a bank to cut its problem assets.* P0, Now (no-key sources), R2 (OCC).
 - [ ] **Sources**, from `docs/data-sources.md` 2.2, built in this order:
