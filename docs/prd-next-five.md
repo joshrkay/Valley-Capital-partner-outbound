@@ -93,6 +93,11 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 - [x] **It never writes `scoring.json`.** A PR that changes weights adds a `_calibration` note to `scoring.json` naming the report hash it relied on, and that report must be a holdout run. A test checks that the note, when present, names a hash of the right form.
 - [x] Job logs carry counts and run ids only (E11-S1).
 
+**After the decisions (November 14, 2026).** `src/backtest/run.mjs`:
+- `holdoutSpec` and `inHoldout`: a bank is held out when the first 32 bits of SHA-256 of `seed:CERT` fall below `share`. The split depends on nothing but the seed and the cert, so no panel, label or score can move it. The top K is still ranked over the whole universe each quarter, and the training banks or the held-out banks are then counted. Training, compare and rolling runs count only the training banks, so only `--holdout` touches the held-out banks. A second holdout run with another scoring file is a reused holdout, and a changed seed is shown as a moved holdout.
+- One replay labels each bank-quarter at every reported horizon, and the report adds a table by horizon, with the quarters whose labels are incomplete at each one.
+- A table by era, beside the pooled headline, and a note that the pooled figure mixes eras.
+
 **As built (S1 to S4, November 14, 2026).** `src/backtest/panel.mjs`, `labels.mjs` and `run.mjs`; the commands are in the README. It runs from the command line against the data folder. Choices the stories left open, each a placeholder in `config.json` `backtest`:
 - **Active on an as-of date** is read from FDIC's own dates: established (`ESTYMD`) on or before the end of the quarter known on that date, and not ended (`ENDEFYMD`) on or before the date. The HQ state is FDIC's state for the charter today, or when it closed.
 - **The Summary of Deposits release date.** The API carries none, so June 30 data counts from June 30 plus `sodReleaseLagDays` (120 **[verify]**; FDIC's search index holding the 2026 data was built on September 18, 2026). The universe and the footprint use the latest Summary of Deposits *released* by the as-of date. That is the June before, except between June 30 and the release. Branches come from its branch rows, since `/locations` only says where branches are today.
@@ -126,11 +131,18 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 
 | # | Decision | Default |
 |---|---|---|
-| D-B1 | The horizon: how many quarters after the as-of date a label counts | 4 quarters |
-| D-B2 | Which label kinds count. Should ordinary mergers count at all? | Failure, assisted merger, disclosed sale, FDIC loan sale; mergers off |
-| D-B3 | The universe: five states plus the metros' footprint, or every US bank | Five states plus footprint |
-| D-B4 | How many labelled banks a backtest needs before a weight change may cite it | 20, in the holdout |
-| D-B5 | The holdout: the last 4 quarters, or rolling-origin from the start | The last 4 quarters; rolling-origin if they hold too few labels |
+**Decided by a principal on November 14, 2026** (the E17 interview). Each one is recorded in `config.json` `backtest`.
+
+| # | Decision | Decided |
+|---|---|---|
+| — | What the backtest gates | **Weight changes only.** Outreach does not wait for it. Any change to a weight cites a holdout report in its `_calibration` note. |
+| D-B1 | The horizon | **2, 4 and 8 quarters, side by side**, with 4 as the headline (`horizonsReported`). Strong at 8 and weak at 2 means the score is early. |
+| D-B2 | Which label kinds count | **Failure, assisted merger, FDIC loan sale, and disclosed sale** (once Q11 and filers allow it). Ordinary mergers are off. |
+| D-B3 | The universe | **Five states plus the metros' footprint**, with the metro subset shown as a small sample. Every US bank is not built. |
+| D-B4 | Labelled banks a weight change needs | 20, in the holdout (unchanged) |
+| D-B5 | The holdout | **By bank, not by quarter**: a third of banks, fixed by a seed declared in config before any comparison. A holdout by quarter would have been almost empty, since our five states had 70 failures in 2009 to 2012 and 5 since 2019. Holding out quarters is still built (`holdout.by: "quarter"`). |
+| Q6 | The window | **2006 to 2026**, with the eras shown apart: the 2008 crisis (2006 to 2013), between (2014 to 2019) and recent (2020 to 2026). The crisis was mostly construction lending; today's stress is rates, office and multifamily. A pooled figure is never shown without the eras beside it. |
+| — | Scope of this pass | S1 to S4, command line only. No worker job and no web page (S5) until the platform is deployed. |
 
 ---
 

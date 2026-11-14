@@ -185,10 +185,10 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
                                                   filers exist; --filings says why. Written to backtest/labels.json
   outbound backtest run [--scoring PATH] [--compare A B] [--holdout] [--rolling] [--horizon N] [--k N]
                                                   replay scoreBank on each as-of quarter (no model, no network) and write
-                                                  backtest/report-<hash>.json and .md. Training quarters by default; --holdout scores
-                                                  the declared holdout once (a second scoring file on it is marked reused holdout);
-                                                  --rolling trains to T and tests T+1 to T+4. Marked PROVISIONAL while the buy box has
-                                                  placeholders
+                                                  backtest/report-<hash>.json and .md, by era and at each reported horizon. The
+                                                  training banks by default; --holdout scores the held-out banks once (a second
+                                                  scoring file on them is marked reused holdout); --rolling trains to T and tests
+                                                  T+1 to T+4. Marked PROVISIONAL while the buy box has placeholders
   outbound backtest report [--hash H]             print the summary of the latest report (or of report H)
   outbound backtest verify                        the coverage check on the stored panel (no network)
 

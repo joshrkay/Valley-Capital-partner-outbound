@@ -286,7 +286,7 @@ npm run outbound -- network remove --id np-1 --by "Pat Example"   # also removes
 
 ### A backtest of the score (PRD E17)
 
-Every weight in `scoring.json` is a placeholder. The backtest asks whether the score, run on the data that existed at the time, ranked banks under pressure a few quarters before the event. Every setting is a placeholder in `config.json` `backtest` (decisions D-B1 to D-B5).
+Every weight in `scoring.json` is a placeholder. The backtest asks whether the score, run on the data that existed at the time, ranked banks under pressure a few quarters before the event. The settings live in `config.json` `backtest`. The window (2006 to 2026, read by era), the holdout (a third of banks, fixed by a declared seed), the horizons (2, 4 and 8 quarters, 4 the headline), the universe and the label kinds were decided on November 14, 2026; the rest are placeholders.
 
 ```bash
 npm run outbound -- backtest panel                       # the point-in-time panel (free, no key): window and lookback in config.json
@@ -296,8 +296,8 @@ npm run outbound -- backtest labels                      # failures, assisted me
 npm run outbound -- backtest run                         # the training quarters; writes backtest/report-<hash>.json and .md
 npm run outbound -- backtest run --scoring alt.json      # another scoring file; the committed one is untouched
 npm run outbound -- backtest run --compare a.json b.json # two side by side, training quarters only
-npm run outbound -- backtest run --holdout               # the declared holdout, once, for the scoring file a principal chose
-npm run outbound -- backtest run --rolling               # rolling origin, when the holdout holds too few labelled banks
+npm run outbound -- backtest run --holdout               # the held-out banks, once, for the scoring file a principal chose
+npm run outbound -- backtest run --rolling               # rolling origin, on the training banks only
 npm run outbound -- backtest report                      # the latest report's summary (--hash H for another)
 ```
 
