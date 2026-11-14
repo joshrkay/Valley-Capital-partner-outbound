@@ -9,6 +9,7 @@ import { METRICS, CATEGORIES, SIGNAL_TYPES, computeMetrics, detectSignals, perio
   computeConcentration, detectConcentrationSignals, detectStructureSignals, addMonths, CONCENTRATION_TESTS, CONCENTRATION_NOTE, STRUCTURE_SIGNAL_KINDS } from './metrics.mjs';
 import { buildCard } from './candidates.mjs';
 import { filingSignals } from './sources/filings.mjs';
+import { buildPaper, paperPath } from './paper.mjs';
 
 const PLACEHOLDER = /\[confirm/i;
 const SECTORS = ['hospitality', 'multifamily', 'retail'];
@@ -131,9 +132,8 @@ const inBuyboxMetros = (footprint, buybox, institution) => (buybox.metros ?? [])
 // ---- The paper profile (E6-S6) --------------------------------------------------------------------------------------------------
 export const PROFILE_LIMITS = [
   'Hotel and retail loans are inside nonfarm nonresidential, together with office, industrial and other commercial property; Call Report data cannot separate them.',
-  'Call Report data gives balances and stages of distress by category. It shows no individual loans, loan sizes, maturities or properties.',
+  'Call Report data gives balances and stages of distress by category. It shows no individual loans or properties. Its loan sizes (nonfarm nonresidential only, by original amount) and maturities (all loans, not CRE-specific) are in the paper estimate.',
   'Branches and deposits show where a bank takes deposits, not exactly where it lends. They are a proxy for its lending footprint.',
-  'Construction loans 30 to 89 and 90 or more days past due are not in the fields pulled; noncurrent and nonaccrual are.',
 ];
 
 const direction = (from, to, threshold) => (from === null || to === null ? 'unknown' : to - from > threshold ? 'rising' : from - to > threshold ? 'falling' : 'flat');
@@ -392,6 +392,18 @@ export function runScoring({ dir, buybox, scoring, metros, now = new Date(), all
   const runId = `score-${now.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')}`;
   const out = { runId, scoredAt: now.toISOString(), asOf, latestRepdte, buyboxHash: contentHash(buybox), scoringHash: contentHash(scoring), provisional: vb.placeholders.length > 0, placeholders: vb.placeholders, items, failedBanks };
   writeJson(join(dir, 'candidates', 'latest.json'), out);
-  audit(dir, { type: 'scoring_run', runId, banks: items.length, tierA: items.filter((i) => i.tier === 'A').length, tierB: items.filter((i) => i.tier === 'B').length, provisional: out.provisional, latestRepdte });
+  // The paper estimate (E14-S1): one record per scored bank, paper/fdic-<CERT>.json, built from the same inputs. A record is for the
+  // principals and the briefer only; the drafter's load list (src/uow.mjs, LOADS.draft) does not include paper/.
+  // A record whose content is unchanged since the last run is not rewritten (its runId then names the run that last changed it), so a
+  // routine re-score does not send every record to the platform again.
+  const sameContent = (a, b) => { const c = (r) => contentHash({ ...r, runId: null, scoredAt: null }); return !!a && c(a) === c(b); };
+  let paperWritten = 0;
+  for (const it of items) {
+    const path = paperPath(dir, it.key);
+    const rec = buildPaper({ cert: it.cert, name: it.name, financials: fin.get(it.cert) ?? null, footprint: footprints[it.cert] ?? {}, events: eventsBy.get(it.cert) ?? [],
+      filings: filingsBy[it.key] ?? [], buybox, placeholders: vb.placeholders, metros, runId, scoredAt: out.scoredAt });
+    if (!sameContent(readJson(path, null), rec)) { writeJson(path, rec); paperWritten++; }
+  }
+  audit(dir, { type: 'scoring_run', runId, banks: items.length, tierA: items.filter((i) => i.tier === 'A').length, tierB: items.filter((i) => i.tier === 'B').length, provisional: out.provisional, latestRepdte, paperRecords: items.length, paperWritten });
   return out;
 }

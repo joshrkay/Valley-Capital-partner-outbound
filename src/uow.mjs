@@ -15,10 +15,11 @@ export const LOADS = Object.freeze({
   candidates: ['candidates/', 'accounts/', 'suppression.json'],
   account: ['accounts/'],
   pilot: ['pilot/', 'research/'],
-  research: ['accounts/', 'research/', 'facts/', 'briefs/', 'pilot/'],
+  // paper/: the briefer reads the bank's paper estimate as data (E14-S1). The drafter's list never includes it.
+  research: ['accounts/', 'research/', 'facts/', 'briefs/', 'pilot/', 'paper/'],
   draft: [...GUARD, 'accounts/', 'research/', 'facts/', 'drafts/'],
   sources: ['sources/'],
-  score: ['sources/', 'candidates/'],
+  score: ['sources/', 'candidates/', 'paper/'],
 });
 
 const covers = (prefix, rel) => prefix === '' || rel === prefix || (prefix.endsWith('/') && rel.startsWith(prefix)) || rel.startsWith(`${prefix}/`);

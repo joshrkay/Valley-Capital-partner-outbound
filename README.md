@@ -86,6 +86,21 @@ Behind a proxy, Node's built-in `fetch` needs `NODE_USE_ENV_PROXY=1` (Node 22.21
 
 Every signal says whether it is a state signal (recomputed while the condition holds) or an event signal (a dated change, kept).
 
+**The paper estimate** (PRD E14-S1, `docs/paper-estimate.md`): what CRE each bank likely holds, from its Call Reports. Each scoring run writes one record per bank, `paper/fdic-<CERT>.json` in the data folder. Every number carries its unit (dollars, converted from FDIC's thousands; a count; or a share), as-of date, tier (reported, observed or inferred), sources (field, file, report date) and method.
+
+```bash
+npm run outbound -- paper show --key fdic:12345          # summary, then Q1 to Q8, each number with its tier and date; --json for the record
+```
+
+- **Q1:** investor CRE (the 2006 guidance definition) and owner-occupied, by category, with the stages FDIC reports for each. A stage it does not report says "not reported", never zero. Charge-offs are flows, for the quarter and the year to date. Restructured loans by type carry the 2023 series break (ASU 2022-02). Unused commitments are shown once, for the whole book. The eight-quarter trend is net change, never "new lending", and a quarter with an acquisition is withheld.
+- **Q3:** the deposit share by metro, labelled a proxy, not loans. **Q5:** maturity and repricing buckets, for all loans, not CRE-specific.
+- **Q4:** nonfarm nonresidential loan sizes. **These fields are semiannual:** most banks fill them only in June and December and send 0 in March and September. A March or September value is never used, whatever it holds; the latest June or December report is used, and its date is shown. The restructured split by type behaves the same way (checked live, November 14, 2026).
+- **Q6:** seller evidence, as a dated list: held-for-sale balances, loan-sale gains (not CRE-specific), SEC filing signals and acquisitions.
+- **Q7: bounds only.** For each buy-box sector, an upper bound of min(sᵢ) × book and a lower bound of max(0, Σsᵢ − (k − 1)) × book, from the category, metro and size shares. Never a product of shares, and no base figure. Hotel and retail sit inside nonfarm nonresidential, so their share runs from 0 to all of it. While the buy box has placeholders, the record is marked provisional.
+- **Q8:** the unknowns, generated from the gaps, and the standard tape request.
+
+The web app shows it on the candidate page. The briefer receives it as fenced data; **the drafter receives nothing from it**, and its unit of work cannot load `paper/` (`test/handoff.test.mjs`).
+
 **Before the briefer researches any bank the pipeline found, it passes a pilot** on 10 accounts the principals already know (PRD E1):
 
 ```bash
@@ -261,7 +276,7 @@ It stores no message text, and writes an audit line for every decision.
 | `supabase/migrations/` | The platform's tables, access rules and functions. Structure only, no data |
 | `web/` | The principals' web app (Next.js) |
 | `.github/workflows/` | The platform worker's schedule (off until enabled) |
-| `src/` | `guard`, `research`, `draft`, `lint`, `model` (the only file that calls the Anthropic API), `rules`, `store`, `paths`, plus the pipeline: `sources/` (`http`, `runlog`, `fdic`, `edgar`), `metrics`, `score`, `candidates`, `pilot`, and the platform: `uow`, `platform/` (`client`, `worker`, `move`) |
+| `src/` | `guard`, `research`, `draft`, `lint`, `model` (the only file that calls the Anthropic API), `rules`, `store`, `paths`, plus the pipeline: `sources/` (`http`, `runlog`, `fdic`, `edgar`), `metrics`, `score`, `paper` (the paper estimate), `candidates`, `pilot`, and the platform: `uow`, `platform/` (`client`, `worker`, `move`) |
 | `scripts/sync-site.mjs` | Refreshes `site-snapshot/` from the website repository (see below) |
 | `site-snapshot/` | A copy of the 7 website files the rules depend on, a list of the site's pages, and a record of the commit it came from. Committed. Refresh it; do not edit it. |
 | `docs/` | The plan, the research agenda, and the PRD for the signal pipeline |
@@ -270,7 +285,7 @@ It stores no message text, and writes an audit line for every decision.
 In `$OUTBOUND_DATA_DIR`:
 
 - `senders.json`, `suppression.json`, `accounts/`, `research/`, `facts/`, `briefs/`, `drafts/<account>/`, `touches.jsonl`, `audit.jsonl`;
-- for the pipeline: `sources/` (FDIC data, the run log and the change log), `candidates/` (the latest list and principals' decisions), and `pilot/` (truth sheets, verdicts, the pass).
+- for the pipeline: `sources/` (FDIC data, the run log and the change log), `candidates/` (the latest list and principals' decisions), `paper/` (one paper estimate per bank), and `pilot/` (truth sheets, verdicts, the pass).
 
 ## Changing it
 

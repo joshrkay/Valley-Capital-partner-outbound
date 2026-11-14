@@ -738,7 +738,7 @@ Some sources report a dated change rather than a state: a filing, a notice, an o
 
 ### E14. The paper estimate
 
-*As a principal, I want one page per candidate that estimates what CRE the lender holds — how much, which property types, where, what sizes, when it matures, whether the lender already sells, and how much fits our buy box — with every number tiered as reported, observed or inferred, so that I go into the first call knowing the paper.* The design, the critical-detail checklist and stories E14-S1 to S6 are in `docs/paper-estimate.md`. P0 for E14-S1 (data in hand), R2.
+*As a principal, I want one page per candidate that estimates what CRE the lender holds — how much, which property types, where, what sizes, when it matures, whether the lender already sells, and how much fits our buy box — with every number tiered as reported, observed or inferred, so that I go into the first call knowing the paper.* The design, the critical-detail checklist and stories E14-S1 to S6 are in `docs/paper-estimate.md`. P0 for E14-S1 (data in hand), R2. **E14-S1, the reported layer, is built** (`src/paper.mjs`; `outbound paper show`; the candidate page); what it defers is listed under the story.
 
 ## 9. Definition of done (every story)
 
@@ -855,6 +855,21 @@ Base `https://api.fdic.gov/banks`. Titles are FDIC's own, from `risview_properti
 | `NTRECONQ` | CONSTRUCTION RE LN NET-CHG-QTR | Quarterly CRE charge-offs |
 | `NTRENRSQ` | NONFARM NONRES RE LN NET-CHG-QTR | Quarterly CRE charge-offs |
 | `NTREMULQ` | MULTIFAMILY RE LN NET-CHG-QTR | Quarterly CRE charge-offs |
+
+**Added for the paper estimate (E14-S1, checked live November 14, 2026).** Titles are FDIC's own. Details and live results are in `docs/paper-estimate.md` 4.2 and the comments in `src/sources/fdic.mjs`.
+
+| Field | FDIC title | Used for |
+|---|---|---|
+| `P3RECONS` / `P9RECONS` | 30-89 / 90+ DAYS P/D-RE*CONSTRUCTION | Construction stages (now also in the paper profile) |
+| `P3RENROW`, `P3RENROT`, `P9RENROW`, `P9RENROT`, `NARENROW`, `NARENROT` | 30-89 / 90+ / NONACCRUAL, OWN-OCC and OTHER NONFARM NONRES | Stages of owner-occupied and investor nonfarm nonresidential |
+| `P3COMRE` | 30-89 DAYS P/D-COMMERCIAL RE | 30-89 stage of `LNCOMRE`, CRE not secured by real estate (see the field's comment) |
+| `LNRENR1`–`LNRENR4`, `LNRENR1N`–`LNRENR4N` | RE NONFARM NONRES-UNDER 100 / 100-250 / 250-1M / UNDER 1M, $ and NUM | Loan sizes. **Semiannual:** June and December only |
+| `LNRECNOT` / `LNRECNFM` | OTHER RE CONSTRUCTION & LAND LN / 1-4 FAM RE CONSTRUCTION LOANS | Construction split |
+| `UCCOMRES` / `UCCOMREU` | UNUSED COMMIT-SECURED / UNSECURED COM RE | Unused CRE commitments, portfolio level |
+| `RSCONS`, `RSMULT`, `RSNRES`, `RSOTHER`, `NARSNRES`, `RSLNLTOT` | RESTRUCTURED LN by type, NONACCR RESTRUCTURED NFNR LN, RESTRUCTURED LOANS - TOTAL | Restructured balances. **The split by type is semiannual in practice**; the total is quarterly |
+| `LNLSSALE`, `NALNSALE`, `P9LNSALE`, `P3LNSALE` | LOANS & LEASES HELD FOR RESALE; NONACCRUAL / 90+ / 30-89 P/D-L&L HELD FOR SALE | Seller evidence |
+| `NETGNSLN` / `NTGLLNQ` | NET G/L ON SALES OF LOANS (year to date) / QUARTERLY | Seller evidence, not CRE-specific |
+| `LNOT3LES`, `LNOT3T12`, `LNOT1T3`, `LNOT3T5`, `LNOT5T15`, `LNOTOV15` | ALL OTHER LNS & LS * 3 MO OR LESS ... OVER 15 YRS | Maturity and repricing proxy, not CRE-specific |
 
 ## Appendix C. Release 1 build contract
 

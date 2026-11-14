@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runFdic, fdicQuery, orFilter, checkFields, checkHistoryRows, quartersBack, isoDate, monthsBefore, parseCsv, parseFailedBankCsv, placeInMetros, eventOf,
-  FDIC_FIELDS, YTD_FLOW_FIELDS, FDIC_LOAN_SALES_URL, FAILURE_CODES, STRUCTURE_CODES, fdicPaths } from '../src/sources/fdic.mjs';
+  FDIC_FIELDS, YTD_FLOW_FIELDS, FDIC_LOAN_SALES_URL, FAILURE_CODES, STRUCTURE_CODES, fdicPaths, SEMIANNUAL_FIELDS, isSemiannualReport, checkSemiannualFill } from '../src/sources/fdic.mjs';
 import { RUNS, CHANGES } from '../src/sources/runlog.mjs';
 import { readJson, readJsonl, writeJson } from '../src/store.mjs';
 import { makeDir, put } from './kit.mjs';
@@ -471,4 +471,46 @@ test("the failed-bank CSV as FDIC really sends it: a non-breaking space after ev
     assert.deepEqual(r.rows.map((x) => [x.cert, x.closed, x.acquirer]), [['99999', '2026-09-25', 'Example Acquirer Bank'], ['88888', '2026-08-21', 'Example Savings, Inc.']], enc);
     assert.deepEqual(r.headers.slice(0, 6), head.slice(0, 6), enc);
   }
+});
+
+// ---- The paper estimate's fields (PRD E14-S1, docs/paper-estimate.md 4.2) ------------------------------------------------------
+const PAPER_FIELDS = ['P3RECONS', 'P9RECONS', 'P3RENROW', 'P3RENROT', 'P9RENROW', 'P9RENROT', 'NARENROW', 'NARENROT', 'P3COMRE',
+  'LNRENR1', 'LNRENR2', 'LNRENR3', 'LNRENR4', 'LNRENR1N', 'LNRENR2N', 'LNRENR3N', 'LNRENR4N', 'LNRECNOT', 'LNRECNFM', 'UCCOMRES', 'UCCOMREU',
+  'RSCONS', 'RSMULT', 'RSNRES', 'RSOTHER', 'NARSNRES', 'RSLNLTOT', 'LNLSSALE', 'NALNSALE', 'P9LNSALE', 'P3LNSALE', 'NETGNSLN', 'NTGLLNQ',
+  'LNOT3LES', 'LNOT3T12', 'LNOT1T3', 'LNOT3T5', 'LNOT5T15', 'LNOTOV15'];
+
+test('the paper estimate\'s fields are requested, field-checked and stored like every other financial field', async () => {
+  for (const f of PAPER_FIELDS) assert.ok(FDIC_FIELDS.financials.includes(f), f);
+  for (const f of [...SEMIANNUAL_FIELDS.loanSizes, ...SEMIANNUAL_FIELDS.restructuredByType]) assert.ok(FDIC_FIELDS.financials.includes(f), f);
+  const dir = makeDir();
+  const f = fakeFdic(TABLES());
+  const s = await runFdic(opts(dir, f.fetchImpl));
+  assert.equal(s.outcome, 'ok');
+  const call = f.calls.find((c) => c.endpoint === 'financials' && c.fields.includes('LNRENR4N'));
+  assert.ok(call, 'the 8-quarter pull asks for the new fields');
+  const stored = readJson(fdicPaths(dir).financials('101')).quarters['20260630'];
+  for (const x of PAPER_FIELDS) assert.equal(typeof stored[x], 'number', x);
+  // A renamed or dropped field is caught, as for every requested field: the run fails and writes nothing.
+  const t = TABLES(); t.financials = t.financials.map(({ LNRENR4N, ...rest }) => rest);
+  const bad = await runFdic(opts(makeDir(), fakeFdic(t).fetchImpl));
+  assert.equal(bad.outcome, 'failed'); assert.ok(bad.missingFields.includes('financials.LNRENR4N'));
+});
+
+test('the semiannual loan-size fields: March zeros are allowed; a June or December report with them empty marks the run suspect', async () => {
+  assert.equal(isSemiannualReport('20260630'), true); assert.equal(isSemiannualReport('20251231'), true);
+  assert.equal(isSemiannualReport('20260331'), false); assert.equal(isSemiannualReport('20250930'), false);
+  const zeros = Object.fromEntries(SEMIANNUAL_FIELDS.loanSizes.map((x) => [x, 0]));
+  // As FDIC really sends it: 0 in March for most banks. Allowed, and not even checked.
+  const t = TABLES(); t.financials = t.financials.map((r) => (r.REPDTE === '20260331' ? { ...r, ...zeros } : r));
+  const ok = await runFdic(opts(makeDir(), fakeFdic(t).fetchImpl));
+  assert.equal(ok.outcome, 'ok');
+  assert.ok(ok.notes.some((n) => /loan-size fields \(semiannual\) filled for 2 of 2 banks with nonfarm nonresidential loans at 20260630; March and September values are not used/.test(n)), ok.notes.join('\n'));
+  // Empty in June for every bank: FDIC may have changed the fields. Suspect, with a note; the data is still written.
+  const t2 = TABLES(); t2.financials = t2.financials.map((r) => (r.REPDTE === '20260630' ? { ...r, ...zeros } : r));
+  const dir = makeDir();
+  const sus = await runFdic(opts(dir, fakeFdic(t2).fetchImpl));
+  assert.equal(sus.outcome, 'suspect');
+  assert.ok(sus.notes.some((n) => /look empty in the 20260630 report/.test(n)));
+  assert.deepEqual(checkSemiannualFill([{ REPDTE: '20260331', LNRENRES: 5, LNRENR4N: 0, LNRENR4: 0 }]), [], 'March is not checked');
+  assert.deepEqual(checkSemiannualFill([{ REPDTE: '20261231', LNRENRES: 5, LNRENR4N: 3, LNRENR4: 9 }, { REPDTE: '20261231', LNRENRES: 0, LNRENR4N: 0, LNRENR4: 0 }]), [{ repdte: '20261231', holders: 1, filled: 1, suspect: false }]);
 });

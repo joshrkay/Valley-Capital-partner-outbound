@@ -3,6 +3,7 @@ import { candidateDetail } from '../../../lib/ops.mjs';
 import { period, moneyThousands, pct, num, source } from '../../../lib/format.mjs';
 import { NotAuthorized, Problem, Sourced } from '../../ui.jsx';
 import { promoteAction, dismissAction, snoozeAction } from '../actions.js';
+import PaperEstimate from './paper-estimate.jsx';
 
 const STAGES = [['pastDue30to89', '30–89 days'], ['pastDue90', '90+ days'], ['nonaccrual', 'Nonaccrual'], ['noncurrent', 'Noncurrent'], ['oreo', 'OREO'], ['chargeOffsQuarter', 'Charge-offs (qtr)']];
 const AXES = [['distress', 'Distress: is the bank under pressure?'], ['fit', 'Fit: is its paper what we buy, where we buy it?'], ['timing', 'Timing: why now?']];
@@ -16,12 +17,12 @@ export default async function Candidate({ params }) {
   let d;
   try { d = await candidateDetail(ctx.client, key); } catch (e) { return <Problem text={`This candidate could not be loaded: ${e.message}`} />; }
   if (!d) return <Problem text={`There is no candidate ${key} in the latest scoring run.`} />;
-  const { item, decision, suppressed } = d;
+  const { item, decision, suppressed, paper } = d;
   const p = item.profile ?? {};
   return (
     <>
       <h1>{item.name}</h1>
-      <p className="sub">{item.key} · {[item.city, item.state].filter(Boolean).join(', ')} · total assets <Sourced input={{ field: 'ASSET', repdte: item.latestRepdte }}>{moneyThousands(item.assets)}</Sourced> · data as of {period(item.latestRepdte)}</p>
+      <p className="sub">{item.key} · {[item.city, item.state].filter(Boolean).join(', ')} · total assets <Sourced input={{ field: 'ASSET', repdte: item.latestRepdte }}>{moneyThousands(item.assets)}</Sourced> · data as of {period(item.latestRepdte)} · <a href="#paper">paper estimate</a></p>
       {suppressed ? <div className="banner error">This institution is on the suppression list. It cannot be promoted.</div> : null}
       {decision ? <div className="banner warn">Decision on record: {decision.status} by {decision.by}{decision.until ? ` until ${decision.until}` : ''}{decision.reason ? ` (${decision.reason})` : ''}.</div> : null}
 
@@ -113,6 +114,8 @@ export default async function Candidate({ params }) {
       {item.signals?.length ? (
         <ul>{item.signals.map((s) => <li key={s.id}>{s.label} <span className="src">{period(s.period)} · evidence {(s.evidence ?? []).join(', ')}</span></li>)}</ul>
       ) : <p className="muted">No signal fired in the latest quarter.</p>}
+
+      <PaperEstimate paper={paper} />
     </>
   );
 }
