@@ -116,6 +116,42 @@ export async function queueDraft(client, { id, channel, step }) {
   return client.enqueue('draft.run', { account: need(id, 'An account id'), channel: ch, step: n });
 }
 
+// ---- Calls (PRD E15) ------------------------------------------------------------------------------------------------------------
+// The call brief and reading the notes are model work, so they are queued. Saving the notes, confirming and rejecting are quick, and run
+// the engine's own functions (src/calls.mjs) in a unit of work as the signed-in principal. A job's parameters never hold note text.
+export async function accountCalls(client, id) {
+  const [{ store }, calls] = await Promise.all([mods(), engine('src/calls.mjs')]);
+  store.safeId(need(id, 'An account id'));
+  const { result } = await client.unitOfWork([`accounts/${id}.json`, `calls/${id}/`], (dir) => calls.listCalls({ dir, id }));
+  return { ...result, latestBrief: result.briefs[0] ?? null, pending: result.proposals.filter((p) => p.status === 'pending'), latestFollowUp: result.followUps[0] ?? null };
+}
+
+export async function queueCallPrep(client, { id, date }) {
+  const [{ store }, calls] = await Promise.all([mods(), engine('src/calls.mjs')]);
+  store.safeId(need(id, 'An account id'));
+  return client.enqueue('call.prep', { account: id, date: calls.needDate(typeof date === 'string' && date.trim() ? date.trim() : today()) });
+}
+
+export async function logCallNotes(client, { id, date, notes, by }) {
+  const calls = await engine('src/calls.mjs');
+  const day = calls.needDate(need(date, 'The call date'));
+  await client.unitOfWork(calls.callLoads('callNotes', need(id, 'An account id')), (dir) => calls.saveNotes({ dir, id, date: day, notes, by }));
+  return client.enqueue('call.extract', { account: id, date: day, by });
+}
+
+export async function confirmCall(client, { id, proposal, by }) {
+  const calls = await engine('src/calls.mjs');
+  const rules = await loadRules();
+  const { result } = await client.unitOfWork(calls.callLoads('callConfirm', need(id, 'An account id')), (dir) => calls.confirmProposal({ dir, id, proposalId: need(proposal, 'A proposal'), by, rules }));
+  return result;
+}
+
+export async function rejectCall(client, { id, proposal, by, reason }) {
+  const calls = await engine('src/calls.mjs');
+  const { result } = await client.unitOfWork(calls.callLoads('callExtract', need(id, 'An account id')), (dir) => calls.rejectProposal({ dir, id, proposalId: need(proposal, 'A proposal'), by, reason: typeof reason === 'string' ? reason : '' }));
+  return result;
+}
+
 // ---- Drafts -------------------------------------------------------------------------------------------------------------------
 export async function listDrafts(client) {
   const { store } = await mods();

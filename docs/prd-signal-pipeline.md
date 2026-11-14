@@ -19,7 +19,7 @@ The goal is a chain. A weak link breaks it:
 | 5. **The person** | Who decides whether that paper is sold? | The briefer, sourced, confirmed by a principal | E1, E7 |
 | 6. **The message** | What does a short, accurate first touch say? | The drafter: approved claims only, matched to the paper's sector, checked in code | Existing agent 3, E6-S8 |
 | 7. **The send** | How does it reach them without burning the name? | A principal's own mailbox, caps, stop on reply | E9 |
-| 8. **Learning** | Which signals led to conversations and loan tapes? | Outcomes linked back to signals | Goal 5, E11 |
+| 8. **Learning** | Which signals led to conversations and loan tapes? | Outcomes linked back to signals | Goal 5, E11, E15 |
 
 **What public data can and cannot say about the paper.** It should be read honestly, so no one over-trusts it:
 
@@ -180,6 +180,7 @@ Rules that apply everywhere:
 | E12 Platform foundation | R2 | P0 | E1–E6 (built) |
 | E13 Event listeners | R2 | P1 | E2, E3, E12 |
 | E14 The paper estimate | R2 | P0 | E3, E4, E6 |
+| E15 Call prep and outcomes | R2 | P0 (S1, S2), P1 (S3, S4) | E1, E7, E12; E14 if present |
 
 ---
 
@@ -739,6 +740,119 @@ Some sources report a dated change rather than a state: a filing, a notice, an o
 ### E14. The paper estimate
 
 *As a principal, I want one page per candidate that estimates what CRE the lender holds — how much, which property types, where, what sizes, when it matures, whether the lender already sells, and how much fits our buy box — with every number tiered as reported, observed or inferred, so that I go into the first call knowing the paper.* The design, the critical-detail checklist and stories E14-S1 to S6 are in `docs/paper-estimate.md`. P0 for E14-S1 (data in hand), R2.
+
+### E15. Call prep and outcomes
+
+When the person who decides on loan sales agrees to talk, a principal needs a one-page brief before the call. After it, the outcome is recorded and linked back to the signals that started the account. That link is the learning loop of Goal 5: which signals lead to conversations, confidentiality agreements and loan tapes. **Built** (`src/calls.mjs`, `src/outcomes.mjs`, `outbound call ...`, `outbound outcomes report`, worker jobs `call.prep` and `call.extract`, the account page).
+
+Rules across the epic:
+- The brief and the notes are for principals only. They live in the data folder (`calls/<account>/`) and the database, never in the repository.
+- Nothing a model extracts is recorded until a principal confirms it. Nothing is sent.
+- The research and the paper estimate never reach the drafter (section 0). `test/calls-handoff.test.mjs` proves it.
+- Logs and job results carry codes, counts and ids. They never carry a prospect's name or note text.
+
+**E15-S1. The call brief.** *As a principal, I want a one-page brief before a call so that I know who I am speaking with, why now, what they likely hold, and what I may and may not say.* P0, R2. **Built.**
+- [x] `outbound call prep --account ID [--date YYYY-MM-DD]`, and the worker job `call.prep`. `--dry-run` shows the request and spends nothing.
+- [x] One model call (`callJson`, a strict JSON schema, its own entry `callPrep` in `models.json`). It has no tools. It writes from these inputs only, each with an id:
+  - the account: the person, and whether the role is confirmed;
+  - the latest research brief: every finding, the risk screen, the person check and the gaps;
+  - the signals and the "why now" card from the candidate record, or the account's `pipeline` block when the bank is no longer listed;
+  - the paper profile, and the paper estimate (`paper/<key>.json`, E14) when it exists;
+  - the touch history: each step sent, with its approved subject and claims, and any reply, meeting or opt-out, including from another contact at the bank;
+  - earlier confirmed calls;
+  - the approved claims for the account's audience and sector;
+  - the playbook questions, and the fixed rules of section 7.
+- [x] Sections:
+  1. Who you are speaking with.
+  2. Why now.
+  3. What they likely hold.
+  4. What they may want, and likely objections.
+  5. Questions to ask.
+  6. What we can say.
+  7. What not to say.
+  8. Next-step options.
+
+  Then the sources cited, by id.
+- [x] Code writes these parts, not the model:
+  - the warnings at the top: no person named, **the role unconfirmed**, a risk screen of wait or do not approach, an opt-out, a suppression;
+  - the tier and as-of date of each line in section 3;
+  - the approved claims' own wording in section 6;
+  - the paper estimate's tape-request list in section 5;
+  - the fixed rules of section 7: never quote their own distress figures back to them, the drafter's voice rules, and the bank's own words from the site's terminology rules;
+  - the list of sources cited.
+- [x] **Code checks it.** Every item must cite an input. Any failure marks the brief **not usable**:
+
+  | Check | Fails when |
+  |---|---|
+  | `CITE_MISSING`, `CITE_UNKNOWN` | An item cites nothing, or cites an id that is not among the inputs |
+  | `NUMBER_NOT_IN_INPUTS` | A number in the brief does not appear in the inputs. Numbers are compared as numbers, so 6.10% equals 6.1. |
+  | `CLAIM_UNKNOWN`, `CLAIM_UNAPPROVED`, `CLAIM_WRONG_AUDIENCE`, `CLAIM_WRONG_SECTOR`, `CLAIM_NOT_WORD_FOR_WORD` | A claim in section 6 is not an approved claim for this bank and sector, quoted word for word |
+  | `TIER_UPGRADED`, `ESTIMATE_AS_FACT`, `HOLDINGS_UNSOURCED` | A holding is labelled stronger than the weakest tier it cites, an inferred value is not called an estimate, or a holding rests on neither the paper estimate nor the profile |
+  | `FIRM_STATEMENT` | A response, question or next step says something about the firm outside the approved claims (`terminology.json` `claimPhrases`) |
+  | `ROLE_OVERSTATED` | Section 1 calls the role confirmed when no principal has confirmed it |
+
+  A number that is in the inputs, but not in the inputs its item cites, is a warning.
+- [x] One repair round, as the drafter has. A brief that still fails is saved as `not_usable`. Its Markdown opens with "NOT USABLE" and the reasons, before the brief itself. The command exits 1, and the web page shows the same. It is never shown as if fine.
+- [x] Stored in the data folder: `calls/<accountId>/<date>-prep.json` (the record) and `.md` (to read).
+- [ ] The paper estimate is read defensively until E14-S1 lands. The file is `paper/<key>.json`, or the same with the key's colon written as `-` or `_`, since a platform document path cannot hold a colon. A value is any object with a tier (reported, observed or inferred) and a value, or a low and a high. The tape request is a list under a key that starts `tapeRequest`. Align both with E14-S1 when it merges.
+- [ ] The first live run, with a key, read against a call a principal has already had.
+
+**E15-S2. Recording the call.** *As a principal, I want to paste my notes after a call and confirm what they say so that the outcome is on record and linked to the signals that started the account.* P0, R2. **Built.**
+- [x] `outbound call log --account ID --date D --by NAME --notes FILE` (or `-` for stdin). The notes are saved to `calls/<id>/<date>-notes.md`, for principals only. Then a model call (`models.json` `callExtract`) turns them into a **proposal**. On the platform, saving is a quick action, and reading the notes is the job `call.extract`.
+- [x] The proposal holds:
+  - outcome codes from a fixed list: `held`, `nda_requested`, `nda_signed`, `tape_promised`, `tape_received`, `not_selling_now` (with a when, if stated), `wrong_person` (with a referral, if any), `interested_later`, `pricing_discussed`, `declined`;
+  - objections;
+  - commitments: who (us, them, both or unclear) does what, and by when;
+  - a follow-up date;
+  - the people mentioned.
+- [x] Code checks the proposal for the principal. Each code and objection carries a quote, which is looked for in the notes. Dates must be real dates. A missing `held` is flagged. The findings are shown; they do not block a principal.
+- [x] **It is recorded nowhere until a principal confirms it.** Until then only the notes and the pending proposal exist. `outbound call confirm --account ID --proposal PID --by NAME`:
+  - records a guard event of type `meeting`, which stops the automated sequence (the existing rule);
+  - appends a line to `outcomes.jsonl`: the account, `institutionKey`, `originSignals` with their types, the first signal's date, the tier, the call date, the codes, counts and the confirmer;
+  - adds the outcome, with its details, to the account (`outcomes`);
+  - writes the follow-up checklist (E15-S3).
+- [x] One confirmed outcome per call date. A confirmed or rejected proposal cannot be confirmed. A confirmed call's notes are not replaced. `outbound call reject` and `outbound call list` complete the set.
+- [x] **People named in the notes are never added automatically.** They stay on the proposal and the outcome as "unconfirmed, from call notes". A principal adds one through `account set-person`, then `account confirm-role` (E7).
+- [x] Logs carry counts only. Audit lines and job results hold codes, counts and ids, never a name or note text. The outcome line holds no name either. A test checks both.
+- [ ] A principal can correct a proposal before confirming it. Today they reject it and log the notes again.
+- [ ] A meeting recorded by hand (`guard event --type meeting`) has no outcome, so the report does not count it.
+
+**E15-S3. The follow-up.** *As a principal, I want what was agreed on the call turned into a follow-up so that nothing promised is forgotten.* P1, R2. **Built as a checklist. The email is deferred.**
+- [x] On confirmation, a checklist is written to `calls/<id>/<date>-followup.md` and `.json`, and shown on the account page. Its facts are only what was agreed:
+  - each commitment, with who and by when;
+  - the follow-up date;
+  - the approved claim that matches, word for word: `nda-first` when they asked for a confidentiality agreement, `no-obligation` when pricing came up;
+  - the paper estimate's tape-request list, when a tape was promised.
+- [x] It shows the guard's view: the hard stops (an opt-out, a suppression, a bounce, the kill switch), and that the sequence is over. Nothing is drafted or sent.
+- [ ] **The follow-up email is deferred.** The drafter cannot take a post-call context without changing its rules:
+  - The guard ends the sequence on a meeting (`SEQUENCE_STOPPED`). `runDrafter` refuses before any model call, and `approveDraft` refuses too. A post-call email would need a new exception to the stop rule.
+  - The drafter writes only from the briefer's cleared facts, and every personal line must cite one. What was agreed on a call is not one.
+  - Its steps come from `config.sequence`. A follow-up is not a step.
+
+  So the principal writes the follow-up from their own mailbox, with the checklist. A test proves the stop rule still holds after a call.
+- [ ] **A decision for a principal.** The guard has no record type for a principal's own message after a meeting. Recorded with `guard record`, it is logged with the violation `SEQUENCE_STOPPED`. That is right for the sequence, but it reads as a broken rule. One option: a `correspondence` record that the guard logs outside the sequence, still under the kill switch, suppression and opt-out. A post-call email could then go through the drafter with the agreed facts as its only facts. Not built.
+
+**E15-S4. What led to conversations.** *As a principal, I want to see which signals led to conversations, confidentiality agreements and tapes so that the score can be tuned on outcomes, not guesses.* P1, R2. **Built.**
+- [x] `outbound outcomes report [--since D]`. Deterministic, with no model. It reads confirmed outcomes only (`outcomes.jsonl`).
+- [x] For each group it counts the accounts, the confirmed calls, and the accounts that reached each outcome code:
+  - by the signal types in `originSignals`. An account started by several types counts once under each. An account picked by hand has its own row.
+  - by tier;
+  - by lead time, from the account's first signal date to its first `held` call, in buckets set in `config.json` (placeholders: 30, 90, 180 and 365 days).
+- [x] Written to `reports/outcomes-<date>.json`, and printed.
+- [x] With fewer than `config.outcomes.minToTune` confirmed outcomes (placeholder: 30), it says the counts are too few to tune weights on.
+- [x] **It never changes weights.** A test checks that it writes only its report, and that `scoring.json` is unchanged.
+- [ ] A principal sets `minToTune` and the buckets.
+
+**Plumbing.**
+- [x] Migration `20261114120000_jobs_calls.sql` adds `call.prep` and `call.extract` to `jobs_kind_check`, with every earlier kind. `test/db.test.mjs` runs it on Postgres 16, and `test/postgrest-fake.mjs` knows the kinds. A test checks that the newest migration lists exactly the worker's kinds.
+- [x] Units of work (`src/uow.mjs`, `LOADS`): `callPrep`, `callNotes`, `callExtract`, `callConfirm` and `outcomes`, each narrowed to one account's folders.
+- [x] **Web**, on the account page, through `web/lib/ops.mjs` and the principal's session:
+  - the latest call brief, marked NOT USABLE with its reasons when a check failed;
+  - a form to paste notes, which saves them as the principal and queues `call.extract`;
+  - each pending proposal, with confirm and reject;
+  - the confirmed outcomes, and the follow-up checklist.
+- [x] `test/calls-handoff.test.mjs` proves, end to end, that the research and the paper estimate never reach the drafter, and that the follow-up carries only what was agreed.
+- [ ] The outcomes report on the web (the Status screen). The command line has it.
 
 ## 9. Definition of done (every story)
 

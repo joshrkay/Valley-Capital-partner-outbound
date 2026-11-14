@@ -12,8 +12,9 @@ import { runBriefer } from '../research.mjs';
 import { runDrafter } from '../draft.mjs';
 import { loadContext } from '../guard.mjs';
 import { researchGate } from '../pilot.mjs';
+import { runCallPrep, runCallExtract, callLoads, needDate } from '../calls.mjs';
 
-export const JOB_KINDS = ['sources.fdic', 'sources.edgar', 'sources.filings', 'score.run', 'research.run', 'draft.run'];
+export const JOB_KINDS = ['sources.fdic', 'sources.edgar', 'sources.filings', 'score.run', 'research.run', 'draft.run', 'call.prep', 'call.extract'];
 const ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const CHANNELS = ['email', 'letter', 'call', 'linkedin_note'];
 
@@ -71,6 +72,23 @@ export async function runJob({ client, job, rules, deps = {} }) {
         return runDrafter({ client: model, dir, account: a, channel: p.channel, step: Number(p.step ?? sent + 1), senderId: p.sender ?? ctx.senders[0]?.id, date: p.date ?? (deps.now?.() ?? new Date()).toISOString().slice(0, 10), ctx, rules, ackRisk: !!p.ackRisk });
       }, { retries: 0 });
       return { ok: !!result.ok, summary: { status: result.status ?? null, blocked: result.blocked ?? null, errors: (result.errors ?? []).map((e) => e.code), costUsd: result.costUsd ?? null } };
+    }
+    // Call prep and outcome capture (PRD E15). Each loads one account's call folder. Results hold codes and counts: no name, no note text.
+    case 'call.prep': {
+      if (!ID.test(String(p.account ?? ''))) throw new Error('The job needs a valid account id (params.account).');
+      const date = needDate(p.date ?? (deps.now?.() ?? new Date()).toISOString().slice(0, 10));
+      const model = deps.makeModelClient ? await deps.makeModelClient({}) : null;
+      if (!model) throw new Error('No model client: call prep needs ANTHROPIC_API_KEY on the worker.');
+      const { result } = await client.unitOfWork(callLoads('callPrep', p.account), (dir) => runCallPrep({ client: model, dir, account: account(dir, p.account), date, rules, now: deps.now?.() ?? new Date() }), { retries: 0 });
+      return { ok: !!result.ok, summary: { status: result.status ?? null, problems: (result.problems ?? []).map((e) => e.code), warnings: (result.warnings ?? []).map((e) => e.code), costUsd: result.costUsd ?? null, reason: result.reason ?? null } };
+    }
+    case 'call.extract': {
+      if (!ID.test(String(p.account ?? ''))) throw new Error('The job needs a valid account id (params.account).');
+      const date = needDate(p.date);
+      const model = deps.makeModelClient ? await deps.makeModelClient({}) : null;
+      if (!model) throw new Error('No model client: reading call notes needs ANTHROPIC_API_KEY on the worker.');
+      const { result } = await client.unitOfWork(callLoads('callExtract', p.account), (dir) => runCallExtract({ client: model, dir, id: p.account, date, by: p.by, models: rules.models, now: deps.now?.() ?? new Date() }), { retries: 0 });
+      return { ok: !!result.ok, summary: { proposal: result.proposalId ?? null, codes: result.codes ?? [], outcomes: result.outcomes ?? 0, objections: result.objections ?? 0, commitments: result.commitments ?? 0, people: result.people ?? 0, problems: result.problems ?? 0, costUsd: result.costUsd ?? null, reason: result.reason ?? null } };
     }
     default:
       throw new Error(`Unknown job kind "${job.kind}".`);

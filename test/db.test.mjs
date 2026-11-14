@@ -118,6 +118,19 @@ test('the job queue: principals queue, only the worker claims and finishes, and 
   assert.equal(must(as('authenticated', PAT, `select status || ' ' || (result->>'banks') from jobs where id = ${id}`)), 'done 268');
 });
 
+test('the fourth migration adds call prep and call notes (PRD E15) and keeps every earlier kind; still no kind sends', { skip }, () => {
+  const constraint = must(psql(`select pg_get_constraintdef(oid) from pg_constraint where conname = 'jobs_kind_check'`));
+  for (const kind of ['sources.fdic', 'sources.edgar', 'sources.filings', 'score.run', 'research.run', 'draft.run', 'call.prep', 'call.extract']) assert.ok(constraint.includes(`'${kind}'`), `${kind} is missing from ${constraint}`);
+  for (const kind of ['call.prep', 'call.extract']) {
+    const j = must(as('authenticated', PAT, `select enqueue_job('${kind}', '{"account": "acme", "date": "2026-11-17"}')`));
+    assert.match(j, /^\d+$/, `${kind} is a job kind`);
+    assert.equal(must(as('authenticated', PAT, `select kind || ' ' || status || ' ' || requested_by from jobs where id = ${j}`)), `${kind} queued pat@example.test`);
+    must(as('service_role', SERVICE, `update jobs set status = 'done' where id = ${j}`));
+  }
+  assert.equal(as('authenticated', PAT, `select enqueue_job('call.send')`).ok, false, 'no kind that sends');
+  assert.equal(as('anon', {}, `select enqueue_job('call.prep')`).ok, false, 'the anonymous key cannot queue a call brief');
+});
+
 test('no caller can run an internal function directly, even with Supabase\'s default grants on new functions', { skip }, () => {
   const item = { key: 'fdic:9', name: 'Sneaky', tier: 'A', score: 99, axes: {}, metros: [], sectors: [], filtersFailed: [] };
   for (const [role, who] of [['authenticated', PAT], ['authenticated', STRANGER], ['anon', {}]]) {

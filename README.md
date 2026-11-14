@@ -30,7 +30,9 @@ Start with `docs/prd-signal-pipeline.md` for the pipeline, and `docs/research-ag
   - deploying the platform (E12-S7);
   - Gmail drafts and reply detection (E9);
   - quarterly nurture (E10);
-  - the referral mapper, meeting prep and the reporter.
+  - the referral mapper;
+  - meeting prep beyond the call brief (event lists, who to meet, and a drafted follow-up email: PRD E15-S3 gives a checklist today);
+  - the weekly reporter (the outcomes report, PRD E15-S4, is its first part).
 
   The briefer reads the open web; it cannot do what needs a data feed.
 
@@ -145,6 +147,24 @@ What was checked live on 2026-11-13 is written at the top of `src/sources/efts.m
 So every response is matched to its request before it is used. A response with no echo, a search that returns fewer hits than it reports, or a hit that does not match its request fails the run: nothing is written, and the next run covers the same days.
 
 On the platform, the job is `sources.filings`. The worker workflow queues it on weekdays at 23:37 UTC, then verifies it. A `suspect` run fails the job, because the listener's window has moved past it. That schedule stays off until a principal has filled `config.sec.userAgent`, confirmed at least one filer, and set the repository variable `FILINGS_ENABLED` to `true`. Until then the run would fail its own checks every day and hide real failures.
+
+### Calls: the brief before, the outcome after (PRD E15)
+
+When the person who decides on loan sales agrees to talk:
+
+```bash
+npm run outbound -- call prep --account acme-bank --date 2026-11-17     # a one-page call brief, checked in code
+npm run outbound -- call log --account acme-bank --date 2026-11-17 --by "Pat Example" --notes notes.txt   # or --notes - for stdin
+npm run outbound -- call confirm --account acme-bank --proposal <PID> --by "Pat Example"
+npm run outbound -- outcomes report                                     # which signals led to conversations
+```
+
+- **The brief** (`calls/<id>/<date>-prep.md`) is written by one model call from fixed inputs, each with an id: the account, the research, the signals and card, the paper estimate if there is one, the touch history, the approved claims and the playbook. Code checks that every cited id exists, every number is in the inputs, every claim is approved and quoted word for word, and no estimate is stated as a fact. A brief that fails says **NOT USABLE** first. An unconfirmed role is a warning at the top.
+- **The notes** stay in `calls/<id>/`, for principals only. A model turns them into a proposal: outcome codes from a fixed list, objections, commitments, a follow-up date, and the people mentioned. **Nothing is recorded until a principal confirms it.** Confirming records a guard `meeting` event (which ends the sequence), a line in `outcomes.jsonl` linked to the account's origin signals, and the outcome on the account. People named in the notes are never added; a principal uses `account set-person`.
+- **The follow-up** is a checklist of what was agreed (`calls/<id>/<date>-followup.md`). No email is drafted: after a meeting the guard refuses every touch, and the drafter only writes from the briefer's facts. PRD E15-S3 says why.
+- **The report** (`reports/outcomes-<date>.json`) counts confirmed outcomes by signal type, tier and lead time. It uses no model and never changes the weights.
+
+On the platform, the account page does the same: queue a brief, paste notes, confirm or reject.
 
 ### Checking the scrapers
 
@@ -261,7 +281,7 @@ It stores no message text, and writes an audit line for every decision.
 | `supabase/migrations/` | The platform's tables, access rules and functions. Structure only, no data |
 | `web/` | The principals' web app (Next.js) |
 | `.github/workflows/` | The platform worker's schedule (off until enabled) |
-| `src/` | `guard`, `research`, `draft`, `lint`, `model` (the only file that calls the Anthropic API), `rules`, `store`, `paths`, plus the pipeline: `sources/` (`http`, `runlog`, `fdic`, `edgar`), `metrics`, `score`, `candidates`, `pilot`, and the platform: `uow`, `platform/` (`client`, `worker`, `move`) |
+| `src/` | `guard`, `research`, `draft`, `lint`, `model` (the only file that calls the Anthropic API), `rules`, `store`, `paths`, plus the pipeline: `sources/` (`http`, `runlog`, `fdic`, `edgar`), `metrics`, `score`, `candidates`, `pilot`, call prep and outcomes: `calls`, `outcomes`, and the platform: `uow`, `platform/` (`client`, `worker`, `move`) |
 | `scripts/sync-site.mjs` | Refreshes `site-snapshot/` from the website repository (see below) |
 | `site-snapshot/` | A copy of the 7 website files the rules depend on, a list of the site's pages, and a record of the commit it came from. Committed. Refresh it; do not edit it. |
 | `docs/` | The plan, the research agenda, and the PRD for the signal pipeline |
@@ -271,6 +291,7 @@ In `$OUTBOUND_DATA_DIR`:
 
 - `senders.json`, `suppression.json`, `accounts/`, `research/`, `facts/`, `briefs/`, `drafts/<account>/`, `touches.jsonl`, `audit.jsonl`;
 - for the pipeline: `sources/` (FDIC data, the run log and the change log), `candidates/` (the latest list and principals' decisions), and `pilot/` (truth sheets, verdicts, the pass).
+- for calls: `calls/<account>/` (call briefs, notes, proposals and follow-ups), `outcomes.jsonl` (confirmed outcomes) and `reports/`.
 
 ## Changing it
 

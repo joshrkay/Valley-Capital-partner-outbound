@@ -22,6 +22,9 @@ import { setPerson, confirmRole } from './src/accounts.mjs';
 import { work, JOB_KINDS } from './src/platform/worker.mjs';
 import { push, pull } from './src/platform/move.mjs';
 import { smoke } from './src/platform/smoke.mjs';
+import { runCallPrep, saveNotes, runCallExtract, buildExtractPrompt, confirmProposal, rejectProposal, listCalls, renderProposal, needDate, MAX_NOTES } from './src/calls.mjs';
+import { runOutcomesReport, renderOutcomesReport } from './src/outcomes.mjs';
+import { readFileSync } from 'node:fs';
 
 const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE this repository first.
 
@@ -86,11 +89,25 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound pilot scorecard                        precision, recall, fabrications and cost across the pilot
   outbound pilot pass     --by NAME               record a pass (needs enough fully reviewed accounts and zero fabrications)
 
+  Calls (PRD E15): a brief before the call, and the outcome after it, linked to the signals that started the account. Nothing sends.
+  outbound call prep --account ID [--date YYYY-MM-DD] [--dry-run]   a one-page call brief from the account, the research, the signals
+                                                  and card, the paper estimate (if any), the touch history and the approved claims;
+                                                  checked in code; a failed check marks it NOT USABLE (calls/ID/DATE-prep.md)
+  outbound call show --account ID [--date D]      print the latest call brief (or the one for that date)
+  outbound call log --account ID --date D --by NAME --notes FILE|- [--dry-run]   save your notes (calls/ID/DATE-notes.md, principals
+                                                  only), and a model proposes the outcome. Nothing is recorded until a principal confirms it
+  outbound call confirm --account ID --proposal PID --by NAME      record it: a guard meeting event (it stops the sequence), the
+                                                  outcome on the account and in outcomes.jsonl, and a follow-up checklist
+  outbound call reject  --account ID --proposal PID --by NAME [--reason TEXT]
+  outbound call list --account ID                 briefs, proposals and confirmed outcomes for an account
+  outbound outcomes report [--since YYYY-MM-DD]   confirmed outcomes by signal type, tier and lead time (no model; never changes
+                                                  weights), written to reports/outcomes-DATE.json
+
   Platform (PRD E12): needs SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (the worker's key; never put it in the web app).
   outbound platform smoke                         check a new project with SUPABASE_URL and SUPABASE_ANON_KEY (the PUBLIC key only):
                                                   sign-ups off, every table and function present and refusing the public key
   outbound worker [--max N]                       run queued jobs until the queue is empty (or N have run); prints ids and outcomes only
-  outbound enqueue sources.fdic|sources.edgar|sources.filings|score.run|research.run|draft.run [--account ID] [--channel C] [--step N] [--draft-buybox] [--include-hq]
+  outbound enqueue sources.fdic|sources.edgar|sources.filings|score.run|research.run|draft.run|call.prep|call.extract [--account ID] [--channel C] [--step N] [--date D] [--by NAME] [--draft-buybox] [--include-hq]
   outbound platform push [--from DIR]             copy a data folder into the platform (default: OUTBOUND_DATA_DIR); safe to re-run
   outbound platform pull --to DIR                 write everything back to a new or empty folder outside this repository
   outbound platform verify [fdic|edgar|filings] [--sample N]   the same checks on the platform's data (read-only); no spot-check list unless asked
@@ -155,7 +172,8 @@ async function main() {
     }
     if (cmd === 'enqueue') {
       if (!JOB_KINDS.includes(sub)) throw new Error(`Usage: outbound enqueue ${JOB_KINDS.join('|')}`);
-      const params = { ...(flags.account ? { account: flags.account } : {}), ...(flags.channel ? { channel: flags.channel } : {}), ...(flags.step ? { step: Number(flags.step) } : {}), ...(flags['draft-buybox'] ? { draftBuybox: true } : {}), ...(flags['include-hq'] ? { includeHq: true } : {}) };
+      const params = { ...(flags.account ? { account: flags.account } : {}), ...(flags.channel ? { channel: flags.channel } : {}), ...(flags.step ? { step: Number(flags.step) } : {}), ...(flags.date && flags.date !== true ? { date: needDate(flags.date) } : {}), ...(flags.by && flags.by !== true ? { by: flags.by } : {}), ...(flags['draft-buybox'] ? { draftBuybox: true } : {}), ...(flags['include-hq'] ? { includeHq: true } : {}) };
+      if (sub === 'call.extract' && (!params.account || !params.date || !params.by)) throw new Error('call.extract needs --account, --date and --by. The notes must already be saved in the platform.');
       return out(`Queued job ${await client.enqueue(sub, params)} (${sub}).`);
     }
     if (cmd === 'platform' && sub === 'push') return out(await push({ client, dir: flags.from && flags.from !== true ? flags.from : dataDir() }));
@@ -325,6 +343,59 @@ async function main() {
     if (sub === 'mark') return out(markFinding({ dir, accountId: need(flags, 'account'), findingId: need(flags, 'finding'), verdict: need(flags, 'verdict'), by: need(flags, 'by'), note: flags.note }));
     if (sub === 'scorecard') return out(scorecard({ dir }));
     if (sub === 'pass') { const r = passPilot({ dir, by: need(flags, 'by'), minAccounts: rules.config.pilot.minAccounts }); if (!r.ok) process.exitCode = 1; return out(r.ok ? { passed: r.status } : { refused: r.reasons, totals: r.totals }); }
+  }
+
+  if (cmd === 'call') {   // PRD E15: call prep and outcome capture. Nothing here sends; nothing is recorded until a principal confirms
+    const id = need(flags, 'account');
+    if (sub === 'prep') {
+      const account = loadAccount(dir, id);
+      const client = flags['dry-run'] ? null : await makeClient();
+      const r = await runCallPrep({ client, dir, account, date: flags.date && flags.date !== true ? flags.date : today(), rules, dryRun: !!flags['dry-run'] });
+      if (r.dryRun) return out(`--- SYSTEM ---\n${r.system}\n\n--- USER ---\n${r.user}\n(inputs: ${r.inputs})`);
+      if (!r.ok) { process.exitCode = 1; return out(r); }
+      if (!r.usable) process.exitCode = 1;
+      return out(`${r.usable ? 'Call brief ready: every check passed.' : `NOT USABLE: ${r.problems.length} check(s) failed. Do not rely on it.\n${r.problems.map((e) => `- ${e.code}: ${e.message}`).join('\n')}`}${r.warnings.length ? `\nRead first: ${r.warnings.map((w) => w.code).join(', ')}` : ''}\nWritten: ${r.path} (estimated cost $${r.costUsd})`);
+    }
+    if (sub === 'show') {
+      const l = listCalls({ dir, id });
+      const b = flags.date && flags.date !== true ? l.briefs.find((x) => x.date === flags.date) : l.briefs[0];
+      return out(b?.md ?? `No call brief for ${id}${flags.date && flags.date !== true ? ` on ${flags.date}` : ''}. Run: outbound call prep --account ${id}`);
+    }
+    if (sub === 'log') {
+      const date = needDate(need(flags, 'date'));
+      const by = need(flags, 'by');
+      const src = need(flags, 'notes');
+      let notes;
+      if (src === '-') { const chunks = []; for await (const c of process.stdin) chunks.push(c); notes = Buffer.concat(chunks).toString('utf8'); }
+      else notes = readFileSync(src, 'utf8');
+      if (notes.length > MAX_NOTES) throw new Error(`The notes are ${notes.length} characters; the limit is ${MAX_NOTES}.`);
+      if (flags['dry-run']) { const p = buildExtractPrompt({ account: loadAccount(dir, id), date, notes }); return out(`--- SYSTEM ---\n${p.system}\n\n--- USER ---\n${p.user}\n(nothing saved)`); }
+      saveNotes({ dir, id, date, notes, by });
+      let client;
+      try { client = await makeClient(); } catch (e) { throw new Error(`The notes are saved (calls/${id}/${date}-notes.md), but reading them needs a model: ${e.message} Or queue it on the platform: outbound enqueue call.extract --account ${id} --date ${date} --by NAME`); }
+      const r = await runCallExtract({ client, dir, id, date, by, models: rules.models });
+      if (!r.ok) { process.exitCode = 1; return out(`The notes are saved, but the model call failed: ${r.reason}${r.detail ? ` (${r.detail})` : ''}. Nothing was recorded.`); }
+      return out(renderProposal(r.proposal, id));
+    }
+    if (sub === 'confirm') {
+      const r = confirmProposal({ dir, id, proposalId: need(flags, 'proposal'), by: need(flags, 'by'), rules });
+      return out(`Recorded the call of ${r.outcome.date} for ${id}: ${r.outcome.codes.join(', ') || 'no outcome codes'}.\n- A meeting event is in the touch log. The automated sequence for this bank is over; any follow-up is a principal's own message.\n- The outcome is on the account and in outcomes.jsonl, linked to ${r.outcome.originSignals.length} origin signal(s).\n- People named in the notes stay unconfirmed. Add one only with: outbound account set-person, then confirm-role.\n${r.followUp.hardStops.length ? `STOP before any follow-up: ${r.followUp.hardStops.join(', ')}.\n` : ''}Follow-up checklist (no email is drafted): ${r.followUp.path}`);
+    }
+    if (sub === 'reject') return out(rejectProposal({ dir, id, proposalId: need(flags, 'proposal'), by: need(flags, 'by'), reason: flags.reason === true ? '' : flags.reason }));
+    if (sub === 'list') {
+      const l = listCalls({ dir, id });
+      return out([
+        `${l.account.name}: ${l.briefs.length} call brief(s), ${l.proposals.filter((p) => p.status === 'pending').length} pending proposal(s), ${l.outcomes.length} confirmed outcome(s).`,
+        ...l.briefs.map((b) => `brief    ${b.date}  ${b.usable ? 'usable' : 'NOT USABLE'}${b.problems.length ? ` (${b.problems.map((e) => e.code).join(', ')})` : ''}`),
+        ...l.proposals.map((p) => `proposal ${p.id}  ${p.status}  ${p.outcomes.map((o) => o.code).join(', ')}`),
+        ...l.outcomes.map((o) => `outcome  ${o.date}  ${o.codes.join(', ')}  confirmed by ${o.confirmedBy}`),
+      ].join('\n'));
+    }
+  }
+
+  if (cmd === 'outcomes' && sub === 'report') {
+    const { report, path } = runOutcomesReport({ dir, config: rules.config, since: flags.since && flags.since !== true ? flags.since : null });
+    return out(`${renderOutcomesReport(report)}\n\nWritten: ${path}`);
   }
 
   if (cmd === 'suppress') {

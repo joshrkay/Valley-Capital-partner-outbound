@@ -19,6 +19,13 @@ export const LOADS = Object.freeze({
   draft: [...GUARD, 'accounts/', 'research/', 'facts/', 'drafts/'],
   sources: ['sources/'],
   score: ['sources/', 'candidates/'],
+  // Call prep and outcomes (PRD E15, src/calls.mjs). calls/, drafts/ and research/ are narrowed to one account by callLoads().
+  // outcomes.jsonl is only appended to by a confirmation, so only the report loads it.
+  callPrep: [...GUARD, 'accounts/', 'research/', 'drafts/', 'candidates/latest.json', 'paper/', 'calls/'],
+  callNotes: ['accounts/', 'calls/'],
+  callExtract: ['accounts/', 'calls/'],
+  callConfirm: [...GUARD, 'accounts/', 'calls/', 'paper/'],
+  outcomes: ['outcomes.jsonl', 'reports/'],
 });
 
 const covers = (prefix, rel) => prefix === '' || rel === prefix || (prefix.endsWith('/') && rel.startsWith(prefix)) || rel.startsWith(`${prefix}/`);
