@@ -13,7 +13,7 @@ The agents in `docs/outbound-plan.md` that exist so far:
 
 **The goal** (PRD section 0): purposeful outreach to the right person at the right time, backed by research into what paper the institution holds, what those loans look like, and where the firm has an advantage. **Nothing in this folder can send a message.** A principal sends; the guard then records it.
 
-Start with `docs/prd-signal-pipeline.md` for the pipeline, and `docs/research-agenda.md` for the briefer. The briefer's questions (`playbooks.json`) are that agenda turned into data.
+Start with `docs/prd-signal-pipeline.md` for the pipeline, and `docs/research-agenda.md` for the briefer. The next epics (E17 to E21: a backtest of the score, enforcement orders and merger applications, intermediaries, a market note, and credit unions and non-bank lenders) are in `docs/prd-next-five.md`; none is built yet. The briefer's questions (`playbooks.json`) are that agenda turned into data.
 
 ## Status: read this first
 
