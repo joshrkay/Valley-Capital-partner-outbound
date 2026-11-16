@@ -42,7 +42,7 @@ export async function Calls({ client, id }) {
   const b = c.latestBrief;
   return (
     <>
-      <h2>Calls</h2>
+      <h2 id="calls">Calls</h2>
       <div className="grid2">
         <div className="panel">
           <h3 style={{ marginTop: 0 }}>Before the call</h3>

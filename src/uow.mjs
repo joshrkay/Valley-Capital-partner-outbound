@@ -91,12 +91,21 @@ export const LOADS = Object.freeze({
   // touch log, because a sender a recorded touch names is never removed.
   senders: ['senders.json', 'KILL'],
   senderRemove: ['senders.json', 'touches.jsonl', 'KILL'],
+  // The call desk (web app): what a principal reads aloud on a call. The guard's files, the one account and its drafts, read only. It
+  // never holds research/, facts/, paper/, routes/ or regulatory/, so the screen shows only what a person approved, as the drafter does.
+  callDesk: [...GUARD, 'accounts/', 'drafts/'],
 });
 
 // The recording actions' load list, narrowed to the one account they record against.
 export function recordLoads(id) {
   safeId(id);
   return LOADS.record.map((p) => (p === 'accounts/' ? `accounts/${id}.json` : p));
+}
+
+// The call desk's load list, narrowed to one account and its own drafts folder.
+export function callDeskLoads(id) {
+  safeId(id);
+  return LOADS.callDesk.map((p) => (p === 'accounts/' ? `accounts/${id}.json` : p === 'drafts/' ? `drafts/${id}/` : p));
 }
 
 // The contact actions' load lists, narrowed to one account where the action touches only that account.

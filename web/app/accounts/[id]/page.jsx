@@ -50,7 +50,7 @@ export default async function Account({ params }) {
             <label>Step<input type="number" name="step" min="1" defaultValue={drafts.length + 1} style={{ width: 70 }} /></label>
             <button className="secondary" type="submit">Queue draft</button>
           </form>
-          {drafts.length ? <ul className="small">{drafts.map((x) => <li key={`${x.step}-${x.channel}`}>Step {x.step}, {x.channel}: {x.status}{x.approvedBy ? ` by ${x.approvedBy}` : ''}</li>)}</ul> : null}
+          {drafts.length ? <ul className="small">{drafts.map((x) => <li key={`${x.step}-${x.channel}`}>Step {x.step}, {x.channel}: {x.status}{x.approvedBy ? ` by ${x.approvedBy}` : ''}{x.channel === 'call' && x.status === 'approved' ? <> · <a href={`/accounts/${encodeURIComponent(a.id)}/call`}>open the call desk</a></> : null}</li>)}</ul> : null}
         </div>
       </div>
 
