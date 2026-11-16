@@ -147,3 +147,37 @@ test('the labels run keeps the E2 contract: one run-log line with counts only; a
   assert.equal(ch.length, 1);
   assert.deepEqual([ch[0].old, ch[0].new], ['2023-08-01', '2023-08-15']);
 });
+
+test('ENFORCEMENT ORDER (E17-S2, from E18-S2): built, off by default; on, one label per formal order against a listed bank, by name; terminations, penalties and individuals give none', async () => {
+  const dir = await world();
+  const bank = { CERT: '201', NAME: 'Example Hill Bank', CITY: 'Sampleton', STALP: 'TX' };
+  put(dir, 'sources/fdic/institutions.json', { 201: bank });
+  const party = { name: bank.NAME, city: bank.CITY, state: bank.STALP };
+  const src = { source: 'test', endpoint: 'test', query: {}, recordId: 'x', period: '2023-01-01', fetchedAt: NOW.toISOString(), runId: 'test' };
+  const rec = (key, over) => ({ key, regulator: 'frb', sourceId: key.split(':')[1], type: 'cease_and_desist', types: ['cease_and_desist'], date: '2023-03-17', terminatedOn: null, parties: [party], link: null, linkKind: null, kind: 'order', _source: src, ...over });
+  put(dir, 'sources/enforcement/orders.json', {
+    'frb:1': rec('frb:1', {}),
+    'frb:2': rec('frb:2', { type: 'civil_money_penalty', types: ['civil_money_penalty'], date: '2023-04-01' }),
+    'frb:3': rec('frb:3', { kind: 'termination', terminates: 'frb:1', date: '2023-12-01' }),
+  });
+  put(dir, 'sources/enforcement/occ-orders.json', { 'occ:AA-WE-2023-9': rec('occ:AA-WE-2023-9', { regulator: 'occ', sourceId: 'AA-WE-2023-9', type: 'written_agreement', types: ['written_agreement'], date: '2023-06-30', link: 'https://www.occ.gov/static/enforcement-actions/eaAA-WE-2023-9.pdf' }) });
+  // Off by default: built, listed as off, no labels.
+  const off = buildLabels({ dir, config: cfg(), now: NOW, clock: () => NOW });
+  assert.equal(off.outcome, 'ok');
+  assert.equal(readLabels(dir).kinds.enforcement_order.status, 'off');
+  assert.match(readLabels(dir).kinds.enforcement_order.reasons.join(' '), /labelKinds/);
+  assert.equal(readLabels(dir).labels.filter((x) => x.kind === 'enforcement_order').length, 0);
+  // On: the Fed's cease and desist and the OCC's written agreement; not the penalty, not the termination.
+  const r = buildLabels({ dir, config: cfg({ labelKinds: ['failure', 'enforcement_order'] }), now: NOW, clock: () => NOW });
+  assert.equal(r.outcome, 'ok', JSON.stringify(r));
+  const l = readLabels(dir);
+  const eo = l.labels.filter((x) => x.kind === 'enforcement_order');
+  assert.deepEqual(eo.map((x) => [x.key, x.date, x.sources[0].source, x.sources[0].ids[0]]), [[`fdic:${bank.CERT}`, '2023-03-17', 'enforcement:frb', '1'], [`fdic:${bank.CERT}`, '2023-06-30', 'enforcement:occ', 'AA-WE-2023-9']]);
+  assert.match(eo[0].sources[0].link, /^https:\/\//, 'an order with no document is linked to its regulator\'s list');
+  assert.equal(eo[1].sources[0].link, 'https://www.occ.gov/static/enforcement-actions/eaAA-WE-2023-9.pdf');
+  assert.equal(l.kinds.enforcement_order.status, 'on');
+  assert.equal(l.kinds.enforcement_order.labels, 2);
+  // No leakage: the kind reads no Call Report field a scoring component reads.
+  const comp = componentFields(rules.scoring);
+  assert.ok(!LABEL_KINDS.enforcement_order.fields.some((f) => comp.has(f)));
+});
