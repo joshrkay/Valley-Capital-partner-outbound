@@ -23,7 +23,7 @@ Start with `docs/prd-signal-pipeline.md` for the pipeline, and `docs/research-ag
 - **Counsel has not reviewed any of it,** including the claims and the channel rules.
 - **The FDIC adapter has run live** (2026-11-13): 268 banks, 8 quarters to June 30, 2026, about 7 seconds, public data with no key. The scoring weights, thresholds and tier cuts in `scoring.json` are **placeholders**. The buy box (`buybox.json`) has `[CONFIRM]` fields a principal must fill. Until then `score run` refuses, or with `--draft-buybox` it labels its list PROVISIONAL.
 - **The CMBS adapter has run live** on 40 trusts (2026-11-13) with a generic User-Agent. `config.sec.userAgent` stays a `[CONFIRM]` placeholder, and the adapter refuses to run until a principal fills it with the firm's name and contact (PRD Q11).
-- **Enforcement orders have run live, from the Federal Reserve only** (2026-11-16): 1,563 orders against organizations, 20 naming a bank in the list. FDIC, OCC and state orders are not built (PRD next-five E18-S2). Orders add no points (D-E1).
+- **Enforcement orders have run live, from the Federal Reserve only** (2026-11-16): 1,563 orders against organizations, 20 naming a bank in the list. **FDIC orders are built blind and run on a principal's machine** (see below); their first run there is the test. OCC and state orders are not built (PRD next-five E18-S2). Orders add no points (D-E1).
 - **The platform is built but not deployed.** The migrations and their access rules pass 16 tests on Postgres 16 (`npm run test:db`). The client, worker and web app are tested against a fake of Supabase's REST API; the first run against a real project is E12-S7, which needs a Supabase project and a Vercel team (PRD Q17, Q18).
 - **Not built yet:**
   - county records (PRD E5; the spike first);
@@ -31,7 +31,7 @@ Start with `docs/prd-signal-pipeline.md` for the pipeline, and `docs/research-ag
   - a contact-data vendor's API (E7-S2 tests a vendor's exported results; no vendor is wired in);
   - deploying the platform (E12-S7);
   - Gmail drafts and reply detection (E9);
-  - enforcement orders from the FDIC, the OCC and the states (next-five E18-S2 has the Federal Reserve only), and merger applications (E18-S3);
+  - enforcement orders from the OCC and the states (next-five E18-S2 has the Federal Reserve, and the FDIC on a principal's machine), and merger applications (E18-S3);
   - quarterly nurture (E10);
   - the referral mapper's drafted ask to a connector (E22 finds the routes and gives a checklist; it drafts nothing, PRD D-R7), and county records that name a lender's counsel (E22-S3 has the event shape and the seam, no adapter);
   - meeting prep beyond the call brief (event lists, who to meet, and a drafted follow-up email: PRD E15-S3 gives a checklist today);
@@ -255,7 +255,11 @@ Property names and addresses are kept in the ledger for a principal. They never 
 
 ### Enforcement orders (PRD next-five E18-S2)
 
-An enforcement order is a dated sign that an examiner has told a bank to clean up its problem assets, and it reaches banks the SEC never sees. Only the Federal Reserve's orders are built. The FDIC's, which cover most banks in our list, the OCC's and the states' are not.
+An enforcement order is a dated sign that an examiner has told a bank to clean up its problem assets, and it reaches banks the SEC never sees. Two regulators are built:
+- the Federal Reserve's orders, read by the worker;
+- the FDIC's, which cover most banks in our list, read on a principal's machine (below).
+
+The OCC's and the states' are not built.
 
 ```bash
 npm run outbound -- sources run enforcement             # the Fed's action files (no key), then each new matched order's document, for fixed phrases only
@@ -270,6 +274,21 @@ npm run outbound -- enforcement alias --key fdic:CERT --name "Example Bancorp, I
 - **Matching by name.** The Fed gives no cert. An order matches a bank by exact name and state, or by an alias a principal added. A holding company matches only through an alias. Nothing is guessed.
 - **Signals, no points.** An order is an event signal on the candidate. An order in force with no termination recorded is a state signal, which ends at its termination. The card states each from a fixed template. The windows are placeholders in `scoring.json` `enforcement`.
 - The worker runs it monthly (`sources.enforcement`). It is context for the principals only: no research, drafting or call action loads `sources/enforcement/`.
+
+**FDIC orders, on your own machine.** The FDIC's order lists are on orders.fdic.gov, a site that draws them in the browser, so a headless Chrome reads the public page. Nothing appears on screen, and the site's internal API is not called. It runs on a principal's computer because the platform's worker has no browser:
+
+```bash
+npm run fdic-orders:setup                               # once: Playwright and its Chromium (not saved to package.json; again after npm ci)
+npm run outbound -- sources run fdicorders              # each month, after the FDIC's release (usually the last Friday); the first run reads 12 months
+npm run outbound -- sources verify fdicorders           # fresh, every party an organization, every release on www.fdic.gov captured
+npm run outbound -- platform push                       # then copy the data folder into the platform, if you use it
+```
+
+- **Built blind.** The rendered table could not be seen from where this was written, so columns are mapped by their header words.
+  - If the first run fails with "no table with a name column and a type column", run it again with `--debug-capture ~/fdic-shape.json` and send that file to a developer.
+  - The file holds the headers and the table's shape. Every word that is not an enforcement term, an organization word, a state or a month is masked, so it names no one.
+- **No people.** Rows against individuals (prohibitions, Section 19, a respondent with no organization word) are skipped as the table is read. Deposit-insurance terminations and waiver orders are skipped too.
+- FDIC orders carry no phrase flags yet: their PDFs are on a host Node cannot verify.
 
 ### Routes to the decision-maker (PRD E22)
 
@@ -449,7 +468,7 @@ It stores no message text, and writes an audit line for every decision.
 | `supabase/migrations/` | The platform's tables, access rules and functions. Structure only, no data |
 | `web/` | The principals' web app (Next.js) |
 | `.github/workflows/` | The platform worker's schedule (off until enabled) |
-| `src/` | `guard`, `research`, `draft`, `lint`, `model` (the only file that calls the Anthropic API), `rules`, `store`, `paths`, plus the pipeline: `sources/` (`http`, `runlog`, `fdic`, `edgar`, `fdicsales`, `filings`, `enforcement`), `metrics`, `score`, `paper` (the paper estimate), `candidates`, `triage`, `sales`, `pilot`, call prep and outcomes: `calls`, `outcomes`, routes to the decision-maker: `network`, `routes`, the backtest: `backtest/` (`panel`, `labels`, `run`), and the platform: `uow`, `platform/` (`client`, `worker`, `move`) |
+| `src/` | `guard`, `research`, `draft`, `lint`, `model` (the only file that calls the Anthropic API), `rules`, `store`, `paths`, plus the pipeline: `sources/` (`http`, `runlog`, `fdic`, `edgar`, `fdicsales`, `filings`, `enforcement`, `fdicorders`), `metrics`, `score`, `paper` (the paper estimate), `candidates`, `triage`, `sales`, `pilot`, call prep and outcomes: `calls`, `outcomes`, routes to the decision-maker: `network`, `routes`, the backtest: `backtest/` (`panel`, `labels`, `run`), and the platform: `uow`, `platform/` (`client`, `worker`, `move`) |
 | `scripts/sync-site.mjs` | Refreshes `site-snapshot/` from the website repository (see below) |
 | `site-snapshot/` | A copy of the 7 website files the rules depend on, a list of the site's pages, and a record of the commit it came from. Committed. Refresh it; do not edit it. |
 | `docs/` | The plan, the research agenda, and the PRD for the signal pipeline |

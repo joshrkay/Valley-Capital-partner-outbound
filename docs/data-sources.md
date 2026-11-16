@@ -368,7 +368,7 @@ Each step is a story with acceptance criteria in the PRD's format, and each ship
 
 | Adapter | Hosts |
 |---|---|
-| FDIC | api.fdic.gov, www.fdic.gov, orders.fdic.gov (orders.fdic.gov failed TLS verification through the development environment's proxy on 2026-11-16; the enforcement adapter's FDIC source waits on it) |
+| FDIC | api.fdic.gov, www.fdic.gov, orders.fdic.gov. orders.fdic.gov omits its intermediate certificate (DigiCert EV RSA CA G2), so Node and curl fail TLS on it; the FDIC orders adapter (PRD next-five E18-S2) reads it in a headless browser on a principal's machine, which fetches the intermediate itself |
 | Backtest (PRD E17) | api.fdic.gov, through the FDIC client; it reads the SEC and www.fdic.gov records only as their own adapters stored them |
 | SEC | www.sec.gov, efts.sec.gov, data.sec.gov |
 | FFIEC | cdr.ffiec.gov, www.ffiec.gov |

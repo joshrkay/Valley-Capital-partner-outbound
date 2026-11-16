@@ -9,6 +9,7 @@ import { runEdgar } from './src/sources/edgar.mjs';
 import { verifyFdic, verifyEdgar } from './src/sources/verify.mjs';
 import { runFilings, verifyFilings, loadFilingRules, discoveredFilers } from './src/sources/filings.mjs';
 import { runFdicSales, verifyFdicSales } from './src/sources/fdicsales.mjs';
+import { runFdicOrders, verifyFdicOrders } from './src/sources/fdicorders.mjs';
 import { runEnforcement, verifyEnforcement, unmatchedOrders, aliasParty, ordersFor, ordersByBank, TYPES as ORDER_TYPES } from './src/sources/enforcement.mjs';
 import { buildLedger, readLedger, listSales, groupBySeller, groupBuyers, pricing, verifyLedger } from './src/sales.mjs';
 import { suggestFilers, confirmFiler, rejectFiler, filerStatus } from './src/sources/filers.mjs';
@@ -105,8 +106,12 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound sources run enforcement                enforcement orders (PRD next-five E18-S2): the Federal Reserve's actions against organizations,
                                                   with their type, dates and terminations; actions against individuals are skipped. Reads
                                                   the order document of orders naming a bank in the list, for fixed phrases only
+  outbound sources run fdicorders [--since YYYY-MM-DD] [--debug-capture FILE]   FDIC orders (E18-S2), ON A PRINCIPAL'S MACHINE: the monthly
+                                                  releases on www.fdic.gov, then each one's order list on orders.fdic.gov in a headless
+                                                  browser (first: npm run fdic-orders:setup). Individuals skipped. --debug-capture writes
+                                                  the table's shape with every name masked, if the columns cannot be mapped
   outbound sources status                         the last run of each source, and the latest FDIC quarter seen
-  outbound sources verify [fdic|edgar|filings|fdicsales|enforcement] [--sample N]   check the stored data against the live sources (read-only): fresh, complete,
+  outbound sources verify [fdic|edgar|filings|fdicsales|enforcement|fdicorders] [--sample N]   check the stored data against the live sources (read-only): fresh, complete,
                                                   values and ratios equal FDIC's own, every failure and deal stored, the CMBS parser equal
                                                   to a plain count, stored filings found again; plus a short list of records with their
                                                   public URL to compare by eye. Exits 1 on any failure. WARN flags a gap in FDIC's own data
@@ -250,6 +255,7 @@ async function runVerify(dir, which, rules, flags) {
   if (!which || which === 'edgar') reports.push(await verifyEdgar({ dir, sec: rules.config.sec, sample }));
   if (which === 'filings') reports.push(await verifyFilings({ dir, sec: rules.config.sec, rules: loadFilingRules(), sample }));
   if (which === 'fdicsales') reports.push(await verifyFdicSales({ dir, fdic: rules.config.fdic, personalDomains: rules.config.personalDomains, sample }));
+  if (which === 'fdicorders') reports.push(await verifyFdicOrders({ dir, enforcement: rules.config.enforcement, sample }));
   if (which === 'enforcement') reports.push(await verifyEnforcement({ dir, enforcement: rules.config.enforcement, hqStates: rules.metros.hqStates, sample }));
   if (which === 'sales') reports.push(verifyLedger({ dir, sample }));
   if (which === 'backtest') reports.push(verifyPanel({ dir, config: rules.config.backtest }));
@@ -431,13 +437,18 @@ async function main() {
       if (r.outcome === 'failed') process.exitCode = 1;
       return out(r);
     }
+    if (sub === 'run' && pos[2] === 'fdicorders') {   // FDIC orders (PRD next-five E18-S2), on a principal's machine with Playwright
+      const r = await runFdicOrders({ dir, enforcement: rules.config.enforcement, since: opt(flags, 'since') ?? null, debugCapture: opt(flags, 'debug-capture') ?? null });
+      if (r.outcome === 'failed') process.exitCode = 1;
+      return out(r);
+    }
     if (sub === 'run' && pos[2] === 'enforcement') {   // enforcement orders (PRD next-five E18-S2)
       const r = await runEnforcement({ dir, enforcement: rules.config.enforcement });
       if (r.outcome === 'failed') process.exitCode = 1;
       return out(r);
     }
     if (sub === 'run') {
-      if (!['fdic', 'edgar', 'fdicsales'].includes(pos[2])) throw new Error('Usage: outbound sources run fdic [--include-hq] | outbound sources run edgar | outbound sources run fdicsales | outbound sources run enforcement | outbound sources run filings [--since YYYY-MM-DD]');
+      if (!['fdic', 'edgar', 'fdicsales'].includes(pos[2])) throw new Error('Usage: outbound sources run fdic [--include-hq] | outbound sources run edgar | outbound sources run fdicsales | outbound sources run enforcement | outbound sources run fdicorders | outbound sources run filings [--since YYYY-MM-DD]');
       const r = pos[2] === 'fdic' ? await runFdic({ dir, metros: rules.metros, includeHq: !!flags['include-hq'] })
         : pos[2] === 'fdicsales' ? await runFdicSales({ dir, fdic: rules.config.fdic, personalDomains: rules.config.personalDomains })
         : await runEdgar({ dir, metros: rules.metros, buybox: rules.buybox, scoring: rules.scoring, sec: rules.config.sec });

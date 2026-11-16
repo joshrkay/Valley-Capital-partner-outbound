@@ -50,8 +50,13 @@ export const NO_TERMINATION = '1950-01-01';
 
 export const enforcementPaths = (dir) => {
   const base = join(dir, 'sources', 'enforcement');
-  return { base, orders: join(base, 'orders.json'), state: join(base, 'state.json') };
+  return { base, orders: join(base, 'orders.json'), state: join(base, 'state.json'), fdicOrders: join(base, 'fdic-orders.json'), fdicState: join(base, 'fdic-state.json') };
 };
+
+// Every stored order and termination, from every regulator's store: the Federal Reserve's (orders.json, written by runEnforcement) and
+// the FDIC's (fdic-orders.json, written by src/sources/fdicorders.mjs on a principal's machine). Keys never collide: frb:<id> and
+// fdicorder:<id>. Each store has its own writer, so neither run can drop the other's records.
+export const loadAllOrders = (dir) => ({ ...readJson(enforcementPaths(dir).orders, {}), ...readJson(enforcementPaths(dir).fdicOrders, {}) });
 
 // ---- Types ---------------------------------------------------------------------------------------------------------------------
 // Codes, labels from code only. ACTIVE types are orders that stay in force until terminated; a penalty is a one-off.
@@ -66,7 +71,7 @@ export const TYPES = Object.freeze({
   termination: 'termination',
 });
 export const ACTIVE_TYPES = Object.freeze(['consent_order', 'cease_and_desist', 'written_agreement', 'pca_directive']);
-export const REGULATORS = Object.freeze({ frb: 'Federal Reserve' });
+export const REGULATORS = Object.freeze({ frb: 'Federal Reserve', fdic: 'FDIC' });
 const PRECEDENCE = ['pca_directive', 'cease_and_desist', 'consent_order', 'written_agreement', 'civil_money_penalty', 'modification', 'other'];
 
 // Kinds of action that are against individuals by definition, whatever else the record says.
@@ -380,7 +385,7 @@ const article = (s) => (/^[aeiou]/i.test(s) ? 'an' : 'a');
 // an order of an ACTIVE type with no termination recorded also gives a STATE signal ('enforcement_active'), which ends when its
 // termination is recorded; a termination gives an event ('enforcement_terminated'). Labels are fixed templates over codes and dates.
 export function enforcementSignals({ dir, institutions, aliases } = {}) {
-  const orders = readJson(enforcementPaths(dir).orders, {});
+  const orders = loadAllOrders(dir);
   const ctx = { institutions: institutions ?? readJson(fdicPaths(dir).institutions, {}), aliases: aliases ?? loadAliases(dir) };
   const out = {};
   const terminated = new Set(Object.values(orders).filter((r) => r?.kind === 'termination').map((r) => r.terminates));
@@ -409,7 +414,7 @@ export function enforcementSignals({ dir, institutions, aliases } = {}) {
 // Stored order records (orders and terminations) by bank key, each list newest first: for `outbound enforcement list` and the
 // briefer's later use (E18-S4). One pass over the orders.
 export function ordersByBank({ dir }) {
-  const orders = readJson(enforcementPaths(dir).orders, {});
+  const orders = loadAllOrders(dir);
   const ctx = { institutions: readJson(fdicPaths(dir).institutions, {}), aliases: loadAliases(dir) };
   const out = new Map();
   for (const r of Object.values(orders)) for (const k of orderBanks(r, ctx)) out.set(k, [...(out.get(k) ?? []), r]);
@@ -434,7 +439,7 @@ const reviewParty = (x, { institutions, aliases, hqStates }) => {
 const inWindow = (r, from) => r.date >= from || (r.terminatedOn && r.terminatedOn >= from);
 
 export function unmatchedOrders({ dir, enforcement = {}, hqStates = [], now = new Date() }) {
-  const orders = readJson(enforcementPaths(dir).orders, {});
+  const orders = loadAllOrders(dir);
   const ctx = { institutions: readJson(fdicPaths(dir).institutions, {}), aliases: loadAliases(dir), hqStates };
   const from = addDays(ymdOf(now), -(enforcement.reviewWindowDays ?? 1825));
   const rows = [];
@@ -498,7 +503,7 @@ export async function verifyEnforcement({ dir, enforcement = {}, hqStates = [], 
   const review = unmatchedOrders({ dir, enforcement, hqStates, now });
   const reviewKeys = new Set(review.map((r) => r.key));
   const from = addDays(ymdOf(now), -(enforcement.reviewWindowDays ?? 1825));
-  const windowed = recs.filter((r) => r.kind === 'order' && inWindow(r, from));
+  const windowed = Object.values(loadAllOrders(dir)).filter((r) => r.kind === 'order' && inWindow(r, from));   // every regulator's, as the review list is
   const matched = windowed.filter((r) => orderBanks(r, ctx).length);
   const neither = windowed.filter((r) => !orderBanks(r, ctx).length && (r.parties ?? []).some((x) => reviewParty(x, ctx)) && !reviewKeys.has(r.key));
   checks.push(check('enforcement.matched', !neither.length, `${windowed.length} order(s) in the review window: ${matched.length} matched to a bank in the list, ${review.length} on the review list (outbound enforcement unmatched), and ${windowed.length - matched.length - review.length} naming no party in the metros' states or like a bank in the list.${neither.length ? ` ${neither.length} should be on the review list and are not: a bug.` : ''}`, neither.length ? { neither: neither.slice(0, 10).map((r) => r.key) } : undefined));
