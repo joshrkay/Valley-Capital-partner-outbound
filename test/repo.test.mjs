@@ -67,7 +67,7 @@ test('every configured model has a price, so cost is always reported', () => {
 // the network. backtest/ (PRD E17) holds the point-in-time panel, the labels and the reports, which name banks: src/backtest/ is code.
 const dataFormat = (f) => /(\.(json|jsonl|md|txt)|\/[^/.]+)$/.test(f);
 const isDataFile = (f) => /(^|\/)(suppression\.json|touches\.jsonl|audit\.jsonl|senders\.json|runs\.jsonl|changes\.jsonl|KILL|\.env)$/.test(f)
-  || (dataFormat(f) && /(^|\/)(accounts|research|briefs|drafts|facts|data|candidates|pilot|paper|triage|sales|contacts|network|routes|backtest)\//.test(f))
+  || (dataFormat(f) && /(^|\/)(accounts|research|briefs|drafts|facts|data|candidates|pilot|paper|triage|sales|contacts|network|routes|backtest|intermediaries)\//.test(f))
   || /^sources\//.test(f);
 
 test('DATA RULE: the data-folder names cover the firm\'s network and the routes, and leave code and rule files alone', () => {
@@ -120,4 +120,11 @@ test('preferred terms exist for the audiences that have researched vocabulary, a
   assert.ok(rules.terminology.prefer.servicer.includes('note sale'));
   const guide = readFileSync(join(REPO, 'site-snapshot', 'docs/terminology.md'), 'utf8').toLowerCase();
   for (const w of rules.terminology.prefer.bank) assert.ok(guide.includes(w.toLowerCase()), `"${w}" is not in the website's docs/terminology.md (snapshot)`);
+});
+
+test('DATA RULE: intermediaries/ (next-five E19) is a data folder: its registry, records and registrations are never tracked', () => {
+  for (const f of ['intermediaries/registry.json', 'intermediaries/manual.json', 'intermediaries/registrations.json', 'data/intermediaries/registry.json'])
+    assert.equal(isDataFile(f), true, `${f} is a data file`);
+  for (const f of ['src/intermediaries.mjs', 'test/intermediaries.test.mjs', 'web/app/intermediaries/page.jsx', 'web/app/intermediaries/actions.js'])
+    assert.equal(isDataFile(f), false, `${f} is code`);
 });

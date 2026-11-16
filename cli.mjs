@@ -14,6 +14,7 @@ import { runOccOrders, verifyOccOrders } from './src/sources/occorders.mjs';
 import { runMergerApps, verifyMergerApps, mergerPaths, KINDS as MERGER_KINDS } from './src/sources/mergerapps.mjs';
 import { runEnforcement, verifyEnforcement, unmatchedOrders, aliasParty, ordersFor, ordersByBank, TYPES as ORDER_TYPES } from './src/sources/enforcement.mjs';
 import { buildLedger, readLedger, listSales, groupBySeller, groupBuyers, pricing, verifyLedger } from './src/sales.mjs';
+import { writeRegistry } from './src/intermediaries.mjs';
 import { suggestFilers, confirmFiler, rejectFiler, filerStatus } from './src/sources/filers.mjs';
 import { LOADS } from './src/uow.mjs';
 import { runScoring } from './src/score.mjs';
@@ -137,6 +138,26 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
 
   Merger applications (PRD next-five E18-S3): signals only, no points. Never in a message.
   outbound mergers list [--all]                   open applications naming a bank in the list (--all: every stored one), newest first
+  outbound intermediaries build                   the registry (next-five E19): firms acting for sellers, from stored data only; also
+                                                  rebuilt whenever the sale ledger is
+  outbound intermediaries list [--kind K]         ranked, with each firm's score, mandates and registration state
+  outbound intermediaries show --key KEY          one firm: its score by component, every mandate with its source, its referrals
+  outbound intermediaries mandate --firm NAME --kind K --seller S --date D --how TEXT --by NAME
+                                                  a principal's record that a firm acted for a named seller (S: fdic:CERT, ...)
+  outbound intermediaries referral --firm NAME --seller S --date D --by NAME
+                                                  a call named this firm as the way in: kept apart, never ranked
+  outbound intermediaries direct --seller S --date D --how TEXT --by NAME
+                                                  evidence the seller sold WITHOUT an advisor (the only way a route is "direct")
+  outbound intermediaries alias --key KEY --alias NAME --by NAME
+  outbound intermediaries register --key KEY --state STATE --by NAME [--recertify-by YYYY-MM-DD]
+                                                  buyer-list registration with a loan-sale advisor (owner: Josh, D-I2)
+  outbound intermediaries credibility-approved --by NAME
+                                                  the credibility package (D9) is approved: only then may proof of funds be sent
+  outbound intermediaries nda --key KEY --type asset|institution --value V --by NAME
+                                                  something learned under an advisor's agreement: onto the NDA list
+  outbound intermediaries route --seller fdic:CERT
+                                                  how a seller sells: unknown, advisor, direct or both
+  outbound intermediaries reminders               buyer-list re-certifications due soon
   outbound mergers gap                            mergers seen only at their close (no H.2 application named them): the count
                                                   that decides whether an OCC applications reader is worth building (Q5)
 
@@ -485,6 +506,7 @@ async function main() {
         : await runEdgar({ dir, metros: rules.metros, buybox: rules.buybox, scoring: rules.scoring, sec: rules.config.sec });
       // The CMBS and FDIC loan-sale runs end by rebuilding the sale ledger (PRD E16), so a liquidation reported this month is kept.
       if (pos[2] !== 'fdic' && r.outcome !== 'failed') r.ledger = buildLedger({ dir, config: rules.config });
+      if (r.ledger && r.ledger.outcome !== 'failed') r.intermediaries = writeRegistry({ dir, config: rules.config });   // next-five E19-S1
       if (r.outcome === 'failed' || r.ledger?.outcome === 'failed') process.exitCode = 1;
       return out(r);
     }
@@ -497,7 +519,7 @@ async function main() {
   }
 
   if (cmd === 'sales') {   // the who-sells-to-whom ledger (PRD E16); built from stored data only, so nothing here fetches
-    if (sub === 'build') { const r = buildLedger({ dir, config: rules.config }); if (r.outcome === 'failed') process.exitCode = 1; return out(r); }
+    if (sub === 'build') { const r = buildLedger({ dir, config: rules.config }); if (r.outcome === 'failed') process.exitCode = 1; else r.intermediaries = writeRegistry({ dir, config: rules.config }); return out(r); }
     if (sub === 'verify') { if (!(await runVerify(dir, 'sales', rules, flags))) process.exitCode = 1; return; }
     const ledger = readLedger(dir);
     const label = new Map(rules.metros.metros.map((m) => [m.cbsa, m.label]));
@@ -524,6 +546,49 @@ async function main() {
       const pr = pricing(ledger);
       return out(`${head}\n${pr.label}\n\n${pr.groups.map((g) => `${g.propertyType} · ${label.get(g.metro) ?? g.metro ?? 'metro not stated'}: ${g.events} liquidation(s), ${g.withRecovery} with balance and loss; implied recovery ${pctOf(g.impliedRecovery)}${g.withRecovery > 1 ? `, range ${(g.min * 100).toFixed(1)}–${(g.max * 100).toFixed(1)}%` : ''}`).join('\n')}${pr.rows.length ? `\n\n${pr.rows.map((r) => `${r.date}  ${r.kind.padEnd(20)} ${r.propertyType} · ${label.get(r.metro) ?? r.metro ?? ''}  balance ${money(r.balance)}  loss ${money(r.loss)}  ${pctOf(r.impliedRecovery)}  (${r.seller ?? ''}; ${r.id})`).join('\n')}` : '\nNo CMBS liquidation recorded yet.'}`);
     }
+  }
+
+  if (cmd === 'intermediaries') {   // next-five E19: firms that act for sellers. For the principals; never in a message
+    const I = await import('./src/intermediaries.mjs');
+    const ic = rules.config.intermediaries ?? {};
+    const today = new Date().toISOString().slice(0, 10);
+    const reg = () => I.readRegistry(dir) ?? (I.writeRegistry({ dir, config: rules.config }), I.readRegistry(dir));
+    const regState = (k) => I.readRegistrations(dir).firms?.[k]?.state ?? null;
+    const usd = (v) => `$${Math.round(v).toLocaleString('en-US')}`;
+    if (sub === 'build') return out(I.writeRegistry({ dir, config: rules.config }));
+    if (sub === 'list') {
+      const rows = I.rankFirms({ registry: reg(), config: rules.config, buybox: rules.buybox, asOf: today }).filter((r) => !flags.kind || r.kinds.includes(flags.kind));
+      const line = (r, i) => `${String(i + 1).padStart(3)}. ${r.name}  [${r.key}]  score ${r.score}  ${r.kinds.map((k) => I.KINDS[k]).join(', ')}\n     ${r.mandates} mandate(s), latest ${r.latest ?? '-'}${r.referrals ? `, ${r.referrals} referral(s) (not ranked)` : ''}${regState(r.key) ? `; buyer list: ${regState(r.key)}` : ''}`;
+      return out(`${rows.length} firm(s)${flags.kind ? ` of kind ${flags.kind}` : ''}, ranked (weights are placeholders, D-I3).\n\n${rows.map(line).join('\n')}`);
+    }
+    if (sub === 'show') {
+      const key = need(flags, 'key'); const R = reg();
+      const row = I.rankFirms({ registry: R, config: rules.config, buybox: rules.buybox, asOf: today }).find((r) => r.key === key);
+      if (!row) throw new Error(`${key} is not in the registry.`);
+      const ms = R.firms[key].mandates.map((id) => R.mandates[id]);
+      const comp = row.components.map((c) => `  ${c.id}: ${c.value} -> ${c.points} of ${c.weight}${c.note ? ` (${c.note})` : ''}`).join('\n');
+      const mand = ms.map((m) => `  ${m.date ?? '-'}  ${m.kind}  for ${m.seller?.name ?? 'unknown'}${m.sellerDescription ? ` (${m.sellerDescription})` : ''}${m.metro ? `  metro ${m.metro}` : ''}${m.balance ? `  ${usd(m.balance)}` : ''}  [${m.id}, ${m.feeder}]${m.how ? `\n      how: ${m.how} (${m.by})` : ''}`).join('\n');
+      const refs = R.firms[key].referrals.length ? `\n\nReferrals (not ranked):\n${R.firms[key].referrals.map((x) => `  ${x.date}  for ${x.seller?.name}  (${x.by})`).join('\n')}` : '';
+      return out(`${row.name} [${key}]: ${row.kinds.map((k) => I.KINDS[k]).join(', ')}. Score ${row.score}.\n${comp}\nBuyer list: ${regState(key) ?? 'not_started'}\n\nMandates:\n${mand}${refs}`);
+    }
+    if (sub === 'mandate') { const r = I.addMandate({ dir, firmName: flags.firm, kind: flags.kind, seller: flags.seller, date: flags.date, how: flags.how, by: flags.by }); I.writeRegistry({ dir, config: rules.config }); return out(r.already ? `Already recorded (${r.id}).` : `Mandate recorded (${r.id}); the registry is rebuilt.`); }
+    if (sub === 'referral') { const r = I.addReferral({ dir, firmName: flags.firm, seller: flags.seller, date: flags.date, by: flags.by }); I.writeRegistry({ dir, config: rules.config }); return out(r.already ? 'Already recorded.' : `Referral recorded for ${r.firmName}. It is shown on the firm, and never counts toward the ranking.`); }
+    if (sub === 'direct') { const r = I.addDirectSale({ dir, seller: flags.seller, date: flags.date, how: flags.how, by: flags.by }); return out(r.already ? 'Already recorded.' : `Recorded: ${r.seller.name} sold without an advisor on ${r.date}.`); }
+    if (sub === 'alias') { const r = I.addFirmAlias({ dir, key: flags.key, alias: flags.alias, by: flags.by }); I.writeRegistry({ dir, config: rules.config }); return out(`"${r.alias}" now means ${r.key}; the registry is rebuilt.`); }
+    if (sub === 'credibility-approved') { const r = I.approveCredibilityPackage({ dir, by: flags.by }); return out(`Recorded: the credibility package is approved by ${r.approvedBy}. Proof of funds may now be sent to an advisor.`); }
+    if (sub === 'register') { const r = I.setRegistration({ dir, key: flags.key, state: flags.state, by: flags.by, recertifyBy: flags['recertify-by'] ?? null }); return out(`${r.name}: ${r.state}${r.recertifyBy ? `, re-certify by ${r.recertifyBy}` : ''}. Only the state is kept; the agreement itself is not stored here.`); }
+    if (sub === 'nda') { const e = I.ndaUnder({ dir, key: flags.key, type: flags.type, value: flags.value, by: flags.by }); return out(`On the NDA list: ${e.type} (${e.reason}). The guard now blocks touches about it.`); }
+    if (sub === 'route') {
+      const r = I.routeForDir(dir, need(flags, 'seller'));
+      const adv = r.advisors.map((a) => `\n  advisor ${a.name} [${a.key}], last ${a.last}; buyer list: ${a.registration}${a.notRegistered ? ' (NOT registered)' : ''}`).join('');
+      const dir2 = r.direct.map((d) => `\n  direct sale ${d.date}: ${d.how} (${d.by})`).join('');
+      return out(`${flags.seller}: ${r.label}.${adv}${dir2}`);
+    }
+    if (sub === 'reminders') {
+      const r = I.registrationReminders({ registrations: I.readRegistrations(dir), asOf: today, withinDays: ic.reminderDays ?? 30 });
+      return out(r.length ? r.map((x) => `${x.recertifyBy}  ${x.name} [${x.key}]${x.overdue ? '  OVERDUE' : ''}`).join('\n') : 'No buyer-list re-certification due.');
+    }
+    throw new Error('Usage: outbound intermediaries build|list|show|mandate|referral|direct|alias|register|credibility-approved|nda|route|reminders (outbound help)');
   }
 
   if (cmd === 'mergers' && sub === 'gap') {   // next-five Q5 (decided 2026-11-16): accept the gap, and count it

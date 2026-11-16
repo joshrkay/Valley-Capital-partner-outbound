@@ -6,5 +6,6 @@ node_modules/
 # Prospect data must never be committed. The code refuses a data directory inside this repo; this is the backstop.
 data/
 /backtest/
+/intermediaries/
 KILL
 .DS_Store

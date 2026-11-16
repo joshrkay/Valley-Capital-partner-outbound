@@ -12,6 +12,7 @@ import { runEnforcement } from '../sources/enforcement.mjs';
 import { runOccOrders } from '../sources/occorders.mjs';
 import { runMergerApps } from '../sources/mergerapps.mjs';
 import { buildLedger } from '../sales.mjs';
+import { writeRegistry } from '../intermediaries.mjs';
 import { runScoring } from '../score.mjs';
 import { runTriage, triageLoads, triageSummary, ymd } from '../triage.mjs';
 import { runBriefer } from '../research.mjs';
@@ -46,14 +47,18 @@ export async function runJob({ client, job, rules, deps = {} }) {
     case 'sources.edgar': {   // then the sale ledger is rebuilt, so a liquidation in this month's reports is recorded (PRD E16-S1)
       const { result } = await client.unitOfWork(LOADS.sales, async (dir) => {
         const r = await runEdgar({ dir, metros: rules.metros, buybox: rules.buybox, scoring: rules.scoring, sec: rules.config.sec, fetchImpl: deps.fetchImpl ?? globalThis.fetch, now: deps.now?.() ?? new Date() });
-        return { ...r, ledger: r.outcome === 'failed' ? null : buildLedger({ dir, config: rules.config, now: deps.now?.() ?? new Date() }) };
+        const ledger = r.outcome === 'failed' ? null : buildLedger({ dir, config: rules.config, now: deps.now?.() ?? new Date() });
+        if (ledger && ledger.outcome !== 'failed') writeRegistry({ dir, config: rules.config, now: deps.now?.() ?? new Date() });   // next-five E19-S1
+        return { ...r, ledger };
       }, { retries: 0 });
       return { ok: result.outcome !== 'failed' && result.ledger?.outcome !== 'failed', summary: { outcome: result.outcome, cmbsTrusts: result.cmbsTrusts, loansRead: result.loansRead, loansKept: result.loansKept, servicers: result.servicers, dispositions: result.dispositions, dispositionsNew: result.dispositionsNew, notes: result.notes, changed: result.changed, ledger: ledgerSummary(result.ledger) } };
     }
     case 'sources.fdicsales': {   // FDIC loan-sale announcements (PRD E16-S2); refused while config.fdic.userAgent is a placeholder
       const { result } = await client.unitOfWork(LOADS.sales, async (dir) => {
         const r = await runFdicSales({ dir, fdic: rules.config.fdic, personalDomains: rules.config.personalDomains, fetchImpl: deps.fetchImpl ?? globalThis.fetch, now: deps.now?.() ?? new Date(), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
-        return { ...r, ledger: r.outcome === 'failed' ? null : buildLedger({ dir, config: rules.config, now: deps.now?.() ?? new Date() }) };
+        const ledger = r.outcome === 'failed' ? null : buildLedger({ dir, config: rules.config, now: deps.now?.() ?? new Date() });
+        if (ledger && ledger.outcome !== 'failed') writeRegistry({ dir, config: rules.config, now: deps.now?.() ?? new Date() });   // next-five E19-S1
+        return { ...r, ledger };
       }, { retries: 0 });
       return { ok: result.outcome !== 'failed' && result.ledger?.outcome !== 'failed', summary: { outcome: result.outcome, listed: result.listed, pagesRead: result.pagesRead, salesNew: result.salesNew, pdfsRead: result.pdfsRead, pdfsUnreadable: result.pdfsUnreadable, matched: result.matched, requests: result.requests, missingFields: result.missingFields, ledger: ledgerSummary(result.ledger) } };
     }

@@ -37,7 +37,10 @@ export const LOADS = Object.freeze({
   // never loaded. No research or drafting action loads triage/, so the triage never reaches a brief or a message.
   triage: ['candidates/', 'accounts/', 'suppression.json', 'touches.jsonl', 'sources/runs.jsonl', 'sources/fdic/state.json', 'sources/fdic/failed.json',
     'sources/edgar/loans.json', 'sources/edgar/filings.json', 'sources/edgar/filers.json', 'triage/state.json'],
-  sales: ['sources/', 'sales/'],   // the CMBS and FDIC loan-sale pulls rebuild the sale ledger (sales/ledger.json) when they finish
+  sales: ['sources/', 'sales/', 'intermediaries/'],   // next-five E19-S1: the intermediary registry is rebuilt with the ledger
+  // Intermediaries (next-five E19): the registry, a principal's records and registrations; the ledger and CMBS loans it is built from;
+  // the suppression list (an NDA under an advisor's agreement goes there). No model-facing action loads intermediaries/.
+  intermediaries: ['intermediaries/', 'sales/ledger.json', 'sources/edgar/loans.json', 'suppression.json'],   // the CMBS and FDIC loan-sale pulls rebuild the sale ledger (sales/ledger.json) when they finish
   // Signal coverage (PRD next-five E18-S1, src/coverage.mjs): read-only, ten exact files and no folder. The candidate list and its
   // aliases, the bank-to-filer map, the CMBS servicer summary, the sale ledger, and the enforcement orders (E18-S2: the Federal Reserve's, the FDIC's and the OCC's) and the merger applications (E18-S3), with the bank list
   // they are matched against. It writes nothing.
