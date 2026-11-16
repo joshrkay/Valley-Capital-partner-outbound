@@ -13,7 +13,7 @@ import { matchInstitution } from './candidates.mjs';
 import { periodLabel } from './metrics.mjs';
 import { groupBySeller } from './sales.mjs';
 import { mappingStatus } from './sources/filers.mjs';
-import { orderBanks } from './sources/enforcement.mjs';
+import { orderBanks, resolveParty } from './sources/enforcement.mjs';
 
 // The stored files the report reads, and nothing else (LOADS.coverage in src/uow.mjs lists the same paths).
 export const COVERAGE_PATHS = Object.freeze({
@@ -24,6 +24,8 @@ export const COVERAGE_PATHS = Object.freeze({
   ledger: 'sales/ledger.json',
   enforcement: 'sources/enforcement/orders.json',
   fdicOrders: 'sources/enforcement/fdic-orders.json',
+  occOrders: 'sources/enforcement/occ-orders.json',
+  mergers: 'sources/mergers/applications.json',
   institutions: 'sources/fdic/institutions.json',
 });
 
@@ -36,6 +38,7 @@ const STORES = Object.freeze([
   { id: 'servicers', path: COVERAGE_PATHS.servicers, label: 'the CMBS pull', how: 'outbound sources run edgar' },
   { id: 'ledger', path: COVERAGE_PATHS.ledger, label: 'the sale ledger', how: 'outbound sales build' },
   { id: 'enforcement', path: COVERAGE_PATHS.enforcement, label: 'the enforcement orders', how: 'outbound sources run enforcement' },
+  { id: 'mergers', path: COVERAGE_PATHS.mergers, label: 'the merger applications', how: 'outbound sources run mergerapps' },
 ]);
 
 // One line per source, in a fixed order. `test` reads the facts worked out for one candidate below. A source that is not built has no
@@ -54,7 +57,9 @@ const ROWS = Object.freeze([
   { id: 'sale', label: 'Sale-ledger event (as the seller)', store: 'ledger', test: (f) => f.sale,
     basis: 'The sale ledger holds a supported event with the bank as the seller that acted, as outbound sales sellers shows; a special servicer is matched by its name as above. An acquirer is not counted.' },
   { id: 'enforcement', label: 'Enforcement record', store: 'enforcement', test: (f) => f.enforcement,
-    basis: 'An enforcement order (not only a termination) names the bank, matched by its exact name and state, or by an alias a principal added (outbound enforcement alias). Federal Reserve orders, and FDIC orders once a principal has run outbound sources run fdicorders; OCC and state orders are not built (PRD next-five E18-S2). An order against a holding company counts only through an alias.' },
+    basis: 'An enforcement order (not only a termination) names the bank, matched by its exact name and state, or by an alias a principal added (outbound enforcement alias). Federal Reserve and OCC orders, and FDIC orders once a principal has run outbound sources run fdicorders; state orders are not built (PRD next-five E18-S2). An order against a holding company counts only through an alias.' },
+  { id: 'merger', label: 'Merger application (open)', store: 'mergers', test: (f) => f.merger,
+    basis: 'An open merger or acquisition application in the Federal Reserve\'s weekly H.2 names the bank, as acquirer or bank acquired, by its exact name and state or a principal\'s alias (PRD next-five E18-S3). One FDIC\'s structure events show closed, or that was withdrawn or denied, is not counted. Applications the OCC or the FDIC decide alone are not seen.' },
 ]);
 export const COVERAGE_ROWS = Object.freeze(ROWS.map((r) => r.id));
 
@@ -68,9 +73,9 @@ const notBuilt = (of) => ({ count: null, of, share: null, text: 'not built' });
 // The report, from the stored documents themselves (each one null when it is not in the data folder). Pure: no clock, no I/O.
 // latest: candidates/latest.json; aliases: candidates/aliases.json; filers: sources/edgar/filers.json; servicers:
 // sources/edgar/servicers.json; ledger: sales/ledger.json; enforcement: sources/enforcement/orders.json; fdicOrders:
-// sources/enforcement/fdic-orders.json; institutions:
+// sources/enforcement/fdic-orders.json; occOrders: sources/enforcement/occ-orders.json; mergers: sources/mergers/applications.json; institutions:
 // sources/fdic/institutions.json.
-export function buildCoverage({ latest = null, aliases = null, filers = null, servicers = null, ledger = null, enforcement = null, fdicOrders = null, institutions: bankList = null } = {}) {
+export function buildCoverage({ latest = null, aliases = null, filers = null, servicers = null, ledger = null, enforcement = null, fdicOrders = null, occOrders = null, mergers = null, institutions: bankList = null } = {}) {
   const items = (Array.isArray(latest?.items) ? latest.items : []).filter((i) => i && typeof i.key === 'string');
   const keys = new Set(items.map((i) => i.key));
 
@@ -101,11 +106,14 @@ export function buildCoverage({ latest = null, aliases = null, filers = null, se
   // that file, the candidates' names alone.
   const banks = bankList ?? institutions;
   const ordered = new Set();
-  for (const o of [...Object.values(enforcement ?? {}), ...Object.values(fdicOrders ?? {})]) if (o?.kind === 'order') for (const k of orderBanks(o, { institutions: banks, aliases: aliases ?? {} })) if (keys.has(k)) ordered.add(k);
+  for (const o of [...Object.values(enforcement ?? {}), ...Object.values(fdicOrders ?? {}), ...Object.values(occOrders ?? {})]) if (o?.kind === 'order') for (const k of orderBanks(o, { institutions: banks, aliases: aliases ?? {} })) if (keys.has(k)) ordered.add(k);
 
-  const facts = new Map(items.map((i) => [i.key, { filer: mappingStatus(filers?.[i.key]), cmbs: linked.has(i.key), sale: sold.has(i.key), enforcement: ordered.has(i.key) }]));
+  const merging = new Set();
+  for (const a of Object.values(mergers ?? {})) if (a && !a.closedBy && !a.withdrawnOn && !a.deniedOn) for (const p of a.parties ?? []) { const k = resolveParty(p, { institutions: banks, aliases: aliases ?? {} }).key; if (k && keys.has(k)) merging.add(k); }
+
+  const facts = new Map(items.map((i) => [i.key, { filer: mappingStatus(filers?.[i.key]), cmbs: linked.has(i.key), sale: sold.has(i.key), enforcement: ordered.has(i.key), merger: merging.has(i.key) }]));
   const groups = GROUPS.map(([id, label]) => ({ id, label, members: items.filter((i) => id === 'all' || i.tier === id) }));
-  const present = { filers: filers !== null, servicers: servicers !== null, ledger: ledger !== null, enforcement: enforcement !== null || fdicOrders !== null };
+  const present = { filers: filers !== null, servicers: servicers !== null, ledger: ledger !== null, enforcement: enforcement !== null || fdicOrders !== null || occOrders !== null, mergers: mergers !== null };
 
   const rows = ROWS.map((r) => {
     const built = r.built !== false;

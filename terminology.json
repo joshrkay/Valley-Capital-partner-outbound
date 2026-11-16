@@ -1,5 +1,5 @@
 {
-  "_note": "Per-audience word rules for outbound copy. The bank rules are NOT duplicated here: they are read from the website's scripts/terminology.json (the rules its `npm run check` already enforces on /banks/), via the copy in site-snapshot/, so there is one source of truth. Servicer rules follow docs/terminology.md ('note sale'; 'REO'). Counsel, receivers, funds and brokers have no rules yet because their vocabulary has not been researched (docs/research-agenda.md, D2); the linter warns instead of guessing.",
+  "_note": "Per-audience word rules for outbound copy. The bank rules are NOT duplicated here: they are read from the website's scripts/terminology.json (the rules its `npm run check` already enforces on /banks/), via the copy in site-snapshot/, so there is one source of truth. Servicer rules follow docs/terminology.md ('note sale'; 'REO'). Counsel, receivers, funds and brokers have no rules yet because their vocabulary has not been researched (docs/research-agenda.md, D2); the linter warns instead of guessing. The last four banned patterns (consent order, enforcement, regulator, cease and desist) keep a bank's enforcement record out of every message (PRD next-five E18-S4); 'regulatory' is still allowed. That list is a PLACEHOLDER.",
   "bankRulesFrom": "scripts/terminology.json",
   "audiences": {
     "servicer": {
@@ -17,7 +17,8 @@
     "pounce\\w*", "steal\\w*", "bargain\\w*", "cheap\\w*", "fire[- ]?sale", "desperate", "struggling", "in trouble",
     "ASAP", "act now", "limited time", "don'?t miss", "once[- ]in[- ]a[- ]\\w+", "exclusive (?:offer|deal|opportunity)",
     "flip(?:ping|ped|s)?", "get rid of", "dump(?:ing|ed)?", "bad debt", "toxic", "hard money", "cash investors", "network of (?:private )?(?:lenders|investors)",
-    "lucrative", "thrilled", "excited to", "delighted"
+    "lucrative", "thrilled", "excited to", "delighted",
+    "consent orders?", "enforcement", "regulators?", "cease[- ]and[- ]desist"
   ],
   "cliches": [
     "hope this (?:email |message |note )?finds you", "just (?:following up|checking in|circling back|touching base)", "circling back", "touching base",

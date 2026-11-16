@@ -50,13 +50,13 @@ export const NO_TERMINATION = '1950-01-01';
 
 export const enforcementPaths = (dir) => {
   const base = join(dir, 'sources', 'enforcement');
-  return { base, orders: join(base, 'orders.json'), state: join(base, 'state.json'), fdicOrders: join(base, 'fdic-orders.json'), fdicState: join(base, 'fdic-state.json') };
+  return { base, orders: join(base, 'orders.json'), state: join(base, 'state.json'), fdicOrders: join(base, 'fdic-orders.json'), fdicState: join(base, 'fdic-state.json'), occOrders: join(base, 'occ-orders.json'), occState: join(base, 'occ-state.json') };
 };
 
 // Every stored order and termination, from every regulator's store: the Federal Reserve's (orders.json, written by runEnforcement) and
-// the FDIC's (fdic-orders.json, written by src/sources/fdicorders.mjs on a principal's machine). Keys never collide: frb:<id> and
-// fdicorder:<id>. Each store has its own writer, so neither run can drop the other's records.
-export const loadAllOrders = (dir) => ({ ...readJson(enforcementPaths(dir).orders, {}), ...readJson(enforcementPaths(dir).fdicOrders, {}) });
+// the FDIC's (fdic-orders.json, written by src/sources/fdicorders.mjs on a principal's machine) and the OCC's (occ-orders.json, from
+// src/sources/occorders.mjs). Keys never collide: frb:<id>, fdicorder:<id> and occ:<docket>. Each store has its own writer, so neither run can drop the other's records.
+export const loadAllOrders = (dir) => ({ ...readJson(enforcementPaths(dir).orders, {}), ...readJson(enforcementPaths(dir).fdicOrders, {}), ...readJson(enforcementPaths(dir).occOrders, {}) });
 
 // ---- Types ---------------------------------------------------------------------------------------------------------------------
 // Codes, labels from code only. ACTIVE types are orders that stay in force until terminated; a penalty is a one-off.
@@ -71,7 +71,7 @@ export const TYPES = Object.freeze({
   termination: 'termination',
 });
 export const ACTIVE_TYPES = Object.freeze(['consent_order', 'cease_and_desist', 'written_agreement', 'pca_directive']);
-export const REGULATORS = Object.freeze({ frb: 'Federal Reserve', fdic: 'FDIC' });
+export const REGULATORS = Object.freeze({ frb: 'Federal Reserve', fdic: 'FDIC', occ: 'OCC' });
 const PRECEDENCE = ['pca_directive', 'cease_and_desist', 'consent_order', 'written_agreement', 'civil_money_penalty', 'modification', 'other'];
 
 // Kinds of action that are against individuals by definition, whatever else the record says.
@@ -159,16 +159,19 @@ export function parseFedFile(text, { file } = {}) {
 }
 
 // ---- Matching a party to a bank in the universe ----------------------------------------------------------------------------------
-// A principal's alias first (candidates/aliases.json), then the exact normalized name, narrowed by state and then city when the party
+// A principal's alias first (candidates/aliases.json), then the exact normalized name (a leading "The" ignored), narrowed by state and then city when the party
 // gives them. One bank is a match. Two or more is ambiguous; none is unmatched. Both go to the review list; nothing is guessed.
 // `institutions` is sources/fdic/institutions.json (CERT -> { NAME, CITY, STALP }).
 // Names normalized once per bank list and alias table (both are plain objects read from the store), so matching thousands of orders
 // does not normalize every bank's name again for each party.
 const nameIndex = new WeakMap(), aliasIndex = new WeakMap();
+// A leading "The" is dropped on both sides: the regulators write "First National Bank of X" for FDIC's "The First National Bank of X".
+// "N.A." and "National Association" are the same: the OCC writes both for one bank.
+const nameKey = (s) => norm(s).replace(/^the /, '').replace(/ n a$/, ' national association');
 const byNormName = (institutions) => {
   if (!nameIndex.has(institutions)) {
     const m = new Map();
-    for (const [cert, i] of Object.entries(institutions)) { const k = norm(i?.NAME); if (k) m.set(k, [...(m.get(k) ?? []), [cert, i]]); }
+    for (const [cert, i] of Object.entries(institutions)) { const k = nameKey(i?.NAME); if (k) m.set(k, [...(m.get(k) ?? []), [cert, i]]); }
     nameIndex.set(institutions, m);
   }
   return nameIndex.get(institutions);
@@ -176,14 +179,14 @@ const byNormName = (institutions) => {
 const byNormAlias = (aliases) => {
   if (!aliasIndex.has(aliases)) {
     const m = new Map();
-    for (const [key, list] of Object.entries(aliases)) for (const a of list ?? []) { const k = norm(a); if (k && !m.has(k)) m.set(k, key); }
+    for (const [key, list] of Object.entries(aliases)) for (const a of list ?? []) { const k = nameKey(a); if (k && !m.has(k)) m.set(k, key); }
     aliasIndex.set(aliases, m);
   }
   return aliasIndex.get(aliases);
 };
 
 export function resolveParty(party, { institutions = {}, aliases = {} } = {}) {
-  const q = norm(party?.name);
+  const q = nameKey(party?.name);
   if (!q) return { key: null, how: 'none', candidates: [] };
   const alias = byNormAlias(aliases ?? {}).get(q);
   if (alias) return { key: alias, how: 'alias', candidates: [alias] };

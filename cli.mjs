@@ -10,6 +10,8 @@ import { verifyFdic, verifyEdgar } from './src/sources/verify.mjs';
 import { runFilings, verifyFilings, loadFilingRules, discoveredFilers } from './src/sources/filings.mjs';
 import { runFdicSales, verifyFdicSales } from './src/sources/fdicsales.mjs';
 import { runFdicOrders, verifyFdicOrders } from './src/sources/fdicorders.mjs';
+import { runOccOrders, verifyOccOrders } from './src/sources/occorders.mjs';
+import { runMergerApps, verifyMergerApps, mergerPaths, KINDS as MERGER_KINDS } from './src/sources/mergerapps.mjs';
 import { runEnforcement, verifyEnforcement, unmatchedOrders, aliasParty, ordersFor, ordersByBank, TYPES as ORDER_TYPES } from './src/sources/enforcement.mjs';
 import { buildLedger, readLedger, listSales, groupBySeller, groupBuyers, pricing, verifyLedger } from './src/sales.mjs';
 import { suggestFilers, confirmFiler, rejectFiler, filerStatus } from './src/sources/filers.mjs';
@@ -106,12 +108,16 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound sources run enforcement                enforcement orders (PRD next-five E18-S2): the Federal Reserve's actions against organizations,
                                                   with their type, dates and terminations; actions against individuals are skipped. Reads
                                                   the order document of orders naming a bank in the list, for fixed phrases only
+  outbound sources run mergerapps                 merger applications (PRD next-five E18-S3): the Federal Reserve's weekly H.2, every district;
+                                                  merger and acquisition filings kept, approvals and withdrawals applied, closes linked to FDIC
+  outbound sources run occorders                  OCC orders (E18-S2): the OCC's monthly enforcement news releases on www.occ.gov, no key;
+                                                  actions against banks and terminations kept, actions against individuals skipped
   outbound sources run fdicorders [--since YYYY-MM-DD] [--debug-capture FILE]   FDIC orders (E18-S2), ON A PRINCIPAL'S MACHINE: the monthly
                                                   releases on www.fdic.gov, then each one's order list on orders.fdic.gov in a headless
                                                   browser (first: npm run fdic-orders:setup). Individuals skipped. --debug-capture writes
                                                   the table's shape with every name masked, if the columns cannot be mapped
   outbound sources status                         the last run of each source, and the latest FDIC quarter seen
-  outbound sources verify [fdic|edgar|filings|fdicsales|enforcement|fdicorders] [--sample N]   check the stored data against the live sources (read-only): fresh, complete,
+  outbound sources verify [fdic|edgar|filings|fdicsales|enforcement|fdicorders|occorders|mergerapps] [--sample N]   check the stored data against the live sources (read-only): fresh, complete,
                                                   values and ratios equal FDIC's own, every failure and deal stored, the CMBS parser equal
                                                   to a plain count, stored filings found again; plus a short list of records with their
                                                   public URL to compare by eye. Exits 1 on any failure. WARN flags a gap in FDIC's own data
@@ -125,6 +131,9 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound sales buyers                           the known buyers, by kind, property type, metro and quarter
   outbound sales pricing                          CMBS liquidations by property type and metro, with an APPROXIMATE implied recovery
   outbound sales verify                           check the ledger itself (no network): every event valid, no buyer or price invented
+
+  Merger applications (PRD next-five E18-S3): signals only, no points. Never in a message.
+  outbound mergers list [--all]                   open applications naming a bank in the list (--all: every stored one), newest first
 
   Enforcement orders (PRD next-five E18-S2): signals only, no points. Never in a message.
   outbound enforcement list [--key fdic:CERT]      orders matched to a bank in the list (or one bank's), newest first, with terminations
@@ -226,10 +235,10 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound platform smoke                         check a new project with SUPABASE_URL and SUPABASE_ANON_KEY (the PUBLIC key only):
                                                   sign-ups off, every table and function present and refusing the public key
   outbound worker [--max N]                       run queued jobs until the queue is empty (or N have run); prints ids and outcomes only
-  outbound enqueue sources.fdic|sources.edgar|sources.filings|sources.fdicsales|sources.enforcement|score.run|triage.run|research.run|draft.run|call.prep|call.extract [--account ID] [--channel C] [--step N] [--date D] [--by NAME] [--draft-buybox] [--include-hq] [--since YYYY-MM-DD]
+  outbound enqueue sources.fdic|sources.edgar|sources.filings|sources.fdicsales|sources.enforcement|sources.mergerapps|score.run|triage.run|research.run|draft.run|call.prep|call.extract [--account ID] [--channel C] [--step N] [--date D] [--by NAME] [--draft-buybox] [--include-hq] [--since YYYY-MM-DD]
   outbound platform push [--from DIR]             copy a data folder into the platform (default: OUTBOUND_DATA_DIR); safe to re-run
   outbound platform pull --to DIR                 write everything back to a new or empty folder outside this repository
-  outbound platform verify [fdic|edgar|filings|fdicsales|enforcement|sales] [--sample N]   the same checks on the platform's data (read-only); no spot-check list unless asked
+  outbound platform verify [fdic|edgar|filings|fdicsales|enforcement|occorders|mergerapps|sales] [--sample N]   the same checks on the platform's data (read-only); no spot-check list unless asked
 `;
 
 function parse(argv) {
@@ -255,6 +264,8 @@ async function runVerify(dir, which, rules, flags) {
   if (!which || which === 'edgar') reports.push(await verifyEdgar({ dir, sec: rules.config.sec, sample }));
   if (which === 'filings') reports.push(await verifyFilings({ dir, sec: rules.config.sec, rules: loadFilingRules(), sample }));
   if (which === 'fdicsales') reports.push(await verifyFdicSales({ dir, fdic: rules.config.fdic, personalDomains: rules.config.personalDomains, sample }));
+  if (which === 'occorders') reports.push(await verifyOccOrders({ dir, enforcement: rules.config.enforcement, sample }));
+  if (which === 'mergerapps') reports.push(await verifyMergerApps({ dir, mergers: rules.config.mergers, sample }));
   if (which === 'fdicorders') reports.push(await verifyFdicOrders({ dir, enforcement: rules.config.enforcement, sample }));
   if (which === 'enforcement') reports.push(await verifyEnforcement({ dir, enforcement: rules.config.enforcement, hqStates: rules.metros.hqStates, sample }));
   if (which === 'sales') reports.push(verifyLedger({ dir, sample }));
@@ -307,7 +318,7 @@ async function main() {
     if (cmd === 'platform' && sub === 'pull') return out(await pull({ client, to: need(flags, 'to') }));
     if (cmd === 'platform' && sub === 'verify') {   // read-only: the unit of work changes nothing, so nothing is written back
       // No spot-check list unless asked: this command runs in scheduled-job logs, which carry check results only, never bank names.
-      const { result } = await client.unitOfWork(pos[2] === 'enforcement' ? LOADS.enforcement : LOADS.sales, (dir) => runVerify(dir, pos[2], rules, { ...flags, sample: flags.sample ?? 0 }), { retries: 0 });
+      const { result } = await client.unitOfWork(pos[2] === 'enforcement' || pos[2] === 'occorders' ? LOADS.enforcement : pos[2] === 'mergerapps' ? LOADS.mergers : LOADS.sales, (dir) => runVerify(dir, pos[2], rules, { ...flags, sample: flags.sample ?? 0 }), { retries: 0 });
       if (!result) process.exitCode = 1;
       return;
     }
@@ -437,6 +448,16 @@ async function main() {
       if (r.outcome === 'failed') process.exitCode = 1;
       return out(r);
     }
+    if (sub === 'run' && pos[2] === 'occorders') {   // OCC orders (PRD next-five E18-S2, source 4)
+      const r = await runOccOrders({ dir, enforcement: rules.config.enforcement });
+      if (r.outcome === 'failed') process.exitCode = 1;
+      return out(r);
+    }
+    if (sub === 'run' && pos[2] === 'mergerapps') {   // merger applications (PRD next-five E18-S3)
+      const r = await runMergerApps({ dir, mergers: rules.config.mergers });
+      if (r.outcome === 'failed') process.exitCode = 1;
+      return out(r);
+    }
     if (sub === 'run' && pos[2] === 'fdicorders') {   // FDIC orders (PRD next-five E18-S2), on a principal's machine with Playwright
       const r = await runFdicOrders({ dir, enforcement: rules.config.enforcement, since: opt(flags, 'since') ?? null, debugCapture: opt(flags, 'debug-capture') ?? null });
       if (r.outcome === 'failed') process.exitCode = 1;
@@ -448,7 +469,7 @@ async function main() {
       return out(r);
     }
     if (sub === 'run') {
-      if (!['fdic', 'edgar', 'fdicsales'].includes(pos[2])) throw new Error('Usage: outbound sources run fdic [--include-hq] | outbound sources run edgar | outbound sources run fdicsales | outbound sources run enforcement | outbound sources run fdicorders | outbound sources run filings [--since YYYY-MM-DD]');
+      if (!['fdic', 'edgar', 'fdicsales'].includes(pos[2])) throw new Error('Usage: outbound sources run fdic [--include-hq] | outbound sources run edgar | outbound sources run fdicsales | outbound sources run enforcement | outbound sources run fdicorders | outbound sources run mergerapps | outbound sources run occorders | outbound sources run filings [--since YYYY-MM-DD]');
       const r = pos[2] === 'fdic' ? await runFdic({ dir, metros: rules.metros, includeHq: !!flags['include-hq'] })
         : pos[2] === 'fdicsales' ? await runFdicSales({ dir, fdic: rules.config.fdic, personalDomains: rules.config.personalDomains })
         : await runEdgar({ dir, metros: rules.metros, buybox: rules.buybox, scoring: rules.scoring, sec: rules.config.sec });
@@ -495,8 +516,18 @@ async function main() {
     }
   }
 
+  if (cmd === 'mergers' && sub === 'list') {   // merger applications (PRD next-five E18-S3): for the principals; never in a message
+    const { mergerSignals } = await import('./src/sources/mergerapps.mjs');
+    const apps = Object.values(readJson(mergerPaths(dir).applications, {}));
+    const sig = mergerSignals({ dir });
+    const named = new Map(); for (const [k, l] of Object.entries(sig)) for (const x of l) named.set(x.evidence[0], [...(named.get(x.evidence[0]) ?? []), `${k} (${x.role})`]);
+    const show = apps.filter((a) => flags.all || named.has(a.key)).sort((a, b) => (a.filedWeek < b.filedWeek ? 1 : -1));
+    const line = (a) => `${a.filedWeek}  ${MERGER_KINDS[a.kind] ?? a.kind}  [${a.key}]${a.approvedOn ? `  approved ${a.approvedOn}` : ''}${a.withdrawnOn ? `  withdrawn ${a.withdrawnOn}` : ''}${a.deniedOn ? `  denied ${a.deniedOn}` : ''}${a.closedBy ? `  closed ${a.closedOn} (${a.closedBy})` : ''}\n    ${a.parties.map((p) => `${p.role}: ${p.name}${p.city ? `, ${p.city}` : ''}${p.state ? `, ${p.state}` : ''}`).join('; ')}${named.has(a.key) ? `\n    in the list: ${named.get(a.key).join(', ')}` : ''}\n    ${a.link}`;
+    return out(`${show.length} application(s)${flags.all ? ' stored' : ' open and naming a bank in the list'}.\n\n${show.map(line).join('\n\n')}`);
+  }
+
   if (cmd === 'enforcement') {   // enforcement orders (PRD next-five E18-S2): for the principals; never in a message
-    const line = (o) => `${o.date}  ${o.kind === 'termination' ? `termination of ${o.terminates} (${ORDER_TYPES[o.terminatesType] ?? ''})` : `${ORDER_TYPES[o.type] ?? o.type}${o.terminatedOn ? `, terminated ${o.terminatedOn}` : ', no termination recorded'}`}  [${o.key}]${o.flags?.found?.length ? `  phrases: ${o.flags.found.join(', ')}` : ''}\n    ${o.link ?? '(no document link)'}`;
+    const line = (o) => `${o.date}  ${o.kind === 'termination' ? `termination of ${o.terminates ?? 'an earlier order not stored'} (${ORDER_TYPES[o.terminatesType] ?? ORDER_TYPES.other})` : `${ORDER_TYPES[o.type] ?? o.type}${o.terminatedOn ? `, terminated ${o.terminatedOn}` : ', no termination recorded'}`}  [${o.key}]${o.flags?.found?.length ? `  phrases: ${o.flags.found.join(', ')}` : ''}\n    ${o.link ?? '(no document link)'}`;
     if (sub === 'list') {
       if (flags.key) { const key = need(flags, 'key'); const l = ordersFor({ dir, key }); return out(`${key}: ${l.length} order record(s).\n\n${l.map(line).join('\n')}`); }
       const latest = readJson(join(dir, 'candidates', 'latest.json'), null);

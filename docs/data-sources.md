@@ -83,7 +83,7 @@ Priority is for this firm: **High** feeds scoring or candidates directly, **Med*
 | **Merger applications, state** | State-chartered banks' applications: mergers, acquisitions of control, branch sales, conversions. A state nonmember bank's merger never shows in OCC CAS, and shows in H.2 only when a holding-company application is needed (inferred). Whether the FDIC publishes its own applications list is not known (open question 8). | **California DFPI:** the Monthly Bulletin, issued under Financial Code §376, has a "Bank Activity" section (dfpi.ca.gov/news/monthly-bulletins/; email subscription). Seen. **Colorado Division of Banking:** a monthly "Financial Institution Activity" bulletin of approved applications, removed after completion (PDFs such as banking.colorado.gov/sites/banking/files/2026-01_Bulletin.pdf). Seen. **Texas Department of Banking:** a corporate filings page (dob.texas.gov/banks-trust-companies/2025-corporate-filings), and the Finance Commission meeting packet's Corporate Division report of "significant bank and trust applications" received. Seen. No RSS found: Unconfirmed. | None. The agencies' own terms not read. Texas state policy: an agency may not charge a fee "to access, use, reproduce, or link to its website information unless the Legislature specifically authorizes it". Seen. | Monthly. Texas packets about every two months: Unconfirmed. | **High** |
 | **Regulator press feeds** | Failures and acquiring banks, enforcement-order releases and loan-sale notices (FDIC); orders and enforcement actions (Fed); monthly enforcement-action releases (OCC). A dated cross-check on the order lists and the failure adapters. | FDIC press releases: a "Subscribe via RSS" link. Seen. The GovDelivery feed is public.govdelivery.com/topics/USFDIC_26/feed.rss: Unconfirmed (a third-party guide). Fed feeds: federalreserve.gov/feeds/feeds.htm. Seen. OCC: an RSS index at occ.gov/rss/index-rss.html, with "OCC News Releases" and "OCC Bulletins". Seen. | None. Fed: public domain, as above. Seen. FDIC Archive: "information that is created by or for the US government on this site is within the public domain" and "may be freely distributed and copied", crediting the FDIC. Seen. OCC: no copyright statement found (Unconfirmed); a federal work, so public domain (inferred). | Daily | **High** |
 | FFIEC NIC | Holding-company ownership and merger history, keyed by RSSD ID. Links banks across names and charters. | ffiec.gov/npw/FinancialReport/DataDownload: CSV or XML. Seen. | None | Unconfirmed | Med–High |
-| **Enforcement orders** | Regulator orders against a bank, often about CRE concentration, credit administration or capital | OCC: api.occ.gov/EnforcementActions/list, needs a free key (Seen). FDIC: orders.fdic.gov search, monthly, no API (Seen). Fed: enforcement search and RSS (Seen). Texas Department of Banking and California DFPI: stable list pages (Seen); the Texas department's press releases are mostly consent orders and enforcement (Seen). Arizona, Nevada, Colorado: little or nothing for banks (Seen). Colorado's monthly bulletin lists approved applications, not orders: see "Merger applications, state". Seen. | OCC key. The rest are HTML or PDF. | Monthly | **High** (OCC, FDIC, Fed); Med (TX, CA) |
+| **Enforcement orders** | Regulator orders against a bank, often about CRE concentration, credit administration or capital | OCC: api.occ.gov/EnforcementActions/list, needs a free key (Seen). FDIC: orders.fdic.gov search, monthly, no API (Seen). Fed: enforcement search and RSS (Seen). Texas Department of Banking and California DFPI: stable list pages (Seen); the Texas department's press releases are mostly consent orders and enforcement (Seen), but from 2020 to 2026 none was against a bank (checked 2026-11-16; PRD next-five E18-S2). California DFPI answered a Cloudflare challenge from the development environment and was not read. Arizona, Nevada, Colorado: little or nothing for banks (Seen). Colorado's monthly bulletin lists approved applications, not orders: see "Merger applications, state". Seen. | OCC key. The rest are HTML or PDF. | Monthly | **High** (OCC, FDIC, Fed); Med (TX, CA) |
 | FRED | Market context: rates, CRE delinquency and prices, lending standards (series in 2.5) | api.stlouisfed.org | Free key, 120 requests a minute. **The default terms are non-commercial; commercial use has extra restrictions.** Seen. Needs a legal check (D4). | Daily to quarterly | **High**, after the check |
 | **Newsrooms of banks with no EDGAR filer** | The bank's own release: merger, branch sale, capital raise, loan sale. For an OTC or §12(i) bank this may be the only place it appears, besides local press (inferred). 104 banks traded on OTCQX in Q2 2026. Seen. Many deregistered from the SEC and publish through OTC Markets instead: Seen. Banks that register securities at the bank level file with their regulator under Exchange Act §12(i). The FDIC "does not participate in the SEC's EDGAR", and had about 15 such filers in 2018 and 2022. Seen. | The bank's newsroom. Q4-hosted and Notified-hosted (`*.gcs-web.com`) IR sites carry RSS pages; B2i lists RSS. Seen. FDIC filings: efr.fdic.gov (Seen in a 2011 letter; whether it is current: Unconfirmed). OTC Markets: a data feed needs a distribution agreement, and each "RSS feed" licence an addendum. Seen. | Each bank's own site terms and robots.txt: none read. | Daily: RSS first, one conditional GET per host | Med–High: it depends on how many Tier A and B banks have no EDGAR filer (open question 1) |
 | GDELT DOC 2.0 | Headlines that mention a universe bank with a loan-sale, merger or capital phrase. It can pick up local news of private banks (inferred). It returns article URLs and titles, ranked (Seen), not the text (Unconfirmed). A rolling 3-month window by default, extendable to the past year (Seen, GDELT's blog). | api.gdeltproject.org/api/v2/doc/doc, no key. Seen. Its filters and result cap: Unconfirmed (open question 10). | "all datasets released by the GDELT Project are available for unlimited and unrestricted use for any academic, commercial, or governmental use of any kind without fee", with a citation and link. Unconfirmed: a secondary quote of its terms. The linked articles stay under their publishers' terms, so they are never fetched. | Daily | Med |
@@ -233,6 +233,92 @@ The Fed is closing its own data download tool by July 1, 2027, and points users 
 | Workday careers endpoints | Undocumented: "not documented as a public contract", and they can change without notice. The official REST API needs per-tenant OAuth. Unconfirmed: secondary pages. |
 | Indeed and Google job search | No read API. Indeed's Publisher job-search API is deprecated (Unconfirmed: secondary pages). Its Job Sync API is for ATS partners to post jobs. Seen. Google's old Jobs API shut down in 2021, and Cloud Talent Solution searches only your own jobs (Unconfirmed: secondary pages). Special-assets postings come from LinkUp or the Greenhouse and Lever boards instead (2.2). |
 
+### 2.7 New sellers: the E21 spikes (November 16, 2026)
+
+PRD next-five E21-S1 and S3. Measurements only: no adapter was built, and the spike data stayed in the data folder. Every figure below is from the files named, read on November 16, 2026.
+
+**Credit unions (E21-S1): NCUA 5300 Call Report, quarter ended June 30, 2026.**
+
+- **The data.** The quarterly ZIP, `ncua.gov/files/publications/analysis/call-report-data-<YYYY>-<MM>.zip` (8.1 MB), is linked from the quarterly-data page. robots.txt allows it.
+  - Its files are dated August 24, 2026, about 55 days after the quarter (the 70–76 days noted earlier was an older observation). The page was updated again on September 14, 2026 under "Updated Call Reports", so figures can be amended **[verify how often]**.
+  - Comma-delimited text files: `FOICU.txt` (one row per credit union: name, city, state, county, the low-income flag `LIMITED_INC`), `FS220*.txt` (the schedules), `AcctDesc.txt` (every account, its schedule, and `STATUS`), and **`Credit Union Branch Information.txt`** (every branch, with a main-office flag, its address and county).
+  - Metro presence works by branch county and state, matched to `metros.json`.
+- **The accounts.** Only accounts with `STATUS` True are filled. The older member-business-loan accounts (400J, 143B1, 400G, the 041G and 550G series) are retired and report zero. In use, amounts in dollars:
+
+  | What | Accounts |
+  |---|---|
+  | Construction and development | 143B3 (member) + 143B4 (purchased or participation interests to nonmembers) |
+  | Multifamily | 400M + 400M1 |
+  | Non-owner-occupied nonfarm nonresidential | 400J2 + 400J3 |
+  | Owner-occupied nonfarm nonresidential | 400H2 + 400H3 |
+  | All real-estate-secured commercial | 718A5 (= 718A3 + 718A4) |
+  | Reportable delinquency by bucket, per category | DL0078–0083 (C&D), DL0092–0097 (multifamily), DL0099–0104 (owner-occupied), DL0106–0110 (non-owner-occupied): 30–59, 60–89, 90–179, 180–359 and 360+ days |
+  | Year-to-date charge-offs | CH0023 (C&D), CH0027 (multifamily), CH0029 (owner-occupied), CH0031 (non-owner-occupied) |
+  | Commercial nonaccrual (all commercial) | DL0146 |
+  | Participations sold and purchased, outstanding | 691N8/N9 and 691L8/L9 |
+  | Assets, net worth, net member business loans | 010, 997, 400A |
+
+  The delinquency buckets are not the FDIC's: a credit union reports 90+ days delinquent by category, with nonaccrual only for all commercial loans, while a bank reports "noncurrent" (90+ and nonaccrual) per category. The comparison below is close, not exact.
+- **What the six metros hold.**
+  - **Coverage:** 243 of 4,299 credit unions have a branch in the six metros:
+
+    | Metro | Credit unions |
+    |---|---|
+    | Los Angeles | 117 |
+    | Phoenix | 42 |
+    | Denver | 41 |
+    | San Diego | 31 |
+    | Austin | 29 |
+    | Las Vegas | 16 |
+
+    178 of them have their main office there.
+  - **Size:** 233 of the 243 are under $10 billion in assets. Those 233 hold **$23.1 billion of CRE**:
+
+    | Category | Balance |
+    |---|---|
+    | Non-owner-occupied | $11.9 bn |
+    | Multifamily | $6.5 bn |
+    | Owner-occupied | $4.1 bn |
+    | Construction and development | $0.6 bn |
+
+    40 hold over $250 million each; 8 metro credit unions of any size hold over $1 billion. The 10 largest hold 49% of the metros' credit-union CRE.
+  - **Distress:** 90+ days delinquent is $311 million, **1.35%** of CRE:
+
+    | Category | 90+ days delinquent |
+    |---|---|
+    | Non-owner-occupied | **2.23%** |
+    | Owner-occupied | 0.80% |
+    | Multifamily | 0.19% |
+    | Construction and development | 0.12% |
+
+    30–89 days delinquent is 0.52%. Year-to-date charge-offs are $20 million.
+  - **Beside the banks in our list under $10 billion** (202 banks, the June 30, 2026 Call Report): $154.9 billion of CRE, noncurrent **1.06%**, 30–89 days 0.45%. So the credit unions add about **15% more CRE** to the universe, with somewhat more distress, concentrated in non-owner-occupied loans.
+- **They already sell.** 64 of the 233 have sold participations outstanding: $2.3 billion in all, against $2.7 billion purchased. A credit union selling CRE is a known pattern, usually to other credit unions.
+- **The business-lending cap** (the lesser of 1.75 times net worth or 12.25% of assets, on the net member business loan balance, account 400A) **[verify the statute and its exemptions]**.
+  - **Over the cap:** 27 metro credit unions are at or over it, and 20 of them carry the low-income designation (`LIMITED_INC` = 1), which exempts them.
+  - **Not designated low-income:** 7 are over the cap and 11 are between 80% and 100% of it.
+
+  A credit union near the cap has a reason to sell or participate out. That is a usable fit signal, once exempt credit unions are left out.
+- **Recommendation on D2: yes, credit unions are sellers worth adding, after the bank pipeline is in use.**
+  - The data is free, quarterly, clean, branch-level and close to the FDIC's in shape.
+  - The CRE is real ($23 billion in the metros under the cap), its non-owner-occupied distress runs above the banks', and the sector already sells participations.
+  - **Two things to settle first:** approved claims for a `credit_union` audience (the site speaks to banks today), and how a credit union decides on a sale (its business-lending staff, often with a credit union service organization), which the briefer's playbook does not cover yet.
+
+**Non-bank lenders (E21-S3).**
+
+- **Commercial mortgage REITs: watch, then build a light profile.** Their 10-K and 10-Q XBRL does tag the loan book:
+  - **What is tagged** (Blackstone Mortgage Trust's 10-Q for September 30, 2026, accession 0001061630-26-000097):
+    - loans by property type (`srt:MortgageLoansOnRealEstateDescriptionTypeOfPropertyAxis`: office, multifamily, hotel, industrial, retail, self-storage, other);
+    - loans by region (`srt:StatementGeographicalAxis`, with company-defined regions such as "United States Sunbelt" and "West");
+    - internal risk ratings (`us-gaap:InternalCreditAssessmentAxis`).
+  - **What is missing:** metros are not tagged, except a handful of cities for particular loans. The SEC's company-facts API leaves dimensions out, and shows only totals (loan count, carrying amount, delinquent principal). The monthly Financial Statement and Notes data sets carry the dimensional rows (num.tsv), 50 to 300 MB a month.
+  - **Verdict:** a paper profile by property type and broad region is possible for a few dozen filers; one by metro is not.
+- **CRE CLOs: drop.** They are offered privately under Rule 144A **[verify]**, and the SEC's asset-level filings (ABS-EE) cover registered deals only: EDGAR full-text search for "CRE CLO" in ABS-EE returned none. Loan-level data reaches investors through trustees and paid vendors (Trepp, CRED iQ), not public data. A CLO's collateral shows up in public only in aggregate, in the 10-K of a sponsor that consolidates it, which is the mortgage REIT case above.
+- **Debt funds: drop as a data source.**
+  - Form ADV gives an adviser's private funds with fund type and gross asset value (Schedule D 7.B.1), and Form D gives offering size (quarterly data sets).
+  - Both show that a fund exists and how big it is, never its book **[verify the ADV fields]**.
+  - Funds stay a relationship target (E19), not a data one.
+
 ## 3. What we listen for
 
 | Signal | Source | Pulled | Attaches to | Lead time |
@@ -350,7 +436,7 @@ Each step is a story with acceptance criteria in the PRD's format, and each ship
 | # | Decision | Default meanwhile |
 |---|---|---|
 | D1 | Budget for county data: a CA/NV vendor at about $119–599 a month, and a quote from SKLD for Colorado (Q8) | Free sources only |
-| D2 | Are credit unions sellers we want? | Not in scope |
+| D2 | Are credit unions sellers we want? | Not in scope. **E21-S1 recommends yes, after the bank pipeline is in use** (section 2.7) |
 | D3 | Which free accounts to open in the firm's name: FRED key, OCC API key, PACER account, Maricopa assessor token | None opened |
 | D4 | Counsel's view on FRED's commercial-use terms, and on news-wire and headline feeds | FRED waits; feeds not used |
 | D5 | The SEC User-Agent contact (Q11). It blocks the EDGAR full-text listener and live CMBS runs. | Waits |
@@ -373,8 +459,8 @@ Each step is a story with acceptance criteria in the PRD's format, and each ship
 | SEC | www.sec.gov, efts.sec.gov, data.sec.gov |
 | FFIEC | cdr.ffiec.gov, www.ffiec.gov |
 | FRED | api.stlouisfed.org |
-| Federal Reserve | www.federalreserve.gov (enforcement orders, PRD next-five E18-S2: `/robots.txt`, `/supervisionreg/files/ea-cms-recent.json` and `ea-old.json`, press releases and order PDFs under `/newsevents/pressreleases/`; reachable from the development environment on 2026-11-16) |
-| OCC | api.occ.gov, apps.occ.gov |
+| Federal Reserve | www.federalreserve.gov (merger applications, PRD next-five E18-S3: `/releases/h2/` and each week's district, delegated-actions and Board-actions pages; enforcement orders, PRD next-five E18-S2: `/robots.txt`, `/supervisionreg/files/ea-cms-recent.json` and `ea-old.json`, press releases and order PDFs under `/newsevents/pressreleases/`; reachable from the development environment on 2026-11-16) |
+| OCC | api.occ.gov, apps.occ.gov, www.occ.gov (enforcement orders, PRD next-five E18-S2: the monthly enforcement news releases under /news-issuances/news-releases/; no key) |
 | NCUA | ncua.gov |
 | Bankruptcy courts | ecf.azb.uscourts.gov, ecf.cob.uscourts.gov, ecf.nvb.uscourts.gov, ecf.cacb.uscourts.gov, ecf.casb.uscourts.gov, ecf.txwb.uscourts.gov, pcl.uscourts.gov |
 | Colorado trustees | denvergov.org, apps.adcogov.org, jeffco.us, douglas.co.us, foreclosure.broomfield.org |

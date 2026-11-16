@@ -62,15 +62,26 @@ const ENFORCEMENT = Object.fromEntries([
   order(9, [['Birch Example Bank', 'Sampleton', 'TX']], { key: 'frb:9:termination', kind: 'termination', type: 'termination', terminates: 'frb:9' }),   // a termination alone: not counted
 ].map((o) => [o.key, o]));
 
+// Merger applications (E18-S3), as src/sources/mergerapps.mjs stores them: organizations with their roles only.
+const app = (id, parties, over = {}) => ({ key: `h2:${id}`, regulator: 'frb', kind: '3A5', kinds: ['3A5'], filer: parties[0][0], district: 'dallas', filedWeek: '2026-10-31', lastSeenWeek: '2026-10-31',
+  parties: parties.map(([name, role]) => ({ name, city: 'Sampleton', state: 'TX', role })), link: 'https://www.federalreserve.gov/releases/h2/20261031/dallas.htm', approvedOn: null, withdrawnOn: null, deniedOn: null, closedBy: null, ...over });
+const MERGERS = Object.fromEntries([
+  app('a1', [['Example Holdings, Inc.', 'acquirer'], ['Birch Example Bank', 'target']]),        // open, a Tier A target
+  app('a2', [['Fir Example Bank', 'acquirer'], ['Faraway Example Bank', 'target']]),           // open, a Tier B acquirer
+  app('a3', [['Hazel Example Bank', 'acquirer'], ['Other Example Bank', 'target']], { closedBy: 'fdic-event:1', closedOn: '2026-11-01' }),   // closed: not counted
+  app('a4', [['Ivy Example Bank', 'acquirer'], ['Other Example Bank', 'target']], { withdrawnOn: '2026-11-05' }),                            // withdrawn: not counted
+].map((a) => [a.key, a]));
+
 const LEDGER = { builtAt: '2026-11-16T12:00:00.000Z', runId: 'sales-1', events: Object.fromEntries(EVENTS.map((e) => [e.id, e])) };
 
-function world({ latest = latestDoc(), filers = FILERS, servicers = SERVICERS, aliases = ALIASES, ledger = LEDGER, enforcement = ENFORCEMENT } = {}, dir = makeDir()) {
+function world({ latest = latestDoc(), filers = FILERS, servicers = SERVICERS, aliases = ALIASES, ledger = LEDGER, enforcement = ENFORCEMENT, mergers = MERGERS } = {}, dir = makeDir()) {
   if (latest) put(dir, COVERAGE_PATHS.latest, latest);
   if (aliases) put(dir, COVERAGE_PATHS.aliases, aliases);
   if (filers) put(dir, COVERAGE_PATHS.filers, filers);
   if (servicers) put(dir, COVERAGE_PATHS.servicers, servicers);
   if (ledger) put(dir, COVERAGE_PATHS.ledger, ledger);
   if (enforcement) put(dir, COVERAGE_PATHS.enforcement, enforcement);
+  if (mergers) put(dir, COVERAGE_PATHS.mergers, mergers);
   return dir;
 }
 const row = (r, id) => r.rows.find((x) => x.id === id);
@@ -114,12 +125,19 @@ test('enforcement (E18-S2): an order naming the bank by exact name or a principa
   assert.deepEqual(texts(r, 'enforcement'), ['1 of 4 (25.0%)', '1 of 3 (33.3%)', '3 of 9 (33.3%)']);
   assert.ok(r.rows.every((x) => x.built === true), 'every source is built now');
   assert.match(renderCoverage(r), /Enforcement record\s+1 of 4 \(25\.0%\)\s+1 of 3 \(33\.3%\)\s+3 of 9 \(33\.3%\)/);
-  assert.match(e.basis, /Federal Reserve orders, and FDIC orders once a principal has run outbound sources run fdicorders/);
+  assert.match(e.basis, /Federal Reserve and OCC orders, and FDIC orders once a principal has run outbound sources run fdicorders/);
   // Without the store, the line is said not to have run.
   const none = coverageReport({ dir: world({ enforcement: null }) });
   assert.equal(row(none, 'enforcement').notRun, true);
   assert.deepEqual(counts(none, 'enforcement'), { A: 0, B: 0, all: 0 });
   assert.match(none.notRunNote, /the enforcement orders \(sources\/enforcement\/orders\.json; outbound sources run enforcement\)/);
+});
+
+test('merger applications (E18-S3): an open application naming the bank, in either role, counts; a closed or withdrawn one does not', () => {
+  const r = coverageReport({ dir: world() });
+  assert.deepEqual(counts(r, 'merger'), { A: 1, B: 1, all: 2 });
+  assert.equal(row(r, 'merger').notRun, false);
+  assert.equal(row(coverageReport({ dir: world({ mergers: null }) }), 'merger').notRun, true);
 });
 
 test('the empty case: no candidate list, or one with no bank, gives counts of 0 and says so, with no division by zero', () => {
@@ -150,8 +168,8 @@ test('a tier with no bank shows 0 of 0 beside tiers that have some', () => {
 });
 
 test('a source that has not run is said to be not run, so its zero is not read as a measurement', () => {
-  const r = coverageReport({ dir: world({ filers: null, servicers: null, aliases: null, ledger: null, enforcement: null }) });
-  assert.deepEqual(r.stores.map((s) => [s.id, s.present]), [['filers', false], ['servicers', false], ['ledger', false], ['enforcement', false]]);
+  const r = coverageReport({ dir: world({ filers: null, servicers: null, aliases: null, ledger: null, enforcement: null, mergers: null }) });
+  assert.deepEqual(r.stores.map((s) => [s.id, s.present]), [['filers', false], ['servicers', false], ['ledger', false], ['enforcement', false], ['mergers', false]]);
   assert.deepEqual(counts(r, 'sec-unmapped'), { A: 4, B: 3, all: 9 }, 'with no map, every bank is unmapped');
   assert.deepEqual(counts(r, 'cmbs'), { A: 0, B: 0, all: 0 });
   assert.deepEqual(counts(r, 'sale'), { A: 0, B: 0, all: 0 });
@@ -172,7 +190,7 @@ test('deterministic and counts only: the same data gives the same report, which 
   assert.deepEqual(a.candidates, { runId: 'score-1', scoredAt: '2026-11-16T13:00:00.000Z', latestRepdte: '20260630', provisional: false });
   assert.doesNotMatch(JSON.stringify(a) + renderCoverage(a), /Example Bank|Servicing|fdic:\d|servicer:|0009900/);
   // Pure: the same stores handed straight in give the same report.
-  assert.deepEqual(buildCoverage({ latest: latestDoc(), aliases: ALIASES, filers: FILERS, servicers: SERVICERS, ledger: LEDGER, enforcement: ENFORCEMENT }), a);
+  assert.deepEqual(buildCoverage({ latest: latestDoc(), aliases: ALIASES, filers: FILERS, servicers: SERVICERS, ledger: LEDGER, enforcement: ENFORCEMENT, mergers: MERGERS }), a);
 });
 
 test('the written report: fixed templates, the denominators, and what each line counts', () => {

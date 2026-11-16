@@ -45,7 +45,23 @@
       "maxReleasesPerRun": 12,
       "maxPages": 20,
       "timeoutMs": 60000
+    },
+    "occ": {
+      "_note": "OCC orders (outbound sources run occorders, and the monthly sources.enforcement job): the OCC's monthly news release 'OCC Announces Enforcement Actions for <Month>', found by walking the year's release numbers. PLACEHOLDERS. backfillYears: how many past years the first run reads (each about 100 releases). maxMisses: release numbers answering 404 in a row before a year is taken as read to its end (gaps of 2 were seen). maxRequestsPerRun: a cap; the next run continues. minIntervalMs: at least this long between requests.",
+      "minIntervalMs": 1000,
+      "backfillYears": 2,
+      "maxMisses": 8,
+      "maxRequestsPerRun": 400
     }
+  },
+  "mergers": {
+    "_note": "Merger applications (PRD next-five E18-S3, outbound sources run mergerapps): the Federal Reserve's weekly H.2 release, one page per district. PLACEHOLDERS. districts: the Reserve Bank districts read each week; all twelve, since a bank in our metros can be acquired by a holding company anywhere. backfillWeeks: how far back the first run reads. maxWeeksPerRun: weeks read per run (each week is 14 requests). minIntervalMs: at least this long between requests. minRowsPerWeek: a week with fewer filings across the districts is noted in the run log. userAgent: optional, as for enforcement.",
+    "userAgent": "[CONFIRM: optional; firm name and a monitored business contact for Federal Reserve requests]",
+    "districts": ["boston", "newyork", "philadelphia", "cleveland", "richmond", "atlanta", "chicago", "stlouis", "minneapolis", "kansascity", "dallas", "sanfrancisco"],
+    "backfillWeeks": 26,
+    "maxWeeksPerRun": 30,
+    "minIntervalMs": 1000,
+    "minRowsPerWeek": 5
   },
   "sales": {
     "_note": "The who-sells-to-whom ledger (PRD E16, outbound sales build). filingSearches: the saved searches in filings.json whose hit on a bank's filing counts as a disclosed sale (8-K Item 2.01, a completed acquisition or disposition of assets, may also be the bank BUYING: the event says so). acquisitionKinds: the FDIC structure-event kinds that count as a whole-bank acquisition; affiliate-reorganization (224, inside one holding company) is left out, as in scoring.json. Both lists are PLACEHOLDERS for a principal to review.",

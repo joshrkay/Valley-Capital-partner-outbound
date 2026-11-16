@@ -11,7 +11,7 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 | # | Gap today | Link it weakens | Epic |
 |---|---|---|---|
 | 1 | Every weight and tier cut in `scoring.json` is a placeholder. Tuning waits for 30 confirmed call outcomes (`config.outcomes.minToTune`). Those take quarters to collect, they will be few, and they only cover banks the firm chose to call. | 4. The institution | **E17** A backtest |
-| 2 | The strongest "will sell" signal, the SEC filings listener (E13-S1), only sees SEC filers. Most banks under the $10 billion cap have no SEC filer **[verify: E18-S1 measures it]**. Enforcement orders and merger applications cover them, are free, and are rated **High** in `docs/data-sources.md`. Enforcement orders are built for the Federal Reserve only (E18-S2); merger applications are not built. | 3. The time | **E18** Pressure at banks the SEC never sees |
+| 2 | The strongest "will sell" signal, the SEC filings listener (E13-S1), only sees SEC filers. Most banks under the $10 billion cap have no SEC filer **[verify: E18-S1 measures it]**. Enforcement orders and merger applications cover them, are free, and are rated **High** in `docs/data-sources.md`. Enforcement orders are built for the Federal Reserve and the FDIC (E18-S2); merger applications are built from the Federal Reserve's H.2 (E18-S3). | 3. The time | **E18** Pressure at banks the SEC never sees |
 | 3 | The plan says intermediaries "hear first and control who is invited", and that mid-size banks sell through an advisor's buyer list. The pipeline only scores institutions, and the referral mapper (agent 7) is not built. | 2. The advantage, 5. The person | **E19** Intermediaries |
 | 4 | Section 0 rightly bars a message from mentioning the recipient's numbers. That leaves a first touch with little to offer beyond "we buy multifamily loans in Phoenix". Nurture (E10) can only link to pages the firm has published, and the site names no principal. | 6. The message | **E20** A give-first market note |
 | 5 | Credit unions and non-bank lenders hold CRE in our metros and are not covered. `docs/data-sources.md` calls NCUA "a seller class we do not cover yet", and decision D2 is open. | 1. The paper | **E21** New sellers |
@@ -150,7 +150,7 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 - [ ] Its first result goes in this PRD, replacing the **[verify]** in section 0.
   - A principal fills this in from the first `outbound coverage` run on the real data folder. The tests use invented banks only, so they cannot fill it. The Tier A share with a confirmed SEC filer from that run is also the baseline for the "Coverage of private banks" metric in section 3.
 
-**E18-S2. Enforcement orders.** *As a principal, I want every public enforcement order against a bank in our universe recorded, with its type and date, so that I know when an examiner has told a bank to cut its problem assets.* P0, Now (no-key sources), R2 (OCC). **Built for source 1, the Federal Reserve** (`src/sources/enforcement.mjs`, `outbound sources run|verify enforcement`, `outbound enforcement list|unmatched|alias`, worker job `sources.enforcement`), **and source 2, the FDIC, built blind for a principal's machine** (`src/sources/fdicorders.mjs`). Sources 3 and 4 are not built.
+**E18-S2. Enforcement orders.** *As a principal, I want every public enforcement order against a bank in our universe recorded, with its type and date, so that I know when an examiner has told a bank to cut its problem assets.* P0, Now (no-key sources), R2 (OCC). **Built for source 1, the Federal Reserve** (`src/sources/enforcement.mjs`, `outbound sources run|verify enforcement`, `outbound enforcement list|unmatched|alias`, worker job `sources.enforcement`), **and source 2, the FDIC, built blind for a principal's machine** (`src/sources/fdicorders.mjs`). Source 3 (the states) was spiked and not built (see below); **source 4, the OCC, is built from its monthly releases, with no key.**
 - [ ] **Sources**, from `docs/data-sources.md` 2.2, built in this order:
   1. [x] the Federal Reserve's enforcement actions (no key). Read from the two JSON files behind its search page (`/supervisionreg/files/ea-cms-recent.json` and `ea-old.json`), not the RSS feed: the files carry every action since 1989 with its effective and termination dates;
   2. [x] FDIC's monthly orders (`src/sources/fdicorders.mjs`, `outbound sources run|verify fdicorders`). **Built blind, and run on a principal's machine, not in the worker.** This is the source that matters most: the Federal Reserve supervises state member banks and holding companies, and most banks in our universe are state nonmember banks, which the FDIC supervises (see the first result below).
@@ -163,8 +163,28 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
      - **No people:** a row is skipped when its action is against an individual (prohibition, removal, suspension, Section 19) or when its respondent has no organization word. `sources verify fdicorders` fails if a stored party has none. Deposit-insurance terminations and waiver orders are counted and not stored.
      - **Not built:** phrase flags. The order PDFs are on orders.fdic.gov, which Node cannot verify. A worker job is also not built, because the platform worker has no browser. A principal runs it monthly and pushes the data folder (`outbound platform push`).
      - FDIC orders are stored in `sources/enforcement/fdic-orders.json`, keyed `fdicorder:<docket>` (or a hash when no docket shows). They feed the same signals, review list, lists and coverage line as the Federal Reserve's. An FDIC "order terminating" is linked to the latest stored order of that type for the same bank;
-  3. [ ] the Texas Department of Banking and California DFPI list pages. Not spiked;
-  4. [ ] the OCC API (`api.occ.gov/EnforcementActions/list`), once the free key is opened in the firm's name (D3). The key lives in the worker's secret store. Waits for D-E2.
+  3. [ ] the Texas Department of Banking and California DFPI list pages. **Spiked November 16, 2026, and not built, by a principal's decision:**
+     - **Texas** (www.dob.texas.gov, robots.txt allows /news-and-events/): the press-release lists for 2020 to 2026 hold 109 orders and **none against a bank**. They are against money transmitters, virtual-currency firms, payroll companies, cemeteries and funeral homes, and individuals (prohibitions). The Texas Finance Code appears to make orders against state banks confidential **[verify: §31.301]**. An adapter would find nothing to score.
+     - **California DFPI** (dfpi.ca.gov): every page answered a Cloudflare challenge (403) from the development environment. Its robots.txt disallows named AI crawlers (ClaudeBot, GPTBot and others) and allows other agents outside a few search paths. An adapter could only run on a principal's machine, as the FDIC's does, and the pages could not be seen to build it. Not attempted further.
+     - **Why little is lost:** a state's order against a state bank is usually issued jointly with its federal regulator, the FDIC for a nonmember bank and the Federal Reserve for a member bank. Those orders already reach us through sources 1 and 2 **[verify: on the first FDIC run, count orders that name a state regulator as co-issuer]**.
+     - Revisit if the FDIC run shows state-only orders, or if a principal names a state order that the federal lists missed;
+  4. [x] **The OCC, with no key** (`src/sources/occorders.mjs`, `outbound sources run|verify occorders`, and the monthly `sources.enforcement` job after the Federal Reserve).
+     - **What was checked on November 16, 2026:**
+       - The API (`api.occ.gov/EnforcementActions/list`) answers `API_KEY_MISSING` without the free key, and its search page (apps.occ.gov/EASearch) is a script form.
+       - The OCC's monthly news release "OCC Announces Enforcement Actions for <Month>" needs neither. It is a plain page on www.occ.gov; robots.txt allows /news-issuances/.
+       - Releases are numbered in sequence within a year, with gaps. The adapter walks the numbers until `maxMisses` 404s in a row (RSS keeps only 10 items).
+       - A release has up to three sections, each opened by a fixed paragraph: actions against banks (kept), against institution-affiliated parties, meaning individuals (skipped, nothing kept), and terminations (kept, with the date and docket of the order they end).
+       - All 10 of 2026's enforcement releases parse with nothing unread.
+     - **Stored:** `sources/enforcement/occ-orders.json`, keyed `occ:<docket>`, feeding the same signals, review list and coverage line.
+     - **Not stored:** the reason text, and phrase flags. The order PDFs' fonts are not single-byte, so the repository's PDF reader cannot read them.
+     - **Dates:** a new action is dated by its release, since the release gives no date per action. A termination closes the stored order it names.
+     - **The API key (D-E2) is no longer needed for this source.** The API would add exact order dates.
+     - **First live run (November 16, 2026; 2025 and 2026):**
+       - 311 releases read, 34 of them monthly enforcement releases.
+       - 49 actions against banks and 56 terminations stored; 25 of the terminations closed an order stored here.
+       - 112 actions against individuals skipped; 3 entries could not be read and are noted in the run log.
+       - The source check passed.
+       - With the Federal Reserve's orders and the merger applications, scoring then gave 11 banks in the list an enforcement or merger signal and wrote 22 regulatory records (E18-S4).
 - [x] **A spike first** for the Federal Reserve, written at the top of the adapter: `robots.txt` (404, so nothing is disallowed) and the terms page, read November 16, 2026; the fields an action carries; no FDIC cert or RSSD ID, only "Name, City, State", often the holding company's; a termination is published as the original action's termination date (`tdt`, with 1950-01-01 for none), not as its own record. The terms say Board information is public domain unless marked otherwise **[verify: a principal reads them before the first scheduled run]**.
 - [x] **One record per order:** regulator, type codes (consent order, cease and desist, formal written agreement, prompt corrective action directive, civil money penalty against the bank, a modification, other), the effective date, the parties (organization, city, state), a link, and the termination date. A **termination** is its own record (`<key>:termination`), dated, with the type of the order it ends and `terminates`, the key of that order. Its link is the order's: the Fed's files carry no link to the termination's own release. Stored in `sources/enforcement/orders.json`. Orders against every organization nationwide are kept, so an alias added later takes effect without another pull. Matching happens when the orders are read, never at write time.
   - Some old records give "DNE" as the link: no document is published. The order is kept with `link: null`.
@@ -187,17 +207,39 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 - **Verify:** passed all four checks.
 - **What it means:** the Federal Reserve is the smallest of the four sources for our universe. The FDIC (source 2) matters most; it is now built and waits for its first run on a principal's machine.
 
-**E18-S3. Merger applications.** *As a principal, I want to hear about a bank merger when it is applied for, not when it closes, so that I can be in front of the acquirer before it decides what to do with the target's CRE book.* P1, Now.
-- [ ] Sources: the Federal Reserve's press-orders RSS (`federalreserve.gov/feeds/press_orders.xml`; the spike confirms the filename), the H.2 weekly release, and the OCC's Corporate Applications Search (`apps.occ.gov/CAS/`), which replaced the OCC Weekly Bulletin on December 19, 2025 and shows an application after a five-day delay **[verify]**. For state-chartered banks, which CAS never shows: the California DFPI Monthly Bulletin ("Bank Activity"), Colorado's monthly "Financial Institution Activity" bulletin, and the Texas Department of Banking's corporate filings with the Finance Commission's Corporate Division report **[verify]** (`docs/data-sources.md` 2.2, `docs/listening-sources.md`). A spike first, as in S2.
-- [ ] Each application becomes an event signal, `type: 'merger_pending'`, on the target and on the acquirer, with the filing, approval and, later, close dates.
-- [ ] When the merger closes and appears in `/history` (E3-S6), the existing structure event takes over, and the pending signal links to it. A test proves the merger is never counted twice.
-- [ ] A withdrawn or denied application ends the signal, with its date.
-- [ ] Worker job `sources.mergerapps`, weekly.
+**E18-S3. Merger applications.** *As a principal, I want to hear about a bank merger when it is applied for, not when it closes, so that I can be in front of the acquirer before it decides what to do with the target's CRE book.* P1, Now. **Built for the Federal Reserve's H.2** (`src/sources/mergerapps.mjs`, `outbound sources run|verify mergerapps`, `outbound mergers list`, worker job `sources.mergerapps`, weekly).
+- [ ] Sources (spike, November 16, 2026; findings at the top of the adapter):
+  - [x] **The H.2 weekly release.** It is the source of applications.
+    - Each week has a folder at `/releases/h2/<YYYYMMDD>/` with one page per Reserve Bank district. Each page has a "Filings received" table: filer, filing type, the proposal, and the comment-period end dates. 84 district pages from June 2025 to November 2026 had it.
+    - The codes kept: 18C (bank merger), 3A1 (becoming a holding company), 3A3 (a holding company acquiring a bank), 3A5 (holding companies merging). A 3A1 is often a bank forming its own holding company, so its label says formation, never acquisition.
+    - Approvals, withdrawals and denials come from the week's delegated-actions and Board-actions pages.
+  - [x] **The press-orders RSS** (`/feeds/press_orders.xml`, confirmed) is not read. It carries only Board-level approvals, about two a month, already in the H.2's Board actions.
+  - [ ] **The OCC's Corporate Applications Search:** not built. It is a script-drawn application with no plain pages, the same situation as orders.fdic.gov.
+  - [ ] **The FDIC:** no applications list was found (data-sources open question 8). A merger of two nonmember banks with no holding-company application, or of two national banks, is decided by the FDIC or the OCC alone. The H.2 does not show it, so it surfaces only at its close, through FDIC's /history (E3-S6).
+  - [ ] **State bulletins:** not built. See E18-S2's state spike.
+- [x] Each application becomes an event signal, `type: 'merger_pending'`, on each bank in the list it names, as acquirer or as the bank acquired.
+  - The signal carries the week filed, the comment-period end and, once known, the approval date.
+  - The proposal text is never stored: only the organizations parsed from it, each with its city, state and role.
+  - A party with no organization word is dropped, and a change-in-control notice, which names individuals, is skipped.
+  - The H.2 gives the week of receipt, not the exact filing date.
+- [x] When the merger closes and appears in `/history` (E3-S6), the application is closed (`closedBy: fdic-event:<transnum>`), and its pending signal ends, so the structure event's own signal speaks for it. A test proves the merger is never counted twice.
+  - The match is on the resolved target's cert, or, when no target is in the list, the acquirer's, effective on or after the week filed.
+- [x] A withdrawn or denied application ends the signal, with its date.
+- [x] Worker job `sources.mergerapps`, weekly (Saturdays, then `platform verify mergerapps`), with its migration. `outbound sources verify mergerapps` checks freshness and that records are sourced and person-free, then reads the latest week again.
+- [x] Signals only, no points, as for enforcement (D-E1). The coverage report has a line for open applications.
+- **Matching:** as for enforcement orders: exact name and state, or a principal's alias. A leading "The" is now ignored on both sides (for enforcement too), since the Federal Reserve writes "First National Bank of X" where the FDIC has "The First National Bank of X".
 
-**E18-S4. To the briefer and the call brief, never to the drafter.** *As a principal, I want the briefer and the call brief to know about an order or a pending merger so that I do not walk into a call unaware.* P1, R2.
-- [ ] Orders and pending mergers go to the briefer and the call brief (E15-S1) as fenced data, with ids, the way the paper estimate does.
-- [ ] **The drafter receives none of it.** A handoff test, like `test/handoff.test.mjs`, proves no order, flag, link, type or date reaches it.
-- [ ] The linter rejects any draft that contains "consent order", "enforcement", "regulator" or "cease and desist", by adding them to `terminology.json` `banned` (read by `src/lint.mjs`). The list is a placeholder.
+**E18-S4. To the briefer and the call brief, never to the drafter.** *As a principal, I want the briefer and the call brief to know about an order or a pending merger so that I do not walk into a call unaware.* P1, R2. **Built** (`src/regulatory.mjs`, `src/research.mjs`, `src/calls.mjs`, `terminology.json`; `test/regulatory-handoff.test.mjs`).
+- [x] Orders and pending mergers go to the briefer and the call brief (E15-S1) as fenced data, with ids, the way the paper estimate does.
+  - **The record:** every scoring run writes `regulatory/<key>.json` per bank, built in code from the stores alone. A bank's record has two parts:
+    - its enforcement orders and terminations from all three regulators (id, regulator, type, date, the termination date, whether it is in force, the fixed phrases found, the link);
+    - the open merger applications that name it (id, kind, role, week filed, approval, the other parties).
+
+    A bank whose orders and applications are gone has its record emptied, so nothing stale outlives its store.
+  - **The briefer** receives `<regulatory_record>` beside the paper estimate. It is told to retrieve each order or application from the regulator's own page and cite that page, to confirm the bank's city and state there (the match is by name), and that none of it is for a message.
+  - **The call brief** cites the record by id (`regulatory:<id>`) and carries two warnings: `ORDER_IN_FORCE` and `MERGER_PENDING`. It adds a fixed not-say rule: never mention a regulator, an enforcement order or a pending merger, or hint at knowing of one.
+- [x] **The drafter receives none of it.** `LOADS.draft` holds no `regulatory/` and no `sources/` path; inside its unit of work, the record cannot even be read. A handoff test runs the drafter end to end with the record in the data folder and proves no order, id, type, date, link or party reaches its input.
+- [x] The linter rejects any draft that contains "consent order", "enforcement", "regulator" or "cease and desist" (hyphenated too), added to `terminology.json` `banned` (read by `src/lint.mjs`). "Regulatory" is still allowed, as in "regulatory approval". The list is a placeholder.
 
 **Decisions for a principal.**
 
@@ -315,14 +357,18 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 
 **Why.** Credit unions hold commercial real estate in our metros, report it quarterly to the NCUA, and are not covered. The plan also says much of the multifamily stress sits with bridge lenders, their CLOs and debt funds, which the pipeline does not see. Both are cheap to **measure** before anyone decides whether to build. Decision D2 in `docs/data-sources.md` (credit unions in or out) defaults to "not in scope". This epic's spikes give the principals the numbers to decide it.
 
-**E21-S1. NCUA spike.** *As a principal, I want to know how much CRE the credit unions in our metros hold, and how distressed it is, so that I can decide whether they are sellers we want.* P1, Now.
-- [ ] Download one quarter of NCUA 5300 data (ncua.gov quarterly ZIP of CSVs) and record, with dates:
-  - the files and the account codes for non-owner-occupied CRE, construction and development, member business loans, delinquency buckets and charge-offs **[verify each code against NCUA's account definitions]**;
-  - whether branch locations are published, and in which file **[verify]**, since metro presence depends on it;
-  - the publication lag (70–76 days was seen) and whether figures are amended.
-- [ ] Count the credit unions with a branch or headquarters in the six metros, their total CRE, and their noncurrent CRE. Put these beside the same totals for banks under the asset cap.
-- [ ] Check the member business lending cap **[verify: 12.25% of assets under the Federal Credit Union Act, with exceptions]**. A credit union near its cap has a reason to shed loans, which could be a fit signal of its own.
-- [ ] Findings go in `docs/data-sources.md`, with a recommendation on D2. No adapter is built in the spike. Spike data stays in the data folder.
+**E21-S1. NCUA spike.** *As a principal, I want to know how much CRE the credit unions in our metros hold, and how distressed it is, so that I can decide whether they are sellers we want.* P1, Now. **Done November 16, 2026** (findings in `docs/data-sources.md` 2.7).
+- [x] One quarter of NCUA 5300 data (June 30, 2026) recorded, with dates:
+  - **Files and codes:** the account codes for construction and development, multifamily, non-owner-occupied and owner-occupied commercial real estate, the delinquency buckets (DL series) and charge-offs (CH series). The older member-business-loan codes are retired (`STATUS` False, all zero).
+  - **Branch locations:** published, in `Credit Union Branch Information.txt`, with county and a main-office flag.
+  - **Lag:** about 55 days (files dated August 24). The page was updated on September 14, so amendments happen.
+- [x] **Counted, beside the banks:** 243 credit unions have a branch in the six metros. The 233 under $10 billion hold $23.1 billion of CRE, with 1.35% 90+ days delinquent and 2.23% for non-owner-occupied. The 202 banks in our list under $10 billion hold $154.9 billion, with 1.06% noncurrent. The two definitions differ slightly (section 2.7).
+- [x] **The business-lending cap:**
+  - 27 metro credit unions are at or over the cap, and 20 of them are low-income designated, so exempt.
+  - Among those not designated low-income, 7 are over the cap and 11 are within 20% of it: a usable fit signal once exemptions are excluded.
+- [x] **Recommendation on D2: yes, after the bank pipeline is in use.**
+  - Before building S2: approved claims for a `credit_union` audience, and a briefer playbook for how a credit union decides on a sale.
+  - Also, 64 of the 233 already sell participations ($2.3 billion outstanding).
 
 **E21-S2. The NCUA adapter and scoring.** *As a principal, I want credit unions scored and listed beside banks so that I can work them the same way.* P2, after D2 says yes.
 - [ ] `outbound sources run ncua`, keyed `ncua:<charter>`, with the full E2 contract.
@@ -330,12 +376,15 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 - [ ] A paper estimate (E14) for credit unions, tiered as reported, observed or inferred.
 - [ ] The drafter refuses a `credit_union` audience until `claims.json` has approved claims for it. The site speaks to banks today.
 
-**E21-S3. Non-bank lenders spike.** *As a principal, I want to know which non-bank lenders' CRE books can be seen in public data so that we know whether a paper profile is even possible for them.* P1, Now.
-- [ ] For each class, record what public data shows, with dates and links:
-  - **commercial mortgage REITs**: 10-K and 10-Q loan tables (property type, location, risk rating, maturity), and whether the SEC Financial Statement and Notes data sets carry them (`docs/data-sources.md` 2.1);
-  - **CRE CLOs**: whether any loan-level reporting is public, or only offered privately under Rule 144A **[verify]**;
-  - **debt funds**: what Form ADV and Form D show (existence and size, not the book) **[verify]**.
-- [ ] A recommendation per class: build, watch, or drop. No adapter is built in the spike.
+**E21-S3. Non-bank lenders spike.** *As a principal, I want to know which non-bank lenders' CRE books can be seen in public data so that we know whether a paper profile is even possible for them.* P1, Now. **Done November 16, 2026** (findings in `docs/data-sources.md` 2.7).
+- [x] For each class, what public data shows:
+  - **Commercial mortgage REITs:** 10-K and 10-Q XBRL tags loans by property type, by company-defined region and by internal risk rating; metros are not tagged. Checked on Blackstone Mortgage Trust's 10-Q for September 30, 2026. The SEC company-facts API drops the dimensions. The monthly Financial Statement and Notes data sets keep them.
+  - **CRE CLOs:** offered privately under Rule 144A **[verify]**. No asset-level ABS-EE filings were found; loan-level data is sold by vendors, not published.
+  - **Debt funds:** Form ADV (private funds, fund type, gross asset value) and Form D (offering size) show existence and size, not the book **[verify the ADV fields]**.
+- [x] **Recommendation per class:**
+  - **Mortgage REITs: watch.** A property-type and region profile from the Financial Statement and Notes data is possible if a principal wants REITs as sellers.
+  - **CRE CLOs: drop.**
+  - **Debt funds: drop as data,** keep as relationships (E19).
 
 **E21-S4. Non-bank adapters.** P2. Stories written after S3, for the classes it recommends.
 
@@ -343,8 +392,8 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 
 | # | Decision | Default |
 |---|---|---|
-| D2 | (From `docs/data-sources.md`.) Are credit unions sellers we want? | Not in scope until E21-S1 reports |
-| D-N1 | Which non-bank classes, if any, after E21-S3 | None |
+| D2 | (From `docs/data-sources.md`.) Are credit unions sellers we want? | Not in scope. E21-S1 has reported, and recommends yes after the bank pipeline is in use |
+| D-N1 | Which non-bank classes, if any, after E21-S3 | None. E21-S3 recommends watching mortgage REITs and dropping CRE CLOs and debt funds |
 
 ---
 
@@ -375,7 +424,7 @@ Numbered after the main PRD's Q18.
 |---|---|---|---|---|
 | Q19 | The backtest's horizon, label kinds and universe (D-B1 to D-B3) | Principals | E17-S2, S3 | The defaults in E17 |
 | Q20 | May weights change on the backtest alone, before 30 outcomes? (D-B4, D-B5) | Principals | Weight changes | Yes, with at least 20 labelled banks in the holdout and a `_calibration` note citing a holdout run |
-| Q21 | Open the OCC API key in the firm's name (D-E2, data-sources D3) | Principals | E18-S2, OCC part | The no-key sources first |
+| Q21 | Open the OCC API key in the firm's name (D-E2, data-sources D3) | Principals | Nothing now: the OCC source reads the monthly releases with no key (E18-S2); the API would add exact order dates | Not opened |
 | Q22 | Does an active enforcement order change how, or whether, a bank is approached? (D-E3) | Principals, then counsel | E18-S4 | No change; the card shows it |
 | Q23 | Who owns the advisor registrations and the proof of funds? (D-I2) | Principals | E19-S3 | Nothing is sent to an advisor |
 | Q24 | Publish a market note, and under whose name? (D-M1) | Principals | E20-S3, S4 | The pack for principals only |

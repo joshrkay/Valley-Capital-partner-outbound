@@ -40,7 +40,7 @@ test('the card: a column per group with its total, every source with its cells, 
   assert.equal(byId.enforcement.built, true);
   assert.deepEqual(card.rows.filter((r) => r.sub).map((r) => r.id), ['sec-rejected', 'sec-unmapped']);
   assert.ok(card.rows.every((r) => typeof r.basis === 'string' && r.basis.length > 10), 'each line says what it counts');
-  assert.equal(card.notRunNote, 'Not run yet: the sale ledger (sales/ledger.json; outbound sales build). A 0 on its lines means the source has not run, not that it sees nothing.');
+  assert.equal(card.notRunNote, 'Not run yet: the sale ledger (sales/ledger.json; outbound sales build) and the merger applications (sources/mergers/applications.json; outbound sources run mergerapps). A 0 on their lines means the source has not run, not that it sees nothing.');
   assert.equal(card.provisional, true);
   assert.equal(card.asOf, '20260630');
   assert.equal(card.note, null);
@@ -51,7 +51,7 @@ test('the card with no candidates says so and shows 0 of 0, never a share', () =
   assert.match(card.note, /^No candidates yet/);
   assert.deepEqual(card.columns.map((c) => c.label), ['Tier A (0)', 'Tier B (0)', 'All candidates (0)']);
   for (const r of card.rows) assert.deepEqual(r.cells, r.built ? ['0 of 0', '0 of 0', '0 of 0'] : ['not built', 'not built', 'not built']);
-  assert.match(card.notRunNote, /^Not run yet: the bank-to-filer map .*, the sale ledger .* and the enforcement orders .*\. A 0 on their lines/);
+  assert.match(card.notRunNote, /^Not run yet: the bank-to-filer map .*, the sale ledger .*, the enforcement orders .* and the merger applications .*\. A 0 on their lines/);
   assert.equal(coverageCard(null), null);
 });
 
