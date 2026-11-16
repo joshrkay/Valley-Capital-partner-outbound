@@ -20,9 +20,12 @@ const STORES = {
   [COVERAGE_PATHS.filers]: { 'fdic:1': { ciks: { '0009900001': { status: 'confirmed', by: 'Pat Example', at: '2026-11-01T00:00:00.000Z' } } }, 'fdic:3': { ciks: { '0009900003': { status: 'rejected', by: 'Pat Example', at: '2026-11-01T00:00:00.000Z' } } } },
   [COVERAGE_PATHS.servicers]: { 'Cedar Example Bank': { name: 'Cedar Example Bank', loans: 1 }, Unknown: { name: 'Unknown', loans: 2 } },
   [COVERAGE_PATHS.aliases]: {},
+  // One Federal Reserve order naming Alder by its exact name (PRD next-five E18-S2); org names only.
+  [COVERAGE_PATHS.enforcement]: { 'frb:1': { key: 'frb:1', regulator: 'frb', sourceId: '1', type: 'written_agreement', types: ['written_agreement'], date: '2026-06-01', terminatedOn: null,
+    parties: [{ name: 'Alder Example Bank', city: 'Sampleton', state: 'TX' }], link: 'https://www.federalreserve.gov/newsevents/pressreleases/enforcement20260601a.htm', linkKind: 'press release', kind: 'order' } },
 };
 
-test('the card: a column per group with its total, every source with its cells, enforcement not built, and what has not run', () => {
+test('the card: a column per group with its total, every source with its cells, enforcement counted, and what has not run', () => {
   const dir = makeDir();
   put(dir, COVERAGE_PATHS.latest, LATEST);
   for (const [p, b] of Object.entries(STORES)) put(dir, p, b);
@@ -31,13 +34,13 @@ test('the card: a column per group with its total, every source with its cells, 
   const byId = Object.fromEntries(card.rows.map((r) => [r.id, r]));
   assert.deepEqual(byId['sec-confirmed'].cells, ['1 of 2 (50.0%)', '0 of 1 (0.0%)', '1 of 4 (25.0%)']);
   assert.deepEqual(byId.cmbs.cells, ['0 of 2 (0.0%)', '1 of 1 (100.0%)', '1 of 4 (25.0%)']);
-  assert.deepEqual(byId.enforcement.cells, ['not built', 'not built', 'not built']);
+  assert.deepEqual(byId.enforcement.cells, ['1 of 2 (50.0%)', '0 of 1 (0.0%)', '1 of 4 (25.0%)']);
   assert.equal(byId.cmbs.detail, '1 special servicer name in the stored CMBS data; 1 matches a candidate. Nothing fuzzier is counted.');
   assert.equal(byId['sec-confirmed'].detail, null);
-  assert.equal(byId.enforcement.built, false);
+  assert.equal(byId.enforcement.built, true);
   assert.deepEqual(card.rows.filter((r) => r.sub).map((r) => r.id), ['sec-rejected', 'sec-unmapped']);
   assert.ok(card.rows.every((r) => typeof r.basis === 'string' && r.basis.length > 10), 'each line says what it counts');
-  assert.equal(card.notRunNote, 'Not run yet: the sale ledger (sales/ledger.json; outbound sales build). A 0 on its lines means the source has not run, not that it sees nothing.');
+  assert.equal(card.notRunNote, 'Not run yet: the sale ledger (sales/ledger.json; outbound sales build) and the merger applications (sources/mergers/applications.json; outbound sources run mergerapps). A 0 on their lines means the source has not run, not that it sees nothing.');
   assert.equal(card.provisional, true);
   assert.equal(card.asOf, '20260630');
   assert.equal(card.note, null);
@@ -48,7 +51,7 @@ test('the card with no candidates says so and shows 0 of 0, never a share', () =
   assert.match(card.note, /^No candidates yet/);
   assert.deepEqual(card.columns.map((c) => c.label), ['Tier A (0)', 'Tier B (0)', 'All candidates (0)']);
   for (const r of card.rows) assert.deepEqual(r.cells, r.built ? ['0 of 0', '0 of 0', '0 of 0'] : ['not built', 'not built', 'not built']);
-  assert.match(card.notRunNote, /^Not run yet: the bank-to-filer map .* and the sale ledger .*\. A 0 on their lines/);
+  assert.match(card.notRunNote, /^Not run yet: the bank-to-filer map .*, the sale ledger .*, the enforcement orders .* and the merger applications .*\. A 0 on their lines/);
   assert.equal(coverageCard(null), null);
 });
 

@@ -8,6 +8,9 @@ import { runFdic } from '../sources/fdic.mjs';
 import { runEdgar } from '../sources/edgar.mjs';
 import { runFilings, loadFilingRules } from '../sources/filings.mjs';
 import { runFdicSales } from '../sources/fdicsales.mjs';
+import { runEnforcement } from '../sources/enforcement.mjs';
+import { runOccOrders } from '../sources/occorders.mjs';
+import { runMergerApps } from '../sources/mergerapps.mjs';
 import { buildLedger } from '../sales.mjs';
 import { runScoring } from '../score.mjs';
 import { runTriage, triageLoads, triageSummary, ymd } from '../triage.mjs';
@@ -17,7 +20,7 @@ import { loadContext } from '../guard.mjs';
 import { researchGate } from '../pilot.mjs';
 import { runCallPrep, runCallExtract, callLoads, needDate } from '../calls.mjs';
 
-export const JOB_KINDS = ['sources.fdic', 'sources.edgar', 'sources.filings', 'sources.fdicsales', 'score.run', 'triage.run', 'research.run', 'draft.run', 'call.prep', 'call.extract'];
+export const JOB_KINDS = ['sources.fdic', 'sources.edgar', 'sources.filings', 'sources.fdicsales', 'sources.enforcement', 'sources.mergerapps', 'score.run', 'triage.run', 'research.run', 'draft.run', 'call.prep', 'call.extract'];
 const ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const CHANNELS = ['email', 'letter', 'call', 'linkedin_note'];
 
@@ -60,6 +63,22 @@ export async function runJob({ client, job, rules, deps = {} }) {
       // run there is mended by the next one. The listener records events and its window moves past a suspect run, which no later
       // run searches again; so a suspect run fails the job and turns the scheduled workflow red (PRD E11-S2).
       return { ok: result.outcome === 'ok', summary: { outcome: result.outcome, filers: result.filers, requests: result.requests, hitsRead: result.hitsRead, filings: result.filings, filingsNew: result.filingsNew, proxies: result.proxies, discovered: result.discovered, changed: result.changed, notes: result.notes, missingFields: result.missingFields } };
+    }
+    case 'sources.enforcement': {   // enforcement orders (PRD next-five E18-S2): the Federal Reserve's action files, monthly
+      // Then the OCC's monthly releases (no key), into their own store in the same folder.
+      const { result } = await client.unitOfWork(LOADS.enforcement, async (dir) => {
+        const opts = { dir, enforcement: rules.config.enforcement, fetchImpl: deps.fetchImpl ?? globalThis.fetch, now: deps.now?.() ?? new Date(), ...(deps.sleep ? { sleep: deps.sleep } : {}) };
+        const fed = await runEnforcement(opts);
+        return { ...fed, occ: await runOccOrders(opts) };
+      }, { retries: 0 });
+      // Orders are state the next run reads again in full (both files are read whole every time), so a suspect run is mended by the
+      // next one, as for the FDIC job: done unless the run failed.
+      const occ = result.occ ? { outcome: result.occ.outcome, releasesRead: result.occ.releasesRead, enforcementReleases: result.occ.enforcementReleases, ordersNew: result.occ.ordersNew, terminationsNew: result.occ.terminationsNew, skippedIndividual: result.occ.skippedIndividual, unparsed: result.occ.unparsed, missingFields: result.occ.missingFields } : null;
+      return { ok: result.outcome !== 'failed' && result.occ?.outcome !== 'failed', summary: { occ, outcome: result.outcome, actionsRead: result.actionsRead, skippedIndividual: result.skippedIndividual, orders: result.orders, ordersNew: result.ordersNew, terminations: result.terminations, terminationsNew: result.terminationsNew, inUniverse: result.inUniverse, docsRead: result.docsRead, docsUnreadable: result.docsUnreadable, docsDeferred: result.docsDeferred, requests: result.requests, changed: result.changed, missingFields: result.missingFields } };
+    }
+    case 'sources.mergerapps': {   // merger applications (PRD next-five E18-S3): the Federal Reserve's weekly H.2
+      const { result } = await client.unitOfWork(LOADS.mergers, (dir) => runMergerApps({ dir, mergers: rules.config.mergers, fetchImpl: deps.fetchImpl ?? globalThis.fetch, now: deps.now?.() ?? new Date(), ...(deps.sleep ? { sleep: deps.sleep } : {}) }), { retries: 0 });
+      return { ok: result.outcome !== 'failed', summary: { outcome: result.outcome, weeks: result.weeks, rowsRead: result.rowsRead, kept: result.kept, applications: result.applications, applicationsNew: result.applicationsNew, outcomes: result.outcomes, closed: result.closed, requests: result.requests, changed: result.changed, missingFields: result.missingFields } };
     }
     case 'score.run': {
       const { result } = await client.unitOfWork(LOADS.score, (dir) => runScoring({ dir, buybox: rules.buybox, scoring: rules.scoring, metros: rules.metros, allowPlaceholders: !!p.draftBuybox, now: deps.now?.() ?? new Date() }));

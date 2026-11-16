@@ -12,6 +12,7 @@
     "outbound:test": "node --test test/*.test.mjs",
     "test": "node --test test/*.test.mjs",
     "sync-site": "node scripts/sync-site.mjs",
+    "fdic-orders:setup": "npm install --no-save playwright@1.63.0 && npx playwright install chromium",
     "sync-site:check": "node scripts/sync-site.mjs --check",
     "test:db": "OUTBOUND_TEST_PG=\"${OUTBOUND_TEST_PG:?set OUTBOUND_TEST_PG to a disposable Postgres, e.g. host=/tmp/vcpg port=54329 user=postgres}\" node --test test/db.test.mjs"
   },

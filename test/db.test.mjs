@@ -164,6 +164,22 @@ test('the sixth migration adds the FDIC loan-sale pull (PRD E16) and keeps every
   must(as('service_role', SERVICE, `update jobs set status = 'done' where id = ${j}`));
 });
 
+test('the enforcement migration adds the enforcement-orders pull (PRD next-five E18-S2) and keeps every earlier kind', { skip }, () => {
+  const constraint = must(psql(`select pg_get_constraintdef(oid) from pg_constraint where conname = 'jobs_kind_check'`));
+  for (const kind of ['sources.fdic', 'sources.edgar', 'sources.filings', 'sources.fdicsales', 'sources.enforcement', 'score.run', 'triage.run', 'research.run', 'draft.run', 'call.prep', 'call.extract']) assert.ok(constraint.includes(`'${kind}'`), `${kind} is missing from ${constraint}`);
+  const j = must(as('authenticated', PAT, `select enqueue_job('sources.enforcement')`));
+  assert.match(j, /^\d+$/);
+  must(as('service_role', SERVICE, `update jobs set status = 'done' where id = ${j}`));
+});
+
+test('the merger-applications migration adds sources.mergerapps (PRD next-five E18-S3) and keeps every earlier kind', { skip }, () => {
+  const constraint = must(psql(`select pg_get_constraintdef(oid) from pg_constraint where conname = 'jobs_kind_check'`));
+  for (const kind of ['sources.fdic', 'sources.edgar', 'sources.filings', 'sources.fdicsales', 'sources.enforcement', 'sources.mergerapps', 'score.run', 'triage.run', 'research.run', 'draft.run', 'call.prep', 'call.extract']) assert.ok(constraint.includes(`'${kind}'`), `${kind} is missing from ${constraint}`);
+  const j = must(as('authenticated', PAT, `select enqueue_job('sources.mergerapps')`));
+  assert.match(j, /^\d+$/);
+  must(as('service_role', SERVICE, `update jobs set status = 'done' where id = ${j}`));
+});
+
 // PRD E7-S3: a deletion request blanks values in a log line that mentions the person. flush_uow takes `redactions` from the seventh
 // migration on, for touches.jsonl and outcomes.jsonl only, and only as a redaction: a value becomes "[removed]", no key is added or
 // dropped, and the keys the guard and the outcomes report rely on (type, accountId, institution, date, id, ref) never change.

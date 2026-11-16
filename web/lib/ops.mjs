@@ -301,7 +301,7 @@ export async function coverageOverview(client, { pageSize = 1000 } = {}) {
     latestRepdte: rows.map((r) => r.period).filter((p) => /^\d{8}$/.test(String(p ?? ''))).sort().at(-1) ?? null,
     items: rows.map((r) => ({ key: r.key, tier: r.tier ?? null, name: r.name ?? '' })),
   } : null;
-  return coverage.buildCoverage({ latest, aliases: doc(P.aliases), filers: doc(P.filers), servicers: doc(P.servicers), ledger: doc(P.ledger) });
+  return coverage.buildCoverage({ latest, aliases: doc(P.aliases), filers: doc(P.filers), servicers: doc(P.servicers), ledger: doc(P.ledger), enforcement: doc(P.enforcement), fdicOrders: doc(P.fdicOrders), occOrders: doc(P.occOrders), mergers: doc(P.mergers), institutions: doc(P.institutions) });
 }
 
 export const queueSources = (client) => client.enqueue('sources.fdic', {});

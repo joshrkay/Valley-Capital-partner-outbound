@@ -10,6 +10,9 @@ import { METRICS, CATEGORIES, SIGNAL_TYPES, computeMetrics, detectSignals, perio
 import { buildCard } from './candidates.mjs';
 import { filingSignals } from './sources/filings.mjs';
 import { saleSignals } from './sales.mjs';
+import { enforcementSignals } from './sources/enforcement.mjs';
+import { mergerSignals } from './sources/mergerapps.mjs';
+import { buildRegulatory, writeRegulatory } from './regulatory.mjs';
 import { buildPaper, paperPath } from './paper.mjs';
 
 const PLACEHOLDER = /\[confirm/i;
@@ -109,6 +112,12 @@ export function validateScoring(scoring) {
   if (lw !== undefined && !(Number.isInteger(lw) && lw >= 1)) errors.push('sales.windowDays must be a whole number of 1 or more');
   const sw = scoring.filings?.windowDays;
   if (sw !== undefined && !(Number.isInteger(sw) && sw >= 1)) errors.push('filings.windowDays must be a whole number of 1 or more');
+  const mw = scoring.mergers?.windowDays;
+  if (mw !== undefined && !(Number.isInteger(mw) && mw >= 1)) errors.push('mergers.windowDays must be a whole number of 1 or more');
+  for (const k of ['windowDays', 'activeWithinDays']) {
+    const v = scoring.enforcement?.[k];
+    if (v !== undefined && !(Number.isInteger(v) && v >= 1)) errors.push(`enforcement.${k} must be a whole number of 1 or more`);
+  }
   return { ok: !errors.length, errors };
 }
 
@@ -332,9 +341,31 @@ export function detectSaleSignals({ signals = [], windowDays = 1095, asOf = null
     .map((s) => ({ ...s, rule: 'sale' }));
 }
 
+// Enforcement signals (next-five E18-S2), from src/sources/enforcement.mjs. Event signals (an order, a termination) are shown while
+// their date is within windowDays of asOf; the state signal 'under an active order' while the order's effective date is within
+// activeWithinDays (its end is the termination, which enforcementSignals already applied). With no asOf every one is kept. They carry
+// rule 'enforcement' for the card, and add no points (D-E1).
+export function detectEnforcementSignals({ signals = [], windowDays = 365, activeWithinDays = 3650, asOf = null }) {
+  const day = (d) => Date.parse(`${d}T00:00:00Z`);
+  const within = (d, n) => !asOf || (day(d) <= day(asOf) && (day(asOf) - day(d)) / 86400000 <= n);
+  return signals
+    .filter((s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s.date)))
+    .filter((s) => within(s.date, s.kind === 'state' ? activeWithinDays : windowDays))
+    .map((s) => ({ ...s, rule: 'enforcement' }));
+}
+
+// Merger-application signals (next-five E18-S3): open applications, from src/sources/mergerapps.mjs, shown while the week filed is within
+// windowDays of asOf. They carry rule 'merger' for the card and add no points.
+export function detectMergerSignals({ signals = [], windowDays = 365, asOf = null }) {
+  const day = (d) => Date.parse(`${d}T00:00:00Z`);
+  return signals.filter((s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s.date)))
+    .filter((s) => !asOf || (day(s.date) <= day(asOf) && (day(asOf) - day(s.date)) / 86400000 <= windowDays))
+    .map((s) => ({ ...s, rule: 'merger' }));
+}
+
 // Scores one bank. Deterministic: no clock, no randomness, no model. `events` are the stored structure events where this bank is the
 // acquirer; `asOf` (YYYY-MM-DD) is the scoring date that decides which event signals are still in their window.
-export function scoreBank({ cert, institution = {}, footprint = {}, financials, scoring, buybox, metros, latestRepdte, events = [], filings = [], sales = [], asOf = null }) {
+export function scoreBank({ cert, institution = {}, footprint = {}, financials, scoring, buybox, metros, latestRepdte, events = [], filings = [], sales = [], enforcement = [], mergers = [], asOf = null }) {
   const fin = financials ?? { CERT: cert, quarters: {} };
   const series = computeMetrics(fin);
   const latestQ = series.quarters.at(-1) ?? null;
@@ -345,6 +376,8 @@ export function scoreBank({ cert, institution = {}, footprint = {}, financials, 
     ...detectStructureSignals({ cert: String(cert), events, rules: scoring.structureEvents?.signals ?? [], asOf }),
     ...detectFilingSignals({ signals: filings, windowDays: scoring.filings?.windowDays ?? 180, asOf }),
     ...detectSaleSignals({ signals: sales, windowDays: scoring.sales?.windowDays ?? 1095, asOf }),
+    ...detectMergerSignals({ signals: mergers, windowDays: scoring.mergers?.windowDays ?? 365, asOf }),
+    ...detectEnforcementSignals({ signals: enforcement, windowDays: scoring.enforcement?.windowDays ?? 365, activeWithinDays: scoring.enforcement?.activeWithinDays ?? 3650, asOf }),
   ];
   const profile = buildProfile({ financials: fin, footprint, institution, buybox, metros, scoring });
   const components = (scoring.components ?? []).map((c) => component(c, { series, latestQ, profile }));
@@ -402,7 +435,9 @@ export function runScoring({ dir, buybox, scoring, metros, now = new Date(), all
   for (const e of Object.values(readJson(join(base, 'events.json'), {}))) if (e?.acquirerCert) { const k = String(e.acquirerCert); if (!eventsBy.has(k)) eventsBy.set(k, []); eventsBy.get(k).push(e); }
   const filingsBy = filingSignals({ dir });   // {} until the SEC listener has run for a confirmed filer
   const salesBy = saleSignals({ dir });       // {} until the sale ledger has been built
-  const items = certs.map((cert) => scoreBank({ cert, institution: institutions[cert] ?? {}, footprint: footprints[cert] ?? {}, financials: fin.get(cert) ?? null, scoring, buybox, metros, latestRepdte, events: eventsBy.get(cert) ?? [], filings: filingsBy[`fdic:${cert}`] ?? [], sales: salesBy[`fdic:${cert}`] ?? [], asOf })).sort(byScore);
+  const enforcementBy = enforcementSignals({ dir, institutions });   // {} until the enforcement source has run
+  const mergersBy = mergerSignals({ dir, institutions });           // {} until the merger-applications source has run
+  const items = certs.map((cert) => scoreBank({ cert, institution: institutions[cert] ?? {}, footprint: footprints[cert] ?? {}, financials: fin.get(cert) ?? null, scoring, buybox, metros, latestRepdte, events: eventsBy.get(cert) ?? [], filings: filingsBy[`fdic:${cert}`] ?? [], sales: salesBy[`fdic:${cert}`] ?? [], enforcement: enforcementBy[`fdic:${cert}`] ?? [], mergers: mergersBy[`fdic:${cert}`] ?? [], asOf })).sort(byScore);
   const failedBanks = listFailedBanks({ failed: readJson(join(base, 'failed.json'), {}), scoring, metros, asOf });
   const runId = `score-${now.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')}`;
   const out = { runId, scoredAt: now.toISOString(), asOf, latestRepdte, buyboxHash: contentHash(buybox), scoringHash: contentHash(scoring), provisional: vb.placeholders.length > 0, placeholders: vb.placeholders, items, failedBanks };
@@ -419,6 +454,8 @@ export function runScoring({ dir, buybox, scoring, metros, now = new Date(), all
       filings: filingsBy[it.key] ?? [], buybox, placeholders: vb.placeholders, metros, runId, scoredAt: out.scoredAt });
     if (!sameContent(readJson(path, null), rec)) { writeJson(path, rec); paperWritten++; }
   }
-  audit(dir, { type: 'scoring_run', runId, banks: items.length, tierA: items.filter((i) => i.tier === 'A').length, tierB: items.filter((i) => i.tier === 'B').length, provisional: out.provisional, latestRepdte, paperRecords: items.length, paperWritten });
+  // The regulatory record (next-five E18-S4): each bank's orders and open merger applications, for the briefer and the call brief only.
+  const regulatoryWritten = writeRegulatory({ dir, records: buildRegulatory({ dir, institutions, asOf, activeWithinDays: scoring.enforcement?.activeWithinDays ?? 3650 }) });
+  audit(dir, { type: 'scoring_run', runId, banks: items.length, tierA: items.filter((i) => i.tier === 'A').length, tierB: items.filter((i) => i.tier === 'B').length, provisional: out.provisional, latestRepdte, paperRecords: items.length, paperWritten, regulatoryWritten });
   return out;
 }

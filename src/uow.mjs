@@ -16,13 +16,14 @@ export const LOADS = Object.freeze({
   account: ['accounts/'],
   pilot: ['pilot/', 'research/'],
   // paper/: the briefer reads the bank's paper estimate as data (E14-S1). The drafter's list never includes it.
-  research: ['accounts/', 'research/', 'facts/', 'briefs/', 'pilot/', 'paper/'],
+  // regulatory/: the bank's orders and open merger applications (next-five E18-S4), as data for the briefer. Never in the drafter's list.
+  research: ['accounts/', 'research/', 'facts/', 'briefs/', 'pilot/', 'paper/', 'regulatory/'],
   draft: [...GUARD, 'accounts/', 'research/', 'facts/', 'drafts/'],
   sources: ['sources/'],
-  score: ['sources/', 'candidates/', 'paper/', 'sales/'],
+  score: ['sources/', 'candidates/', 'paper/', 'sales/', 'regulatory/'],
   // Call prep and outcomes (PRD E15, src/calls.mjs). calls/, drafts/ and research/ are narrowed to one account by callLoads().
   // A confirmation reads outcomes.jsonl (one short line per confirmed call) to finish an interrupted one without writing a line twice.
-  callPrep: [...GUARD, 'accounts/', 'research/', 'drafts/', 'candidates/latest.json', 'paper/', 'calls/'],
+  callPrep: [...GUARD, 'accounts/', 'research/', 'drafts/', 'candidates/latest.json', 'paper/', 'regulatory/', 'calls/'],
   callNotes: ['accounts/', 'calls/'],
   callExtract: ['accounts/', 'calls/'],
   callConfirm: [...GUARD, 'accounts/', 'calls/', 'paper/', 'outcomes.jsonl'],
@@ -33,9 +34,17 @@ export const LOADS = Object.freeze({
   triage: ['candidates/', 'accounts/', 'suppression.json', 'touches.jsonl', 'sources/runs.jsonl', 'sources/fdic/state.json', 'sources/fdic/failed.json',
     'sources/edgar/loans.json', 'sources/edgar/filings.json', 'sources/edgar/filers.json', 'triage/state.json'],
   sales: ['sources/', 'sales/'],   // the CMBS and FDIC loan-sale pulls rebuild the sale ledger (sales/ledger.json) when they finish
-  // Signal coverage (PRD next-five E18-S1, src/coverage.mjs): read-only, five exact files and no folder. The candidate list and its
-  // aliases, the bank-to-filer map, the CMBS servicer summary and the sale ledger. It writes nothing. E18-S2 adds its enforcement store.
-  coverage: ['candidates/latest.json', 'candidates/aliases.json', 'sources/edgar/filers.json', 'sources/edgar/servicers.json', 'sales/ledger.json'],
+  // Signal coverage (PRD next-five E18-S1, src/coverage.mjs): read-only, ten exact files and no folder. The candidate list and its
+  // aliases, the bank-to-filer map, the CMBS servicer summary, the sale ledger, and the enforcement orders (E18-S2: the Federal Reserve's, the FDIC's and the OCC's) and the merger applications (E18-S3), with the bank list
+  // they are matched against. It writes nothing.
+  coverage: ['candidates/latest.json', 'candidates/aliases.json', 'sources/edgar/filers.json', 'sources/edgar/servicers.json', 'sales/ledger.json', 'sources/enforcement/orders.json', 'sources/enforcement/fdic-orders.json', 'sources/enforcement/occ-orders.json', 'sources/mergers/applications.json', 'sources/fdic/institutions.json'],
+  // Enforcement orders (PRD next-five E18-S2, src/sources/enforcement.mjs): its own store, the bank list and the aliases it matches
+  // against (to choose which order documents to read), and the run log. Matching is redone whenever the orders are read, so it writes
+  // no candidate file. No research, drafting or call action loads sources/enforcement/ (E18-S4 decides what the briefer may read).
+  enforcement: ['sources/enforcement/', 'sources/fdic/institutions.json', 'candidates/aliases.json', 'sources/runs.jsonl'],
+  // Merger applications (PRD next-five E18-S3, src/sources/mergerapps.mjs): its own store, the bank list, FDIC's structure events (an
+  // application closes when one shows the merger) and the aliases, and the run log. No model-facing action loads sources/mergers/.
+  mergers: ['sources/mergers/', 'sources/fdic/institutions.json', 'sources/fdic/events.json', 'candidates/aliases.json', 'sources/runs.jsonl'],
   // Routes to the decision-maker (PRD E22, src/routes.mjs): the guard's files (for its view: an opt-out or a suppression stops a route),
   // the account, its research, the sale ledger, the firm's network and the account's own routes file. accounts/, research/ and routes/
   // are narrowed to one account by routesLoads(). No model-facing action (research, draft, call prep) loads network/ or routes/.
