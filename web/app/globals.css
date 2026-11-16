@@ -71,3 +71,7 @@ pre.text { white-space: pre-wrap; word-wrap: break-word; font-family: var(--mono
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; }
 .kv dt { color: var(--muted); } .kv dd { margin: 0; }
 @media (max-width: 600px) { body { font-size: 14px; } th, td { padding: 6px 7px; } }
+/* The call desk (web/app/accounts/[id]/call): the script to read aloud, and a stopwatch. No audio anywhere. */
+.prompter { padding: 14px 16px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--bg); line-height: 1.45; }
+.stopwatch .clock { font-size: 1.6rem; font-weight: 650; }
+details.panel summary { cursor: pointer; }

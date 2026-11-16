@@ -95,6 +95,9 @@ export const LOADS = Object.freeze({
   // touch log, because a sender a recorded touch names is never removed.
   senders: ['senders.json', 'KILL'],
   senderRemove: ['senders.json', 'touches.jsonl', 'KILL'],
+  // The call desk (web app): what a principal reads aloud on a call. The guard's files, the one account and its drafts, read only. It
+  // never holds research/, facts/, paper/, routes/ or regulatory/, so the screen shows only what a person approved, as the drafter does.
+  callDesk: [...GUARD, 'accounts/', 'drafts/'],
 });
 
 // The recording actions' load list, narrowed to the one account they record against.
@@ -103,11 +106,10 @@ export function recordLoads(id) {
   return LOADS.record.map((p) => (p === 'accounts/' ? `accounts/${id}.json` : p));
 }
 
-// The Calibration page's load list with the one stored report it shows. The hash is checked before it becomes part of a path; its form
-// is the backtest's REPORT_HASH (src/backtest/run.mjs).
-export function calibrationLoads(hash) {
-  if (!/^[0-9a-f]{16}$/.test(String(hash ?? ''))) throw new Error(`"${hash}" is not a report hash (16 hexadecimal characters).`);
-  return [...LOADS.calibration, `backtest/report-${hash}.json`];
+// The call desk's load list, narrowed to one account and its own drafts folder.
+export function callDeskLoads(id) {
+  safeId(id);
+  return LOADS.callDesk.map((p) => (p === 'accounts/' ? `accounts/${id}.json` : p === 'drafts/' ? `drafts/${id}/` : p));
 }
 
 // The contact actions' load lists, narrowed to one account where the action touches only that account.
