@@ -712,31 +712,38 @@ Rules across the epic:
 
 ### E9. Mailbox: Gmail drafts, sends and replies
 
+**Built November 17, 2026** (`src/mailbox.mjs`, `outbound mailbox draft|sync|review`, `test/mailbox.test.mjs`, against a fake Gmail; not yet run against a real mailbox).
+- **Setup is a principal's:** an OAuth client in Google Cloud and a refresh token for the sender's own Gmail, in the environment as `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` and `GMAIL_REFRESH_TOKEN`. They are never kept in a data file. The scopes needed are Gmail's compose (drafts) and read-only ones **[verify]**; compose also allows delivery, so the limit is in code.
+- **The limit in code:** the client has six calls (profile, create draft, get draft, get thread, list messages, get message). None delivers mail, and a test fails if the source names a delivery endpoint.
+- **It runs from the command line, on a principal's machine,** not in the platform worker: the credentials belong to a person's mailbox. A worker job can follow once the credentials have a place on the platform.
+- **S4's model sees up to 500 characters of a reply** (subject and snippet, no address), so reply text does reach the model provider. Nothing is kept: only the category and the date. Opt-outs, bounces and auto-replies are decided in code and never sent to it.
+- **Opt-out wording is a pattern** (unsubscribe, remove me, stop emailing, do not contact, and similar) **[verify with real replies]**. Anything unclear is a reply and stops outreach.
+
 **E9-S1. Approve creates a Gmail draft.** *As a principal, I want an approved email to appear as a draft in my own Gmail so that I can send it with one click from my real mailbox.* P0, R2.
-- [ ] The draft holds the approved text exactly, in plain text, with the sender's signature. No tracking pixel, no tracked links. It is from the principal's mailbox on the sending domain.
-- [ ] The code calls only Gmail's draft-creation and read endpoints. Google's permission for creating drafts also allows sending **[verify scope]**, so the limit is enforced in code: a test fails if any send method is referenced.
-- [ ] The guard runs again at draft creation (caps, suppression, kill switch). If it refuses, no draft is created.
+- [x] The draft holds the approved text exactly, in plain text, with the sender's signature. No tracking pixel, no tracked links. It is from the principal's mailbox on the sending domain.
+- [x] The code calls only Gmail's draft-creation and read endpoints. Google's permission for creating drafts also allows sending **[verify scope]**, so the limit is enforced in code: a test fails if any send method is referenced.
+- [x] The guard runs again at draft creation (caps, suppression, kill switch). If it refuses, no draft is created.
 
 **E9-S2. Noticing a send.** *As a principal, I want the system to notice when I've sent a draft so that the touch log and cadence are right without me typing a command.* P0, R2.
-- [ ] A sync reads the draft's thread. When it sees the message sent, it **always** records the touch with the actual send date, using `recordObservedSend` (built).
+- [x] A sync reads the draft's thread. When it sees the message sent, it **always** records the touch with the actual send date, using `recordObservedSend` (built).
   - The pre-send `recordTouch` refuses a touch the guard rejects. For a send that has already happened, refusing to log it would leave the caps and cadence counting from a false history.
   - Any rule the send broke (a cap filled, or a suppression added after approval) is kept on the record, audited, and shown to the principal.
   - `outbound guard record` uses the same function.
-- [ ] Given the principal edited the text in Gmail before sending, then the sent text is linted, and any failure is flagged for review and noted in the audit log. Message text is not stored in the touch log.
+- [x] Given the principal edited the text in Gmail before sending, then the sent text is linted, and any failure is flagged for review and noted in the audit log. Message text is not stored in the touch log.
 
 **E9-S3. Any reply stops outreach.** *As a principal, I want any reply from anyone at a bank to stop outreach to everyone there immediately so that we never send a next step after someone has answered.* P0, R2.
-- [ ] Inbound mail is matched to accounts by thread first. Otherwise by sender domain, against the institution's **verified `domains`** list, not its name aliases. Names and DNS domains are different things.
+- [x] Inbound mail is matched to accounts by thread first. Otherwise by sender domain, against the institution's **verified `domains`** list, not its name aliases. Names and DNS domains are different things.
   - Each domain carries its source.
   - Personal domains (`config.personalDomains`) never match.
   - A domain shared by several institutions (a holding company, an affiliate, a shared service provider) goes to a principal for review rather than stopping or missing one institution.
   - Given a reply from an unknown domain on no known thread, then it is flagged for review and never silently dropped.
-- [ ] Any reply records a `reply` event, which stops outreach across the bank (existing rule).
-- [ ] An opt-out, or anything that reads like one, suppresses the person and the address at once.
-- [ ] Ambiguous mail is treated as a reply and flagged. A bounce records a `bounce` event.
-- [ ] Only a category and a date are stored. Reply text is not kept.
+- [x] Any reply records a `reply` event, which stops outreach across the bank (existing rule).
+- [x] An opt-out, or anything that reads like one, suppresses the person and the address at once.
+- [x] Ambiguous mail is treated as a reply and flagged. A bounce records a `bounce` event.
+- [x] Only a category and a date are stored. Reply text is not kept.
 
 **E9-S4. Reply sorting** (agent 6). *As a principal, I want replies sorted into interested, not now, wrong person, opt-out, bounce and out-of-office so that I answer the interested ones first.* P1, R3.
-- [ ] Haiku at low effort sorts replies. Opt-outs are handled at once regardless of how confident the sort is. It alerts a principal on "interested" and never replies with substance.
+- [x] Haiku at low effort sorts replies. Opt-outs are handled at once regardless of how confident the sort is. It alerts a principal on "interested" and never replies with substance.
 
 ---
 
