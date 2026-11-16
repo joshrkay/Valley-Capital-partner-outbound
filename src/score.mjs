@@ -12,6 +12,7 @@ import { filingSignals } from './sources/filings.mjs';
 import { saleSignals } from './sales.mjs';
 import { enforcementSignals } from './sources/enforcement.mjs';
 import { mergerSignals } from './sources/mergerapps.mjs';
+import { buildRegulatory, writeRegulatory } from './regulatory.mjs';
 import { buildPaper, paperPath } from './paper.mjs';
 
 const PLACEHOLDER = /\[confirm/i;
@@ -453,6 +454,8 @@ export function runScoring({ dir, buybox, scoring, metros, now = new Date(), all
       filings: filingsBy[it.key] ?? [], buybox, placeholders: vb.placeholders, metros, runId, scoredAt: out.scoredAt });
     if (!sameContent(readJson(path, null), rec)) { writeJson(path, rec); paperWritten++; }
   }
-  audit(dir, { type: 'scoring_run', runId, banks: items.length, tierA: items.filter((i) => i.tier === 'A').length, tierB: items.filter((i) => i.tier === 'B').length, provisional: out.provisional, latestRepdte, paperRecords: items.length, paperWritten });
+  // The regulatory record (next-five E18-S4): each bank's orders and open merger applications, for the briefer and the call brief only.
+  const regulatoryWritten = writeRegulatory({ dir, records: buildRegulatory({ dir, institutions, asOf, activeWithinDays: scoring.enforcement?.activeWithinDays ?? 3650 }) });
+  audit(dir, { type: 'scoring_run', runId, banks: items.length, tierA: items.filter((i) => i.tier === 'A').length, tierB: items.filter((i) => i.tier === 'B').length, provisional: out.provisional, latestRepdte, paperRecords: items.length, paperWritten, regulatoryWritten });
   return out;
 }

@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { callJson, callResearch, newLedger, checkQuote, canonUrl, extractJson, neutralize, estimateCost, addUsage, normText } from './model.mjs';
 import { writeJson, writeText, audit, safeId } from './store.mjs';
 import { readPaper, paperForBriefer } from './paper.mjs';
+import { readRegulatory } from './regulatory.mjs';
 
 const TIERS = ['government', 'regulator', 'company', 'press', 'other'];
 const DRAFTABLE_TIERS = ['government', 'regulator', 'company', 'press'];
@@ -33,7 +34,7 @@ export const schemaFor = (kinds) => ({
   },
 });
 
-export function buildPrompt({ account, playbook, playbooks, models, today, paper = null }) {
+export function buildPrompt({ account, playbook, playbooks, models, today, paper = null, regulatory = null }) {
   const cfg = models.research;
   const named = researchMode(account) === 'person';
   const system = `You are a research analyst preparing a briefing for a principal at Valley Capital Partners, a firm that invests in hospitality, multifamily and retail real estate and buys the properties and the loans secured by them, including non-performing notes. The briefing is about one account and, when one is named, one person. Nothing you write is sent to anyone. A person reads it, then decides whether and how to make contact.
@@ -67,11 +68,24 @@ ${JSON.stringify(schemaFor(playbooks.kinds))}`;
   const user = `Today is ${today}.
 
 <dossier>${neutralize({ id: account.id, name: account.name, aliases: account.aliases ?? [], type: account.type, sectors: account.sectors, person: named ? { name: account.person.name, title: account.person?.title } : null, notesFromThePrincipals: account.notes ?? '', alreadyKnown: account.knownFacts ?? [] })}</dossier>
-${pipelineSection(account.pipeline)}${paperSection(paper)}
+${pipelineSection(account.pipeline)}${paperSection(paper)}${regulatorySection(regulatory)}
 <questions account_type="${playbook.label}">${neutralize(playbook.questions)}</questions>
 ${named ? '\nResearch this account and the named person now.' : `
 NO PERSON IS NAMED YET. Research the institution. For the people question, find the people who most likely hold the decision on selling loans of the kind this institution holds (at most three), each recorded as a person finding, with two independent sources where you can find them. Do not choose between them and do not guess a name; a principal will choose. Set person_check.status to "unconfirmed" with the note "no person named".`} Use the question ids as question_id on each finding.`;
   return { system, user };
+}
+
+// PRD next-five E18-S4: the bank's enforcement orders and open merger applications from the regulators' own lists (regulatory/<key>.json,
+// written by scoring), fenced as data with ids. Context for the research and the risk screen, never a finding by itself, never a message.
+export function regulatorySection(regulatory) {
+  const r = regulatory?.record ?? regulatory;
+  if (!r || (!r.orders?.length && !r.mergers?.length)) return '';
+  const ctx = { orders: r.orders ?? [], pendingMergers: r.mergers ?? [] };
+  return `
+<regulatory_record source="the Federal Reserve's, the FDIC's and the OCC's published enforcement orders, and the Federal Reserve's H.2 merger applications, matched to this bank by name and state in code" as_of="${String(r.asOf ?? '').replace(/[^0-9-]/g, '')}">${neutralize(ctx)}</regulatory_record>
+
+The regulatory record lists the enforcement orders and open merger applications the regulators' own lists show for this bank, each with its id. Use it for bank.regulatory, bank.identity (a pending merger) and the risk screen: retrieve the order or the application from the regulator's own page and cite that page, as any finding needs. Do not copy the record into findings, and do not treat a match by name as proof it is this bank: confirm the bank's city and state on the page. An order in force or a pending merger is a fact for a principal, never for a message.
+`;
 }
 
 // An account the pipeline promoted has an institution but, usually, no person yet (PRD E7-S1).
@@ -248,7 +262,10 @@ export async function runBriefer({ client, dir, account, models, playbooks, now 
   // The bank's paper estimate, when the account came from the pipeline and scoring has written one. A key that is not a bank key has none.
   let paper = null;
   if (account.institutionKey) { try { paper = readPaper({ dir, key: account.institutionKey }); } catch { paper = null; } }
-  const { system, user } = buildPrompt({ account, playbook, playbooks, models, today, paper });
+  // Its regulatory record (next-five E18-S4), when scoring has written one.
+  let regulatory = null;
+  if (account.institutionKey) { try { regulatory = readRegulatory(dir, account.institutionKey); } catch { regulatory = null; } }
+  const { system, user } = buildPrompt({ account, playbook, playbooks, models, today, paper, regulatory });
   if (dryRun) return { dryRun: true, system, user, cfg: models.research };
 
   const ledger = newLedger();

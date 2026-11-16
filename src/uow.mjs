@@ -16,13 +16,14 @@ export const LOADS = Object.freeze({
   account: ['accounts/'],
   pilot: ['pilot/', 'research/'],
   // paper/: the briefer reads the bank's paper estimate as data (E14-S1). The drafter's list never includes it.
-  research: ['accounts/', 'research/', 'facts/', 'briefs/', 'pilot/', 'paper/'],
+  // regulatory/: the bank's orders and open merger applications (next-five E18-S4), as data for the briefer. Never in the drafter's list.
+  research: ['accounts/', 'research/', 'facts/', 'briefs/', 'pilot/', 'paper/', 'regulatory/'],
   draft: [...GUARD, 'accounts/', 'research/', 'facts/', 'drafts/'],
   sources: ['sources/'],
-  score: ['sources/', 'candidates/', 'paper/', 'sales/'],
+  score: ['sources/', 'candidates/', 'paper/', 'sales/', 'regulatory/'],
   // Call prep and outcomes (PRD E15, src/calls.mjs). calls/, drafts/ and research/ are narrowed to one account by callLoads().
   // A confirmation reads outcomes.jsonl (one short line per confirmed call) to finish an interrupted one without writing a line twice.
-  callPrep: [...GUARD, 'accounts/', 'research/', 'drafts/', 'candidates/latest.json', 'paper/', 'calls/'],
+  callPrep: [...GUARD, 'accounts/', 'research/', 'drafts/', 'candidates/latest.json', 'paper/', 'regulatory/', 'calls/'],
   callNotes: ['accounts/', 'calls/'],
   callExtract: ['accounts/', 'calls/'],
   callConfirm: [...GUARD, 'accounts/', 'calls/', 'paper/', 'outcomes.jsonl'],

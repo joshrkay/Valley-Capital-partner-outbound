@@ -223,10 +223,17 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 - [x] Signals only, no points, as for enforcement (D-E1). The coverage report has a line for open applications.
 - **Matching:** as for enforcement orders: exact name and state, or a principal's alias. A leading "The" is now ignored on both sides (for enforcement too), since the Federal Reserve writes "First National Bank of X" where the FDIC has "The First National Bank of X".
 
-**E18-S4. To the briefer and the call brief, never to the drafter.** *As a principal, I want the briefer and the call brief to know about an order or a pending merger so that I do not walk into a call unaware.* P1, R2.
-- [ ] Orders and pending mergers go to the briefer and the call brief (E15-S1) as fenced data, with ids, the way the paper estimate does.
-- [ ] **The drafter receives none of it.** A handoff test, like `test/handoff.test.mjs`, proves no order, flag, link, type or date reaches it.
-- [ ] The linter rejects any draft that contains "consent order", "enforcement", "regulator" or "cease and desist", by adding them to `terminology.json` `banned` (read by `src/lint.mjs`). The list is a placeholder.
+**E18-S4. To the briefer and the call brief, never to the drafter.** *As a principal, I want the briefer and the call brief to know about an order or a pending merger so that I do not walk into a call unaware.* P1, R2. **Built** (`src/regulatory.mjs`, `src/research.mjs`, `src/calls.mjs`, `terminology.json`; `test/regulatory-handoff.test.mjs`).
+- [x] Orders and pending mergers go to the briefer and the call brief (E15-S1) as fenced data, with ids, the way the paper estimate does.
+  - **The record:** every scoring run writes `regulatory/<key>.json` per bank, built in code from the stores alone. A bank's record has two parts:
+    - its enforcement orders and terminations from all three regulators (id, regulator, type, date, the termination date, whether it is in force, the fixed phrases found, the link);
+    - the open merger applications that name it (id, kind, role, week filed, approval, the other parties).
+
+    A bank whose orders and applications are gone has its record emptied, so nothing stale outlives its store.
+  - **The briefer** receives `<regulatory_record>` beside the paper estimate. It is told to retrieve each order or application from the regulator's own page and cite that page, to confirm the bank's city and state there (the match is by name), and that none of it is for a message.
+  - **The call brief** cites the record by id (`regulatory:<id>`) and carries two warnings: `ORDER_IN_FORCE` and `MERGER_PENDING`. It adds a fixed not-say rule: never mention a regulator, an enforcement order or a pending merger, or hint at knowing of one.
+- [x] **The drafter receives none of it.** `LOADS.draft` holds no `regulatory/` and no `sources/` path; inside its unit of work, the record cannot even be read. A handoff test runs the drafter end to end with the record in the data folder and proves no order, id, type, date, link or party reaches its input.
+- [x] The linter rejects any draft that contains "consent order", "enforcement", "regulator" or "cease and desist" (hyphenated too), added to `terminology.json` `banned` (read by `src/lint.mjs`). "Regulatory" is still allowed, as in "regulatory approval". The list is a placeholder.
 
 **Decisions for a principal.**
 

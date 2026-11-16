@@ -18,6 +18,7 @@ import { callJson, neutralize, estimateCost, addUsage, normText } from './model.
 import { readJson, writeJson, readText, writeText, appendJsonl, readJsonl, listFiles, exists, audit, safeId } from './store.mjs';
 import { loadContext, recordEvent, checkTouch, touchFromAccount, norm } from './guard.mjs';
 import { LOADS, withUnitOfWork, snapshotFromDir, applyPlanToDir } from './uow.mjs';
+import { readRegulatory } from './regulatory.mjs';
 
 // ---- Small helpers ----------------------------------------------------------------------------------------------------------------
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -169,8 +170,9 @@ export const NOT_SAY = [
   { id: 'rule:voice', text: 'A calm, exact colleague: plain words, peer to peer, no hype, no urgency, no predatory or desperate language.' },
 ];
 
-function notSayRules({ rules, audience, research }) {
+function notSayRules({ rules, audience, research, regulatory = false }) {
   const out = [...NOT_SAY];
+  if (regulatory) out.push({ id: 'rule:regulatory', text: 'Never mention a regulator, an enforcement order or a pending merger, or say or hint that you know of one. It is in this brief so you are not caught unaware.' });
   const avoid = audience === 'bank' ? rules.bankAvoid ?? [] : rules.terminology?.audiences?.[audience]?.avoid ?? [];
   const say = [...new Set(avoid.map((a) => String(a.say ?? '').replace(/\s*\(.*\)$/, '')).filter(Boolean))];
   if (say.length) out.push({ id: 'rule:words', text: `Use their words: ${say.map((s) => `"${s}"`).join(', ')} (the website's terminology rules for a ${audience}).` });
@@ -244,6 +246,14 @@ export function gatherCallInputs({ dir, account, rules, ctx, date }) {
   pin.tape.forEach((t, i) => add('paper', `paper:tape-${i + 1}`, { tapeRequest: t }));
   pin.unknowns.forEach((t, i) => add('paper', `paper:unknown-${i + 1}`, { unknown: t }));
 
+  // The regulatory record (next-five E18-S4): orders and open merger applications, for a principal's eyes. Never said on the call.
+  const reg = account.institutionKey ? readRegulatory(dir, account.institutionKey) : null;
+  for (const o of reg?.record?.orders ?? []) add('regulatory', `regulatory:${o.id}`, { regulator: o.regulator, type: o.type, date: dateLabel(o.date), datedBy: o.dateBasis === 'release' ? 'the regulator\'s monthly release' : 'the order', terminatedOn: o.terminatedOn ? dateLabel(o.terminatedOn) : null, inForce: !!o.inForce, phrasesInTheOrder: o.phrasesInTheOrder ?? [], link: o.link }, { asOf: isoDate(o.date) });
+  for (const m of reg?.record?.mergers ?? []) add('regulatory', `regulatory:${m.id}`, { pendingMerger: m.kind, role: m.role, filedWeekEnding: dateLabel(m.filedWeekEnding), approvedOn: m.approvedOn ? dateLabel(m.approvedOn) : null, otherParties: m.otherParties, link: m.link }, { asOf: isoDate(m.filedWeekEnding) });
+  const inForce = (reg?.record?.orders ?? []).filter((o) => o.inForce);
+  if (inForce.length) warn('ORDER_IN_FORCE', `The bank is under ${inForce.length === 1 ? 'an enforcement order' : `${inForce.length} enforcement orders`} with no termination recorded (${inForce.map((o) => `${o.type} from the ${o.regulator}, ${o.date}`).join('; ')}). Know it; never say it.`);
+  if (reg?.record?.mergers?.length) warn('MERGER_PENDING', `An open merger application names the bank (${reg.record.mergers.map((m) => `${m.role}, filed in the week ending ${m.filedWeekEnding}${m.approvedOn ? `, approved ${m.approvedOn}` : ''}`).join('; ')}). Who decides on loan sales may be changing.`);
+
   // The touch history: what was sent (step, channel, date, and the approved draft's subject and claims), and any reply or meeting.
   // Stop events from another contact at the same institution count too, as they do in the guard.
   const instNorm = norm(account.name);
@@ -262,7 +272,7 @@ export function gatherCallInputs({ dir, account, rules, ctx, date }) {
 
   for (const c of usableClaims(rules.claims, account)) add('claims', `claim:${c.id}`, { text: c.text });
   for (const q of rules.playbooks?.types?.[account.type]?.questions ?? []) add('playbook', `playbook:${q.id}`, { ask: q.ask });
-  const notSay = notSayRules({ rules, audience, research });
+  const notSay = notSayRules({ rules, audience, research, regulatory: !!reg });
   for (const r of notSay) add('rules', r.id, { text: r.text });
 
   // Suppression: the guard's own check, for a call to this account.
@@ -295,7 +305,7 @@ export const CALL_BRIEF_SCHEMA = {
   },
 };
 
-const GROUPS = [['account', 'account'], ['research', 'research'], ['signals', 'signals'], ['card', 'why_now_card'], ['profile', 'paper_profile'], ['paper', 'paper_estimate'], ['touches', 'touch_history'], ['outcomes', 'earlier_calls'], ['claims', 'approved_claims'], ['playbook', 'playbook'], ['rules', 'fixed_rules']];
+const GROUPS = [['account', 'account'], ['research', 'research'], ['signals', 'signals'], ['card', 'why_now_card'], ['profile', 'paper_profile'], ['paper', 'paper_estimate'], ['regulatory', 'regulatory_record'], ['touches', 'touch_history'], ['outcomes', 'earlier_calls'], ['claims', 'approved_claims'], ['playbook', 'playbook'], ['rules', 'fixed_rules']];
 
 export function buildCallPrompt({ account, date, inputs }) {
   const system = `You prepare a one-page call brief for a principal at Valley Capital Partners. The principal has a call booked with a person at a lender, who agreed to talk about whether the lender might sell loans. Valley Capital buys hospitality, multifamily and retail loans and properties for its own account. The brief is for the principal only. Nothing in it is sent to anyone.

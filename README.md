@@ -273,7 +273,11 @@ npm run outbound -- enforcement alias --key fdic:CERT --name "Example Bancorp, I
 - **No order text.** For an order naming a bank in the list, the order PDF is read once, and only which phrases of `config.enforcement.flags` appear is stored. Page numbers are not recorded yet.
 - **Matching by name.** The Fed gives no cert. An order matches a bank by exact name and state, or by an alias a principal added. A holding company matches only through an alias. Nothing is guessed.
 - **Signals, no points.** An order is an event signal on the candidate. An order in force with no termination recorded is a state signal, which ends at its termination. The card states each from a fixed template. The windows are placeholders in `scoring.json` `enforcement`.
-- The worker runs it monthly (`sources.enforcement`). It is context for the principals only: no research, drafting or call action loads `sources/enforcement/`.
+- The worker runs it monthly (`sources.enforcement`).
+- **Where it goes (PRD next-five E18-S4).** Each scoring run writes `regulatory/<key>.json`: a bank's orders and the open merger applications naming it.
+  - **The briefer** reads it as fenced data, told to confirm each order or application on the regulator's own page.
+  - **The call brief** cites it by id, warns of an order in force or a pending merger, and adds a rule never to mention either.
+  - **The drafter** cannot load it, and the linter rejects "consent order", "enforcement", "regulator" and "cease and desist" in any draft.
 
 **FDIC orders, on your own machine.** The FDIC's order lists are on orders.fdic.gov, a site that draws them in the browser, so a headless Chrome reads the public page. Nothing appears on screen, and the site's internal API is not called. It runs on a principal's computer because the platform's worker has no browser:
 
@@ -494,6 +498,7 @@ In `$OUTBOUND_DATA_DIR`:
 - `senders.json`, `suppression.json`, `accounts/`, `research/`, `facts/`, `briefs/`, `drafts/<account>/`, `touches.jsonl`, `audit.jsonl`;
 - for the pipeline: `sources/` (FDIC data, the CMBS and SEC pulls, enforcement orders, merger applications, the run log and the change log), `candidates/` (the latest list and principals' decisions), `paper/` (one paper estimate per bank), `sales/` (the sale ledger), `triage/` (each week's triage and its snapshot), and `pilot/` (truth sheets, verdicts, the pass).
 - for calls: `calls/<account>/` (call briefs, notes, proposals and follow-ups), `outcomes.jsonl` (confirmed outcomes) and `reports/`.
+- for the regulatory record (PRD next-five E18-S4): `regulatory/` (each bank's orders and open merger applications, for the briefer and the call brief; never the drafter).
 - for routes (PRD E22): `network/` (the firm's own relationships: private, never given to a model) and `routes/` (each account's routes and the chosen route's checklist).
 - for the backtest (PRD E17): `backtest/panel/` (the point-in-time panel), `backtest/labels.json`, `backtest/report-<hash>.json` and `.md`, and the logs `backtest/runs.jsonl` and `backtest/holdout.jsonl`.
 
