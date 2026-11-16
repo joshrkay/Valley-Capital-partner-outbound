@@ -6,7 +6,8 @@
 //      estimate is stated as a fact. A failed check marks the brief NOT USABLE with the reasons. It is never shown as if fine.
 //   2. Recording the call (E15-S2). A model turns a principal's notes into a proposal. Nothing is recorded until a principal confirms
 //      it. Then: a guard `meeting` event, an outcome line in outcomes.jsonl, and the outcome on the account. People named in the notes
-//      are listed as unconfirmed and never added to the account.
+//      are listed as unconfirmed and never added to the account. Before confirming, a principal may correct the proposal's codes,
+//      objections, commitments and follow-up date (editProposal); the outcome records who corrected which fields.
 //   3. The follow-up (E15-S3). A checklist of what was agreed, for the principal. No email is drafted: the meeting stops the guard's
 //      sequence by design, and the drafter's facts are the briefer's, not a call's. The PRD story says why the email is deferred.
 //
@@ -513,7 +514,8 @@ export const OUTCOME_CODES = Object.freeze({
   pricing_discussed: 'Pricing was discussed.',
   declined: 'They declined further contact or any sale.',
 });
-const WHO = ['us', 'them', 'both', 'unclear'];
+export const COMMITMENT_WHO = Object.freeze(['us', 'them', 'both', 'unclear']);
+const WHO = COMMITMENT_WHO;
 export const MAX_NOTES = 50000;
 export const UNCONFIRMED_PERSON = 'unconfirmed, from call notes';
 
@@ -547,20 +549,23 @@ export function buildExtractPrompt({ account, date, notes }) {
 const quoteIn = (notesNorm) => (q) => { const f = String(q ?? '').split(/\.{3}|…/).map(normText).filter(Boolean); return f.length > 0 && f.every((x) => notesNorm.includes(x)); };
 
 // Turns the model's answer into a proposal a principal can check: fixed codes only, dates checked, every quote looked for in the notes.
-export function processProposal({ raw, notes, date }) {
+// With `edited` (a principal's correction, from editProposal), an item marked `principal` is the principal's own: it is kept with
+// source "principal" and no quote, and there is nothing to look for in the notes. Every other item keeps its quote, checked as before.
+// The mark is read only when `edited` is set, so nothing the model returns can claim to be a principal's.
+export function processProposal({ raw, notes, date, edited = false }) {
   const found = quoteIn(normText(notes));
+  const quoted = (x) => (edited && x?.principal === true ? { quote: '', quoteFound: false, source: 'principal' } : { quote: str(x?.quote), quoteFound: found(x?.quote) });
   const problems = [];
   const outcomes = [];
   for (const o of Array.isArray(raw?.outcomes) ? raw.outcomes : []) {
     if (!Object.hasOwn(OUTCOME_CODES, o?.code)) { problems.push(`An unknown outcome code "${trunc(o?.code, 40)}" was dropped.`); continue; }
     if (outcomes.some((x) => x.code === o.code)) continue;
-    const q = str(o.quote);
-    outcomes.push({ code: o.code, when: o.code === 'not_selling_now' ? str(o.when) : '', referral: o.code === 'wrong_person' ? str(o.referral) : '', quote: q, quoteFound: found(q) });
+    outcomes.push({ code: o.code, when: o.code === 'not_selling_now' ? str(o.when) : '', referral: o.code === 'wrong_person' ? str(o.referral) : '', ...quoted(o) });
   }
-  for (const o of outcomes) if (!o.quoteFound) problems.push(`The quote for "${o.code}" is not in the notes. Check the code before confirming.`);
+  for (const o of outcomes) if (!o.quoteFound && o.source !== 'principal') problems.push(`The quote for "${o.code}" is not in the notes. Check the code before confirming.`);
   if (!outcomes.some((o) => o.code === 'held')) problems.push('The proposal does not say the call took place ("held"). Confirming still records a meeting, which stops the sequence.');
-  const objections = (Array.isArray(raw?.objections) ? raw.objections : []).filter((x) => str(x?.text)).map((x) => ({ text: str(x.text), quote: str(x.quote), quoteFound: found(x.quote) }));
-  const commitments = (Array.isArray(raw?.commitments) ? raw.commitments : []).filter((x) => str(x?.what)).map((x) => ({ who: WHO.includes(x.who) ? x.who : 'unclear', what: str(x.what), by: str(x.by), byDate: validDate(str(x.by)) ? str(x.by) : null, quote: str(x.quote), quoteFound: found(x.quote) }));
+  const objections = (Array.isArray(raw?.objections) ? raw.objections : []).filter((x) => str(x?.text)).map((x) => ({ text: str(x.text), ...quoted(x) }));
+  const commitments = (Array.isArray(raw?.commitments) ? raw.commitments : []).filter((x) => str(x?.what)).map((x) => ({ who: WHO.includes(x.who) ? x.who : 'unclear', what: str(x.what), by: str(x.by), byDate: validDate(str(x.by)) ? str(x.by) : null, ...quoted(x) }));
   let followUpDate = str(raw?.follow_up_date);
   if (followUpDate && !validDate(followUpDate)) { problems.push(`The follow-up date "${trunc(followUpDate, 30)}" is not a date and was left out.`); followUpDate = ''; }
   if (followUpDate && followUpDate < date) problems.push(`The follow-up date ${followUpDate} is before the call.`);
@@ -639,7 +644,11 @@ export function originOf(account) {
 // It is idempotent, keyed to the proposal id: the outcome on the account and the line in outcomes.jsonl carry it as their id, and the
 // meeting carries it as its ref. Run again after a confirmation that stopped partway, it writes only what is missing, as the first run
 // confirmed it (the same confirmer and time), and never a second meeting or line. Run again after a complete one, it refuses.
-export function confirmProposal({ dir, id, proposalId, by, rules, now = new Date() }) {
+//
+// A proposal a principal corrected (editProposal) is confirmed as corrected, and the outcome says so: `edited` names who corrected it
+// and which fields, never the values. `seenEdits` is how many corrections the confirming principal saw (the web page sends it): a
+// proposal corrected since is not confirmed, so no one records what they did not read.
+export function confirmProposal({ dir, id, proposalId, by, rules, seenEdits, now = new Date() }) {
   const caller = needBy(by);
   const pid = safeId(String(proposalId ?? '').trim());
   const account = loadAccount(dir, id);
@@ -659,20 +668,21 @@ export function confirmProposal({ dir, id, proposalId, by, rules, now = new Date
   if (proposal.status === 'confirmed' && done && hasMeeting && logged && exists(`${fb}.json`)) throw new Error(`Proposal ${pid} is already confirmed (by ${proposal.confirmedBy}).`);
   const resuming = !!(done || logged || proposal.status === 'confirmed');
   if (!resuming) {
-    // A fresh confirmation: the call has happened, and the proposal still says what the notes say.
+    // A fresh confirmation: the principal saw this version, the call has happened, and the proposal still says what the notes say.
+    needSeen(proposal, seenEdits, pid);
     needHeld(proposal.date, now);
-    const notes = readText(notesPath(dir, id, proposal.date), null);
-    if (!proposal.notesDigest || notes === null || notesDigest(notes) !== proposal.notesDigest) throw new Error(`The notes for the call of ${proposal.date} changed after proposal ${pid} was made (or it has no record of them), so it may not say what they say. Reject it, then log the notes again: outbound call log --account ${id} --date ${proposal.date} --by NAME --notes FILE`);
+    needSameNotes(dir, id, proposal, pid);
   }
   const who = done?.confirmedBy ?? logged?.confirmedBy ?? proposal.confirmedBy ?? caller;
   const at = done?.confirmedAt ?? logged?.confirmedAt ?? proposal.confirmedAt ?? now.toISOString();
   const origin = originOf(account);
   const codes = proposal.outcomes.map((o) => o.code);
+  const edited = editedBy(proposal);
   const line = {
     type: 'call_outcome', id: pid, accountId: id, institutionKey: account.institutionKey ?? null, originSignals: account.originSignals ?? [],
     originSignalTypes: origin.types, firstSignalDate: origin.firstSignalDate, tier: account.tier ?? null, date: proposal.date, codes,
     followUpDate: proposal.followUpDate || null, counts: { objections: proposal.objections.length, commitments: proposal.commitments.length, people: proposal.people.length },
-    confirmedBy: who, confirmedAt: at,
+    ...(edited ? { edited } : {}), confirmedBy: who, confirmedAt: at,
   };
   const detail = done ?? {
     ...line, outcomes: proposal.outcomes.map(({ code, when, referral }) => ({ code, when, referral })),
@@ -686,7 +696,7 @@ export function confirmProposal({ dir, id, proposalId, by, rules, now = new Date
   writeJson(`${fb}.json`, followUp);
   writeText(`${fb}.md`, renderFollowUp({ account, followUp }));
   if (proposal.status !== 'confirmed') writeJson(file, { ...proposal, status: 'confirmed', confirmedBy: who, confirmedAt: at });
-  audit(dir, { type: 'call_confirmed', accountId: id, proposalId: pid, date: proposal.date, by: who, codes, ...line.counts, ...(resuming ? { resumedBy: caller } : {}) });
+  audit(dir, { type: 'call_confirmed', accountId: id, proposalId: pid, date: proposal.date, by: who, codes, ...line.counts, ...(edited ? { edited: true } : {}), ...(resuming ? { resumedBy: caller } : {}) });
   return { outcome: logged ?? line, resumed: resuming, followUp: { path: `${fb}.md`, items: followUp.items.length, hardStops: followUp.guard.hardStops.map((h) => h.code) } };
 }
 
@@ -726,6 +736,123 @@ export function rejectProposal({ dir, id, proposalId, by, reason = '', now = new
   writeJson(file, { ...proposal, status: 'rejected', rejectedBy: who, rejectedAt: now.toISOString(), rejectReason: typeof reason === 'string' ? reason.trim().slice(0, 300) : '' });
   audit(dir, { type: 'call_proposal_rejected', accountId: id, proposalId: pid, by: who });
   return { proposalId: pid, status: 'rejected' };
+}
+
+// ---- E15-S2: a principal corrects a proposal before confirming it ---------------------------------------------------------------
+// The fields a principal may correct. The call date is not one (the notes are filed under it, and the digest names them), and neither
+// are the people named in the notes: a person is named on the account only with account set-person, then confirm-role (E7).
+export const EDITABLE = Object.freeze(['outcomes', 'objections', 'commitments', 'followUpDate']);
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+// A proposal says what its notes say only while the notes are the ones it was read from (its digest). Returns the notes.
+function needSameNotes(dir, id, proposal, pid) {
+  const notes = readText(notesPath(dir, id, proposal.date), null);
+  if (!proposal.notesDigest || notes === null || notesDigest(notes) !== proposal.notesDigest) throw new Error(`The notes for the call of ${proposal.date} changed after proposal ${pid} was made (or it has no record of them), so it may not say what they say. Reject it, then log the notes again: outbound call log --account ${id} --date ${proposal.date} --by NAME --notes FILE`);
+  return notes;
+}
+
+// The corrections the principal saw when they loaded the proposal (`seenEdits`, a count the web page sends), against those it has now.
+// Absent, nothing is checked: the command line shows the proposal as it is.
+function needSeen(proposal, seenEdits, pid) {
+  if (seenEdits === undefined || seenEdits === null || seenEdits === '') return;
+  const edits = proposal.edits ?? [];
+  if (Number(seenEdits) !== edits.length) throw new Error(`Proposal ${pid} was corrected since you loaded it (by ${edits.at(-1)?.by ?? 'another principal'}). Read it again, then act on it.`);
+}
+
+// Who corrected a proposal and which fields, for the confirmed outcome. Never the values. Null when no one did.
+function editedBy(proposal) {
+  const edits = proposal.edits ?? [];
+  if (!edits.length) return null;
+  return { by: [...new Set(edits.map((e) => e.by))], fields: EDITABLE.filter((f) => edits.some((e) => (e.fields ?? []).includes(f))) };
+}
+
+// A principal's correction, checked before anything is read from it. Anything the model's proposal would have dropped or flagged is
+// refused here instead, since a principal typed it: a code not on the list or listed twice, a "who" not on the list, a date that is not
+// a date, a follow-up date or a deadline before the call. A deadline in words ("after the NDA is signed") is kept as words.
+function checkCorrection(edits, date) {
+  if (!edits || typeof edits !== 'object' || Array.isArray(edits)) throw new Error('A correction names the fields it changes.');
+  for (const k of Object.keys(edits)) {
+    if (k === 'people') throw new Error('People named in the notes are not edited here, and a call never adds one to the account. Name a person with: outbound account set-person, then confirm-role.');
+    if (!EDITABLE.includes(k)) throw new Error(`"${trunc(k, 40)}" cannot be corrected. A proposal's ${EDITABLE.join(', ')} can.`);
+  }
+  const list = (k) => { if (!Array.isArray(edits[k])) throw new Error(`${k} must be a list.`); return edits[k]; };
+  const out = {};
+  if (edits.outcomes !== undefined) {
+    const seen = new Set();
+    out.outcomes = list('outcomes').map((o) => {
+      const x = typeof o === 'string' ? { code: o } : o ?? {};
+      const code = str(x.code);
+      if (!Object.hasOwn(OUTCOME_CODES, code)) throw new Error(`"${trunc(code, 40)}" is not an outcome code. Use: ${Object.keys(OUTCOME_CODES).join(', ')}.`);
+      if (seen.has(code)) throw new Error(`"${code}" is listed twice.`);
+      seen.add(code);
+      return { code, when: str(x.when), referral: str(x.referral) };
+    });
+  }
+  if (edits.objections !== undefined) out.objections = list('objections').map((x) => str(typeof x === 'string' ? x : x?.text)).filter(Boolean);
+  if (edits.commitments !== undefined) {
+    out.commitments = list('commitments').filter((c) => str(c?.what)).map((c) => {
+      const who = str(c.who);
+      if (!WHO.includes(who)) throw new Error(`"${trunc(who, 30)}" is not who: use ${WHO.slice(0, -1).join(', ')} or ${WHO.at(-1)}.`);
+      const by = str(c.by);
+      if (ISO_DAY.test(by) && !validDate(by)) throw new Error(`The deadline "${by}" is not a date.`);
+      if (ISO_DAY.test(by) && by < date) throw new Error(`The deadline ${by} is before the call of ${date}.`);
+      return { who, what: str(c.what), by };
+    });
+  }
+  if (edits.followUpDate !== undefined) {
+    const f = str(edits.followUpDate);   // empty or null clears it
+    if (f && !validDate(f)) throw new Error(`The follow-up date "${trunc(f, 30)}" is not a date.`);
+    if (f && f < date) throw new Error(`The follow-up date ${f} is before the call of ${date}.`);
+    out.followUpDate = f;
+  }
+  return out;
+}
+
+// A principal corrects a pending proposal before confirming it (PRD E15-S2). Today's alternative was to reject it and log the notes again.
+// Only the fields given change, each replaced whole (`edits`: outcomes [{ code, when, referral }], objections [text], commitments
+// [{ who, what, by }], followUpDate). The correction is checked up front (checkCorrection), then goes through the model's own checks
+// (processProposal): an item kept from the model keeps its quote from the notes, still looked for; an item a principal added is marked
+// as theirs. The people named in the notes stay as they are, unconfirmed. The proposal keeps the model's original beside the correction,
+// and the list of who corrected which fields; the audit line names the same, never a value. Nothing else is written: the call is recorded
+// only when a principal confirms it, and a proposal whose notes changed still cannot be confirmed (or corrected).
+export function editProposal({ dir, id, proposalId, by, edits, seenEdits, now = new Date() }) {
+  const who = needBy(by);
+  const pid = safeId(String(proposalId ?? '').trim());
+  const account = loadAccount(dir, id);
+  const file = proposalPath(dir, id, pid);
+  const proposal = readJson(file, null);
+  if (!proposal || proposal.account !== id) throw new Error(`No proposal "${pid}" for ${id}.`);
+  if (proposal.status === 'superseded') throw new Error(`Proposal ${pid} was superseded: its notes were replaced after it was made. Correct the proposal read from the new notes.`);
+  if (proposal.status !== 'pending') throw new Error(`Proposal ${pid} is already ${proposal.status}${proposal.confirmedBy ? ` (by ${proposal.confirmedBy})` : proposal.rejectedBy ? ` (by ${proposal.rejectedBy})` : ''}.`);
+  if ((account.outcomes ?? []).some((o) => o.id === pid)) throw new Error(`Proposal ${pid}'s confirmation is unfinished: its outcome is already on the account, so it can no longer be corrected. Finish it: outbound call confirm --account ${id} --proposal ${pid} --by NAME`);
+  const done = (account.outcomes ?? []).find((o) => o.date === proposal.date);
+  if (done) throw new Error(`The call of ${proposal.date} is already confirmed (${done.id}). Reject this proposal instead.`);
+  needSeen(proposal, seenEdits, pid);
+  needHeld(proposal.date, now);
+  const notes = needSameNotes(dir, id, proposal, pid);
+  const c = checkCorrection(edits, proposal.date);
+  // Each item keeps its quote and its source when it matches one already on the proposal (a code by code, an objection by its text, a
+  // commitment by what is to be done); anything else is the principal's.
+  const carry = (items, match, item) => { const x = items.find(match); return { ...item, quote: x?.quote ?? '', principal: x ? x.source === 'principal' : true }; };
+  const raw = {
+    outcomes: (c.outcomes ?? proposal.outcomes).map((o) => carry(proposal.outcomes, (x) => x.code === o.code, { code: o.code, when: o.when ?? '', referral: o.referral ?? '' })),
+    objections: (c.objections ?? proposal.objections.map((x) => x.text)).map((text) => carry(proposal.objections, (x) => x.text === text, { text })),
+    commitments: (c.commitments ?? proposal.commitments).map((m) => carry(proposal.commitments, (x) => x.what === m.what, { who: m.who, what: m.what, by: m.by ?? '' })),
+    follow_up_date: c.followUpDate ?? proposal.followUpDate ?? '',
+  };
+  const p = processProposal({ raw, notes, date: proposal.date, edited: true });
+  const next = { outcomes: p.outcomes, objections: p.objections, commitments: p.commitments, followUpDate: p.followUpDate };
+  const shape = {
+    outcomes: (x) => x.outcomes.map((o) => [o.code, o.when ?? '', o.referral ?? '']), objections: (x) => x.objections.map((o) => o.text),
+    commitments: (x) => x.commitments.map((m) => [m.who, m.what, m.by ?? '']), followUpDate: (x) => x.followUpDate || '',
+  };
+  const fields = EDITABLE.filter((f) => JSON.stringify(shape[f](proposal)) !== JSON.stringify(shape[f](next)));
+  if (!fields.length) throw new Error(`The correction changes nothing in proposal ${pid}.`);
+  const original = proposal.original ?? { outcomes: proposal.outcomes, objections: proposal.objections, commitments: proposal.commitments, followUpDate: proposal.followUpDate, problems: proposal.problems };
+  const updated = { ...proposal, ...next, problems: p.problems, original, edits: [...(proposal.edits ?? []), { by: who, at: now.toISOString(), fields }] };
+  writeJson(file, updated);
+  audit(dir, { type: 'call_proposal_edited', accountId: id, proposalId: pid, date: proposal.date, by: who, fields });
+  return { proposalId: pid, fields, proposal: updated };
 }
 
 // ---- E15-S3: the follow-up checklist ----------------------------------------------------------------------------------------------
@@ -790,20 +917,25 @@ export function listCalls({ dir, id }) {
   // A pending proposal whose outcome is already on the account is a confirmation that stopped partway: confirming it again finishes it.
   const onAccount = new Set((account.outcomes ?? []).map((o) => o.id));
   const proposals = listFiles(join(base, 'proposals'), '.json').map((f) => readJson(join(base, 'proposals', f)))
-    .map((p) => ({ id: p.id, date: p.date, status: p.status, loggedBy: p.loggedBy, createdAt: p.createdAt, outcomes: p.outcomes, objections: p.objections, commitments: p.commitments, followUpDate: p.followUpDate, people: p.people, problems: p.problems, confirmedBy: p.confirmedBy ?? null, rejectedBy: p.rejectedBy ?? null, unfinished: p.status === 'pending' && onAccount.has(p.id) }))
+    .map((p) => ({ id: p.id, date: p.date, status: p.status, loggedBy: p.loggedBy, createdAt: p.createdAt, outcomes: p.outcomes, objections: p.objections, commitments: p.commitments, followUpDate: p.followUpDate, people: p.people, problems: p.problems, edits: p.edits ?? [], confirmedBy: p.confirmedBy ?? null, rejectedBy: p.rejectedBy ?? null, unfinished: p.status === 'pending' && onAccount.has(p.id) }))
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
   return { account: { id: account.id, name: account.name, person: account.person?.name || null, roleConfirmed: !!account.contact?.roleConfirmed }, briefs, proposals, outcomes: account.outcomes ?? [], followUps };
 }
 
-// A proposal as a principal reads it before confirming.
+// A proposal as a principal reads it before confirming. What a principal corrected is marked as theirs.
+const MINE = '  (a principal\'s correction)';
+export const correctedBy = (edits) => (edits ?? []).map((e) => `${e.by} (${(e.fields ?? []).join(', ')})`).join('; then ');
 export function renderProposal(p, accountId) {
   const L = [`Proposal ${p.id} for ${accountId}, call of ${dateLabel(p.date)} (${p.status}). Nothing is recorded until a principal confirms it.`, ''];
-  L.push('Outcomes:', ...(p.outcomes.length ? p.outcomes.map((o) => `  - ${o.code}${o.when ? ` (when: ${o.when})` : ''}${o.referral ? ` (referral: ${o.referral})` : ''}: "${o.quote}"${o.quoteFound ? '' : '  [NOT FOUND IN THE NOTES]'}`) : ['  none']));
-  L.push('Objections:', ...(p.objections.length ? p.objections.map((o) => `  - ${o.text}`) : ['  none']));
-  L.push('Commitments:', ...(p.commitments.length ? p.commitments.map((c) => `  - ${WHO_LABEL[c.who] ?? c.who}: ${c.what}${when(c)}`) : ['  none']));
+  if (p.edits?.length) L.push(`Corrected by ${correctedBy(p.edits)}. The model's proposal is kept beside the correction.`, '');
+  L.push('Outcomes:', ...(p.outcomes.length ? p.outcomes.map((o) => `  - ${o.code}${o.when ? ` (when: ${o.when})` : ''}${o.referral ? ` (referral: ${o.referral})` : ''}${o.source === 'principal' ? MINE : `: "${o.quote}"${o.quoteFound ? '' : '  [NOT FOUND IN THE NOTES]'}`}`) : ['  none']));
+  L.push('Objections:', ...(p.objections.length ? p.objections.map((o) => `  - ${o.text}${o.source === 'principal' ? MINE : ''}`) : ['  none']));
+  L.push('Commitments:', ...(p.commitments.length ? p.commitments.map((c) => `  - ${WHO_LABEL[c.who] ?? c.who}: ${c.what}${when(c)}${c.source === 'principal' ? MINE : ''}`) : ['  none']));
   L.push(`Follow-up date: ${p.followUpDate || 'none'}`);
   L.push(`People mentioned (${UNCONFIRMED_PERSON}; never added to the account automatically):`, ...(p.people.length ? p.people.map((x) => `  - ${x.name}${x.title ? `, ${x.title}` : ''}${x.context ? `: ${x.context}` : ''}`) : ['  none']));
   if (p.problems.length) L.push('Check before confirming:', ...p.problems.map((x) => `  - ${x}`));
-  L.push('', `Confirm: outbound call confirm --account ${accountId} --proposal ${p.id} --by NAME`, `Reject:  outbound call reject --account ${accountId} --proposal ${p.id} --by NAME [--reason TEXT]`);
+  L.push('', `Confirm: outbound call confirm --account ${accountId} --proposal ${p.id} --by NAME`,
+    `Correct: outbound call edit --account ${accountId} --proposal ${p.id} --by NAME [--codes C1,C2] [--when TEXT] [--referral TEXT] [--objection TEXT ...] [--commitment "who|what|by" ...] [--follow-up YYYY-MM-DD|none]`,
+    `Reject:  outbound call reject --account ${accountId} --proposal ${p.id} --by NAME [--reason TEXT]`);
   return L.join('\n');
 }
