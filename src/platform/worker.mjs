@@ -9,6 +9,7 @@ import { runEdgar } from '../sources/edgar.mjs';
 import { runFilings, loadFilingRules } from '../sources/filings.mjs';
 import { runFdicSales } from '../sources/fdicsales.mjs';
 import { runEnforcement } from '../sources/enforcement.mjs';
+import { runMergerApps } from '../sources/mergerapps.mjs';
 import { buildLedger } from '../sales.mjs';
 import { runScoring } from '../score.mjs';
 import { runTriage, triageLoads, triageSummary, ymd } from '../triage.mjs';
@@ -18,7 +19,7 @@ import { loadContext } from '../guard.mjs';
 import { researchGate } from '../pilot.mjs';
 import { runCallPrep, runCallExtract, callLoads, needDate } from '../calls.mjs';
 
-export const JOB_KINDS = ['sources.fdic', 'sources.edgar', 'sources.filings', 'sources.fdicsales', 'sources.enforcement', 'score.run', 'triage.run', 'research.run', 'draft.run', 'call.prep', 'call.extract'];
+export const JOB_KINDS = ['sources.fdic', 'sources.edgar', 'sources.filings', 'sources.fdicsales', 'sources.enforcement', 'sources.mergerapps', 'score.run', 'triage.run', 'research.run', 'draft.run', 'call.prep', 'call.extract'];
 const ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const CHANNELS = ['email', 'letter', 'call', 'linkedin_note'];
 
@@ -67,6 +68,10 @@ export async function runJob({ client, job, rules, deps = {} }) {
       // Orders are state the next run reads again in full (both files are read whole every time), so a suspect run is mended by the
       // next one, as for the FDIC job: done unless the run failed.
       return { ok: result.outcome !== 'failed', summary: { outcome: result.outcome, actionsRead: result.actionsRead, skippedIndividual: result.skippedIndividual, orders: result.orders, ordersNew: result.ordersNew, terminations: result.terminations, terminationsNew: result.terminationsNew, inUniverse: result.inUniverse, docsRead: result.docsRead, docsUnreadable: result.docsUnreadable, docsDeferred: result.docsDeferred, requests: result.requests, changed: result.changed, missingFields: result.missingFields } };
+    }
+    case 'sources.mergerapps': {   // merger applications (PRD next-five E18-S3): the Federal Reserve's weekly H.2
+      const { result } = await client.unitOfWork(LOADS.mergers, (dir) => runMergerApps({ dir, mergers: rules.config.mergers, fetchImpl: deps.fetchImpl ?? globalThis.fetch, now: deps.now?.() ?? new Date(), ...(deps.sleep ? { sleep: deps.sleep } : {}) }), { retries: 0 });
+      return { ok: result.outcome !== 'failed', summary: { outcome: result.outcome, weeks: result.weeks, rowsRead: result.rowsRead, kept: result.kept, applications: result.applications, applicationsNew: result.applicationsNew, outcomes: result.outcomes, closed: result.closed, requests: result.requests, changed: result.changed, missingFields: result.missingFields } };
     }
     case 'score.run': {
       const { result } = await client.unitOfWork(LOADS.score, (dir) => runScoring({ dir, buybox: rules.buybox, scoring: rules.scoring, metros: rules.metros, allowPlaceholders: !!p.draftBuybox, now: deps.now?.() ?? new Date() }));

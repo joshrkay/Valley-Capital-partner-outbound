@@ -95,7 +95,7 @@ export function chooseTable(capture) {
 // Organization words. A respondent without one is a person, and the row is skipped.
 export const ORG_WORDS = Object.freeze(['bank', 'banc', 'bancorp', 'bancorporation', 'bancshares', 'bankshares', 'banking', 'trust', 'savings', 'financial', 'finance', 'national',
   'association', 'company', 'co', 'corp', 'corporation', 'incorporated', 'inc', 'llc', 'ltd', 'lp', 'plc', 'fsb', 'ssb', 'sb', 'na', 'credit', 'federal', 'holding', 'holdings',
-  'group', 'capital', 'industrial', 'thrift', 'cooperative', 'mutual']);
+  'group', 'capital', 'industrial', 'thrift', 'cooperative', 'mutual', 'mhc']);
 const ORG = new Set(ORG_WORDS);
 // "N.A." and "Co." count: dots are dropped before the words are compared.
 export const isOrganization = (name) => String(name ?? '').toLowerCase().replace(/\.(?=[a-z]\.)/g, '').replace(/[^a-z0-9]+/g, ' ').split(' ').some((w) => ORG.has(w));

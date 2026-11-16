@@ -373,7 +373,7 @@ Each step is a story with acceptance criteria in the PRD's format, and each ship
 | SEC | www.sec.gov, efts.sec.gov, data.sec.gov |
 | FFIEC | cdr.ffiec.gov, www.ffiec.gov |
 | FRED | api.stlouisfed.org |
-| Federal Reserve | www.federalreserve.gov (enforcement orders, PRD next-five E18-S2: `/robots.txt`, `/supervisionreg/files/ea-cms-recent.json` and `ea-old.json`, press releases and order PDFs under `/newsevents/pressreleases/`; reachable from the development environment on 2026-11-16) |
+| Federal Reserve | www.federalreserve.gov (merger applications, PRD next-five E18-S3: `/releases/h2/` and each week's district, delegated-actions and Board-actions pages; enforcement orders, PRD next-five E18-S2: `/robots.txt`, `/supervisionreg/files/ea-cms-recent.json` and `ea-old.json`, press releases and order PDFs under `/newsevents/pressreleases/`; reachable from the development environment on 2026-11-16) |
 | OCC | api.occ.gov, apps.occ.gov |
 | NCUA | ncua.gov |
 | Bankruptcy courts | ecf.azb.uscourts.gov, ecf.cob.uscourts.gov, ecf.nvb.uscourts.gov, ecf.cacb.uscourts.gov, ecf.casb.uscourts.gov, ecf.txwb.uscourts.gov, pcl.uscourts.gov |

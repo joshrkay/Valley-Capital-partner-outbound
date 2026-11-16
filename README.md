@@ -31,7 +31,7 @@ Start with `docs/prd-signal-pipeline.md` for the pipeline, and `docs/research-ag
   - a contact-data vendor's API (E7-S2 tests a vendor's exported results; no vendor is wired in);
   - deploying the platform (E12-S7);
   - Gmail drafts and reply detection (E9);
-  - enforcement orders from the OCC (next-five E18-S2 has the Federal Reserve, and the FDIC on a principal's machine; state orders were checked and not built, see the PRD), and merger applications (E18-S3);
+  - enforcement orders from the OCC (next-five E18-S2 has the Federal Reserve, and the FDIC on a principal's machine; state orders were checked and not built, see the PRD), and merger applications the OCC or the FDIC decide alone (E18-S3 reads the Federal Reserve's H.2);
   - quarterly nurture (E10);
   - the referral mapper's drafted ask to a connector (E22 finds the routes and gives a checklist; it drafts nothing, PRD D-R7), and county records that name a lender's counsel (E22-S3 has the event shape and the seam, no adapter);
   - meeting prep beyond the call brief (event lists, who to meet, and a drafted follow-up email: PRD E15-S3 gives a checklist today);
@@ -290,6 +290,21 @@ npm run outbound -- platform push                       # then copy the data fol
 - **No people.** Rows against individuals (prohibitions, Section 19, a respondent with no organization word) are skipped as the table is read. Deposit-insurance terminations and waiver orders are skipped too.
 - FDIC orders carry no phrase flags yet: their PDFs are on a host Node cannot verify.
 
+### Merger applications (PRD next-five E18-S3)
+
+A merger heard of when it is applied for, not when it closes, puts a principal in front of the acquirer while it decides what to do with the target's CRE book.
+
+```bash
+npm run outbound -- sources run mergerapps              # the Federal Reserve's weekly H.2, every district (the first run reads 26 weeks)
+npm run outbound -- sources verify mergerapps           # fresh, sourced, no person stored, the latest week read again
+npm run outbound -- mergers list [--all]                # open applications naming a bank in the list, with their roles
+```
+
+- **What it sees:** applications the Federal Reserve decides. That covers holding-company acquisitions, which most bank acquisitions are, and state member banks' mergers. A merger the OCC or the FDIC decides alone is not seen until it closes and FDIC's /history shows it.
+- **Organizations only.** The proposal text is never stored; only the organizations parsed from it, each with its role (acquirer or bank acquired). Change-in-control notices, which name individuals, are skipped.
+- **Signals, no points.** An open application is an event signal on each bank it names, with its approval date once known. It ends when the application is withdrawn or denied, or when FDIC's structure event shows the merger closed, so a merger is never counted twice.
+- The worker runs it weekly (`sources.mergerapps`, Saturdays).
+
 ### Routes to the decision-maker (PRD E22)
 
 For each target: who actually decides on loan sales, then the best way in. A warm route gets a much better reply rate than a cold email.
@@ -468,7 +483,7 @@ It stores no message text, and writes an audit line for every decision.
 | `supabase/migrations/` | The platform's tables, access rules and functions. Structure only, no data |
 | `web/` | The principals' web app (Next.js) |
 | `.github/workflows/` | The platform worker's schedule (off until enabled) |
-| `src/` | `guard`, `research`, `draft`, `lint`, `model` (the only file that calls the Anthropic API), `rules`, `store`, `paths`, plus the pipeline: `sources/` (`http`, `runlog`, `fdic`, `edgar`, `fdicsales`, `filings`, `enforcement`, `fdicorders`), `metrics`, `score`, `paper` (the paper estimate), `candidates`, `triage`, `sales`, `pilot`, call prep and outcomes: `calls`, `outcomes`, routes to the decision-maker: `network`, `routes`, the backtest: `backtest/` (`panel`, `labels`, `run`), and the platform: `uow`, `platform/` (`client`, `worker`, `move`) |
+| `src/` | `guard`, `research`, `draft`, `lint`, `model` (the only file that calls the Anthropic API), `rules`, `store`, `paths`, plus the pipeline: `sources/` (`http`, `runlog`, `fdic`, `edgar`, `fdicsales`, `filings`, `enforcement`, `fdicorders`, `mergerapps`), `metrics`, `score`, `paper` (the paper estimate), `candidates`, `triage`, `sales`, `pilot`, call prep and outcomes: `calls`, `outcomes`, routes to the decision-maker: `network`, `routes`, the backtest: `backtest/` (`panel`, `labels`, `run`), and the platform: `uow`, `platform/` (`client`, `worker`, `move`) |
 | `scripts/sync-site.mjs` | Refreshes `site-snapshot/` from the website repository (see below) |
 | `site-snapshot/` | A copy of the 7 website files the rules depend on, a list of the site's pages, and a record of the commit it came from. Committed. Refresh it; do not edit it. |
 | `docs/` | The plan, the research agenda, and the PRD for the signal pipeline |
@@ -477,7 +492,7 @@ It stores no message text, and writes an audit line for every decision.
 In `$OUTBOUND_DATA_DIR`:
 
 - `senders.json`, `suppression.json`, `accounts/`, `research/`, `facts/`, `briefs/`, `drafts/<account>/`, `touches.jsonl`, `audit.jsonl`;
-- for the pipeline: `sources/` (FDIC data, the CMBS and SEC pulls, enforcement orders, the run log and the change log), `candidates/` (the latest list and principals' decisions), `paper/` (one paper estimate per bank), `sales/` (the sale ledger), `triage/` (each week's triage and its snapshot), and `pilot/` (truth sheets, verdicts, the pass).
+- for the pipeline: `sources/` (FDIC data, the CMBS and SEC pulls, enforcement orders, merger applications, the run log and the change log), `candidates/` (the latest list and principals' decisions), `paper/` (one paper estimate per bank), `sales/` (the sale ledger), `triage/` (each week's triage and its snapshot), and `pilot/` (truth sheets, verdicts, the pass).
 - for calls: `calls/<account>/` (call briefs, notes, proposals and follow-ups), `outcomes.jsonl` (confirmed outcomes) and `reports/`.
 - for routes (PRD E22): `network/` (the firm's own relationships: private, never given to a model) and `routes/` (each account's routes and the chosen route's checklist).
 - for the backtest (PRD E17): `backtest/panel/` (the point-in-time panel), `backtest/labels.json`, `backtest/report-<hash>.json` and `.md`, and the logs `backtest/runs.jsonl` and `backtest/holdout.jsonl`.

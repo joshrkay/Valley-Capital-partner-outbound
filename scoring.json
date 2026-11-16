@@ -105,7 +105,8 @@
     "maxEvents": 2,
     "maxFilings": 2,
     "maxSales": 2,
-    "maxEnforcement": 2
+    "maxEnforcement": 2,
+    "maxMergers": 2
   },
   "signals": [
     {
@@ -215,6 +216,10 @@
     "_note": "Enforcement signals (PRD next-five E18-S2), from sources/enforcement/orders.json. Each order against a bank is an event signal, dated by its effective date, shown for windowDays; a termination is an event signal the same way. An order that stays in force until terminated (a consent order, a cease-and-desist order, a formal written agreement, a prompt corrective action directive) with no termination recorded is also a state signal, 'under an active order', while its effective date is within activeWithinDays: the Federal Reserve's file shows no termination for some old orders, so an order older than that is not called active. Both windows are PLACEHOLDERS. Enforcement signals add no points until a principal decides (PRD next-five D-E1).",
     "windowDays": 365,
     "activeWithinDays": 3650
+  },
+  "mergers": {
+    "_note": "Merger-application signals (PRD next-five E18-S3), from sources/mergers/applications.json: an open application naming the bank as acquirer or bank acquired is an event signal, dated by the week it was filed, shown for windowDays. It ends when FDIC's structure event shows the merger closed (that event's own signal then speaks for it), or when the application is withdrawn or denied. windowDays is a PLACEHOLDER. No points until a principal decides, as for enforcement (D-E1).",
+    "windowDays": 365
   },
   "cmbs": {
     "_note": "CMBS loan signals (PRD E4-S3). A loan is 'maturing' when its maturity (or post-modification maturity) falls within maturityMonths. A placeholder, like every number here.",

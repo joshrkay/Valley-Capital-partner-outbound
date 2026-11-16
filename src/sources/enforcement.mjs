@@ -159,16 +159,18 @@ export function parseFedFile(text, { file } = {}) {
 }
 
 // ---- Matching a party to a bank in the universe ----------------------------------------------------------------------------------
-// A principal's alias first (candidates/aliases.json), then the exact normalized name, narrowed by state and then city when the party
+// A principal's alias first (candidates/aliases.json), then the exact normalized name (a leading "The" ignored), narrowed by state and then city when the party
 // gives them. One bank is a match. Two or more is ambiguous; none is unmatched. Both go to the review list; nothing is guessed.
 // `institutions` is sources/fdic/institutions.json (CERT -> { NAME, CITY, STALP }).
 // Names normalized once per bank list and alias table (both are plain objects read from the store), so matching thousands of orders
 // does not normalize every bank's name again for each party.
 const nameIndex = new WeakMap(), aliasIndex = new WeakMap();
+// A leading "The" is dropped on both sides: the regulators write "First National Bank of X" for FDIC's "The First National Bank of X".
+const nameKey = (s) => norm(s).replace(/^the /, '');
 const byNormName = (institutions) => {
   if (!nameIndex.has(institutions)) {
     const m = new Map();
-    for (const [cert, i] of Object.entries(institutions)) { const k = norm(i?.NAME); if (k) m.set(k, [...(m.get(k) ?? []), [cert, i]]); }
+    for (const [cert, i] of Object.entries(institutions)) { const k = nameKey(i?.NAME); if (k) m.set(k, [...(m.get(k) ?? []), [cert, i]]); }
     nameIndex.set(institutions, m);
   }
   return nameIndex.get(institutions);
@@ -176,14 +178,14 @@ const byNormName = (institutions) => {
 const byNormAlias = (aliases) => {
   if (!aliasIndex.has(aliases)) {
     const m = new Map();
-    for (const [key, list] of Object.entries(aliases)) for (const a of list ?? []) { const k = norm(a); if (k && !m.has(k)) m.set(k, key); }
+    for (const [key, list] of Object.entries(aliases)) for (const a of list ?? []) { const k = nameKey(a); if (k && !m.has(k)) m.set(k, key); }
     aliasIndex.set(aliases, m);
   }
   return aliasIndex.get(aliases);
 };
 
 export function resolveParty(party, { institutions = {}, aliases = {} } = {}) {
-  const q = norm(party?.name);
+  const q = nameKey(party?.name);
   if (!q) return { key: null, how: 'none', candidates: [] };
   const alias = byNormAlias(aliases ?? {}).get(q);
   if (alias) return { key: alias, how: 'alias', candidates: [alias] };

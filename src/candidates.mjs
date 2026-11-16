@@ -164,6 +164,12 @@ export function buildCard(item, { scoring = {} } = {}) {
     add(s.type === 'enforcement_active' ? `${s.label}.` : `An enforcement action: ${s.label}.`, [s.id, ...(s.evidence ?? [])]);
   }
 
+  // Merger applications (next-five E18-S3): an open application naming this bank, from a fixed template in src/sources/mergerapps.mjs.
+  for (const s of (item.signals ?? []).filter((x) => x.rule === 'merger').slice(0, lim.maxMergers ?? 2)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(s.date)) || !s.label) continue;
+    add(`${s.label}.`, [s.id, ...(s.evidence ?? [])]);
+  }
+
   // Timing: the metric signals that fired at this quarter, each from its rule type's template. A threshold signal for a level already stated adds nothing.
   for (const s of (item.signals ?? []).filter((x) => SIGNAL_TYPES.includes(x.rule) && !(x.rule === 'above' && statedLevels.has(x.metric))).slice(0, lim.maxSignals)) {
     const label = METRICS[s.metric]?.label;

@@ -11,7 +11,7 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 | # | Gap today | Link it weakens | Epic |
 |---|---|---|---|
 | 1 | Every weight and tier cut in `scoring.json` is a placeholder. Tuning waits for 30 confirmed call outcomes (`config.outcomes.minToTune`). Those take quarters to collect, they will be few, and they only cover banks the firm chose to call. | 4. The institution | **E17** A backtest |
-| 2 | The strongest "will sell" signal, the SEC filings listener (E13-S1), only sees SEC filers. Most banks under the $10 billion cap have no SEC filer **[verify: E18-S1 measures it]**. Enforcement orders and merger applications cover them, are free, and are rated **High** in `docs/data-sources.md`. Enforcement orders are built for the Federal Reserve only (E18-S2); merger applications are not built. | 3. The time | **E18** Pressure at banks the SEC never sees |
+| 2 | The strongest "will sell" signal, the SEC filings listener (E13-S1), only sees SEC filers. Most banks under the $10 billion cap have no SEC filer **[verify: E18-S1 measures it]**. Enforcement orders and merger applications cover them, are free, and are rated **High** in `docs/data-sources.md`. Enforcement orders are built for the Federal Reserve and the FDIC (E18-S2); merger applications are built from the Federal Reserve's H.2 (E18-S3). | 3. The time | **E18** Pressure at banks the SEC never sees |
 | 3 | The plan says intermediaries "hear first and control who is invited", and that mid-size banks sell through an advisor's buyer list. The pipeline only scores institutions, and the referral mapper (agent 7) is not built. | 2. The advantage, 5. The person | **E19** Intermediaries |
 | 4 | Section 0 rightly bars a message from mentioning the recipient's numbers. That leaves a first touch with little to offer beyond "we buy multifamily loans in Phoenix". Nurture (E10) can only link to pages the firm has published, and the site names no principal. | 6. The message | **E20** A give-first market note |
 | 5 | Credit unions and non-bank lenders hold CRE in our metros and are not covered. `docs/data-sources.md` calls NCUA "a seller class we do not cover yet", and decision D2 is open. | 1. The paper | **E21** New sellers |
@@ -191,12 +191,27 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 - **Verify:** passed all four checks.
 - **What it means:** the Federal Reserve is the smallest of the four sources for our universe. The FDIC (source 2) matters most; it is now built and waits for its first run on a principal's machine.
 
-**E18-S3. Merger applications.** *As a principal, I want to hear about a bank merger when it is applied for, not when it closes, so that I can be in front of the acquirer before it decides what to do with the target's CRE book.* P1, Now.
-- [ ] Sources: the Federal Reserve's press-orders RSS (`federalreserve.gov/feeds/press_orders.xml`; the spike confirms the filename), the H.2 weekly release, and the OCC's Corporate Applications Search (`apps.occ.gov/CAS/`), which replaced the OCC Weekly Bulletin on December 19, 2025 and shows an application after a five-day delay **[verify]**. For state-chartered banks, which CAS never shows: the California DFPI Monthly Bulletin ("Bank Activity"), Colorado's monthly "Financial Institution Activity" bulletin, and the Texas Department of Banking's corporate filings with the Finance Commission's Corporate Division report **[verify]** (`docs/data-sources.md` 2.2, `docs/listening-sources.md`). A spike first, as in S2.
-- [ ] Each application becomes an event signal, `type: 'merger_pending'`, on the target and on the acquirer, with the filing, approval and, later, close dates.
-- [ ] When the merger closes and appears in `/history` (E3-S6), the existing structure event takes over, and the pending signal links to it. A test proves the merger is never counted twice.
-- [ ] A withdrawn or denied application ends the signal, with its date.
-- [ ] Worker job `sources.mergerapps`, weekly.
+**E18-S3. Merger applications.** *As a principal, I want to hear about a bank merger when it is applied for, not when it closes, so that I can be in front of the acquirer before it decides what to do with the target's CRE book.* P1, Now. **Built for the Federal Reserve's H.2** (`src/sources/mergerapps.mjs`, `outbound sources run|verify mergerapps`, `outbound mergers list`, worker job `sources.mergerapps`, weekly).
+- [ ] Sources (spike, November 16, 2026; findings at the top of the adapter):
+  - [x] **The H.2 weekly release.** It is the source of applications.
+    - Each week has a folder at `/releases/h2/<YYYYMMDD>/` with one page per Reserve Bank district. Each page has a "Filings received" table: filer, filing type, the proposal, and the comment-period end dates. 84 district pages from June 2025 to November 2026 had it.
+    - The codes kept: 18C (bank merger), 3A1 (becoming a holding company), 3A3 (a holding company acquiring a bank), 3A5 (holding companies merging). A 3A1 is often a bank forming its own holding company, so its label says formation, never acquisition.
+    - Approvals, withdrawals and denials come from the week's delegated-actions and Board-actions pages.
+  - [x] **The press-orders RSS** (`/feeds/press_orders.xml`, confirmed) is not read. It carries only Board-level approvals, about two a month, already in the H.2's Board actions.
+  - [ ] **The OCC's Corporate Applications Search:** not built. It is a script-drawn application with no plain pages, the same situation as orders.fdic.gov.
+  - [ ] **The FDIC:** no applications list was found (data-sources open question 8). A merger of two nonmember banks with no holding-company application, or of two national banks, is decided by the FDIC or the OCC alone. The H.2 does not show it, so it surfaces only at its close, through FDIC's /history (E3-S6).
+  - [ ] **State bulletins:** not built. See E18-S2's state spike.
+- [x] Each application becomes an event signal, `type: 'merger_pending'`, on each bank in the list it names, as acquirer or as the bank acquired.
+  - The signal carries the week filed, the comment-period end and, once known, the approval date.
+  - The proposal text is never stored: only the organizations parsed from it, each with its city, state and role.
+  - A party with no organization word is dropped, and a change-in-control notice, which names individuals, is skipped.
+  - The H.2 gives the week of receipt, not the exact filing date.
+- [x] When the merger closes and appears in `/history` (E3-S6), the application is closed (`closedBy: fdic-event:<transnum>`), and its pending signal ends, so the structure event's own signal speaks for it. A test proves the merger is never counted twice.
+  - The match is on the resolved target's cert, or, when no target is in the list, the acquirer's, effective on or after the week filed.
+- [x] A withdrawn or denied application ends the signal, with its date.
+- [x] Worker job `sources.mergerapps`, weekly (Saturdays, then `platform verify mergerapps`), with its migration. `outbound sources verify mergerapps` checks freshness and that records are sourced and person-free, then reads the latest week again.
+- [x] Signals only, no points, as for enforcement (D-E1). The coverage report has a line for open applications.
+- **Matching:** as for enforcement orders: exact name and state, or a principal's alias. A leading "The" is now ignored on both sides (for enforcement too), since the Federal Reserve writes "First National Bank of X" where the FDIC has "The First National Bank of X".
 
 **E18-S4. To the briefer and the call brief, never to the drafter.** *As a principal, I want the briefer and the call brief to know about an order or a pending merger so that I do not walk into a call unaware.* P1, R2.
 - [ ] Orders and pending mergers go to the briefer and the call brief (E15-S1) as fenced data, with ids, the way the paper estimate does.
