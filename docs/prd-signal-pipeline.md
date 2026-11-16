@@ -808,7 +808,7 @@ Rules across the epic:
 - [ ] `outbound platform push` copies a data folder into Postgres and can be re-run safely.
 - [ ] `outbound platform pull --to DIR` writes the platform's data back to a folder, which must be outside the repository.
 
-**E12-S7. Deploy.** *As a principal, I want the app at an address only we use so that the platform is real.* P0, R2. **Needs Q17 and Q18 first.**
+**E12-S7. Deploy.** *As a principal, I want the app at an address only we use so that the platform is real.* P0, R2. **Q17 and Q18 decided 2026-11-16:** a new Supabase organization and project for Valley Capital; for now, the existing Vercel project `web` on the cartboost team, with previews behind Vercel Authentication (moving to a Valley Capital team stays open). The steps are a guided script, `scripts/deploy-wizard.sh`; the human runs it, because creating accounts and copying keys happen in each dashboard.
 - [ ] A Supabase project and a Vercel project, both dedicated to Valley Capital.
 - [ ] Keys in each platform's secret store.
 - [ ] The principals' emails in `principals`.
@@ -1273,8 +1273,8 @@ Q19 to Q27, for epics E17 to E21, are in `docs/prd-next-five.md`, section 4.
 | Q14 | Which Supabase organization and project? Is the existing connection the firm's? | Principals | E8 | E8 waits |
 | Q15 | Is the sending mailbox on Google Workspace, and can an administrator approve API access? | Principals | E9 | E9 waits |
 | Q16 | Channel and state rules, privacy notice, deletion process (research agenda G1) | Counsel | R2 sending | Nothing sends before counsel |
-| Q17 | Where does the Supabase project live? The only organization connected today ("Rivet") holds unrelated projects. | Principals | E12-S7 | A new organization and project for Valley Capital |
-| Q18 | Which Vercel team hosts the app, and at what address? The only team connected today ("cartboost") belongs to another business. | Principals | E12-S7 | A new team for Valley Capital; a subdomain of the firm's domain |
+| Q17 | Where does the Supabase project live? The only organization connected today ("Rivet") holds unrelated projects. | Principals | E12-S7 | **Decided 2026-11-16:** a new organization and project for Valley Capital |
+| Q18 | Which Vercel team hosts the app, and at what address? The only team connected today ("cartboost") belongs to another business. | Principals | E12-S7 | **Decided 2026-11-16, for now:** the existing `web` project on cartboost, previews protected; a Valley Capital team later |
 
 ## 12. Timeline and phasing
 

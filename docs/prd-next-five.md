@@ -93,6 +93,11 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 - [x] **It never writes `scoring.json`.** A PR that changes weights adds a `_calibration` note to `scoring.json` naming the report hash it relied on, and that report must be a holdout run. A test checks that the note, when present, names a hash of the right form.
 - [x] Job logs carry counts and run ids only (E11-S1).
 
+**After the decisions (November 14, 2026).** `src/backtest/run.mjs`:
+- `holdoutSpec` and `inHoldout`: a bank is held out when the first 32 bits of SHA-256 of `seed:CERT` fall below `share`. The split depends on nothing but the seed and the cert, so no panel, label or score can move it. The top K is still ranked over the whole universe each quarter, and the training banks or the held-out banks are then counted. Training, compare and rolling runs count only the training banks, so only `--holdout` touches the held-out banks. A second holdout run with another scoring file is a reused holdout, and a changed seed is shown as a moved holdout.
+- One replay labels each bank-quarter at every reported horizon, and the report adds a table by horizon, with the quarters whose labels are incomplete at each one.
+- A table by era, beside the pooled headline, and a note that the pooled figure mixes eras.
+
 **As built (S1 to S4, November 14, 2026).** `src/backtest/panel.mjs`, `labels.mjs` and `run.mjs`; the commands are in the README. It runs from the command line against the data folder. Choices the stories left open, each a placeholder in `config.json` `backtest`:
 - **Active on an as-of date** is read from FDIC's own dates: established (`ESTYMD`) on or before the end of the quarter known on that date, and not ended (`ENDEFYMD`) on or before the date. The HQ state is FDIC's state for the charter today, or when it closed.
 - **The Summary of Deposits release date.** The API carries none, so June 30 data counts from June 30 plus `sodReleaseLagDays` (120 **[verify]**; FDIC's search index holding the 2026 data was built on September 18, 2026). The universe and the footprint use the latest Summary of Deposits *released* by the as-of date. That is the June before, except between June 30 and the release. Branches come from its branch rows, since `/locations` only says where branches are today.
@@ -126,11 +131,18 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 
 | # | Decision | Default |
 |---|---|---|
-| D-B1 | The horizon: how many quarters after the as-of date a label counts | 4 quarters |
-| D-B2 | Which label kinds count. Should ordinary mergers count at all? | Failure, assisted merger, disclosed sale, FDIC loan sale; mergers off |
-| D-B3 | The universe: five states plus the metros' footprint, or every US bank | Five states plus footprint |
-| D-B4 | How many labelled banks a backtest needs before a weight change may cite it | 20, in the holdout |
-| D-B5 | The holdout: the last 4 quarters, or rolling-origin from the start | The last 4 quarters; rolling-origin if they hold too few labels |
+**Decided by a principal on November 14, 2026** (the E17 interview). Each one is recorded in `config.json` `backtest`.
+
+| # | Decision | Decided |
+|---|---|---|
+| — | What the backtest gates | **Weight changes only.** Outreach does not wait for it. Any change to a weight cites a holdout report in its `_calibration` note. |
+| D-B1 | The horizon | **2, 4 and 8 quarters, side by side**, with 4 as the headline (`horizonsReported`). Strong at 8 and weak at 2 means the score is early. |
+| D-B2 | Which label kinds count | **Failure, assisted merger, FDIC loan sale, and disclosed sale** (once Q11 and filers allow it). Ordinary mergers are off. |
+| D-B3 | The universe | **Five states plus the metros' footprint**, with the metro subset shown as a small sample. Every US bank is not built. |
+| D-B4 | Labelled banks a weight change needs | 20, in the holdout (unchanged) |
+| D-B5 | The holdout | **By bank, not by quarter**: a third of banks, fixed by a seed declared in config before any comparison. A holdout by quarter would have been almost empty, since our five states had 70 failures in 2009 to 2012 and 5 since 2019. Holding out quarters is still built (`holdout.by: "quarter"`). |
+| Q6 | The window | **2006 to 2026**, with the eras shown apart: the 2008 crisis (2006 to 2013), between (2014 to 2019) and recent (2020 to 2026). The crisis was mostly construction lending; today's stress is rates, office and multifamily. A pooled figure is never shown without the eras beside it. |
+| — | Scope of this pass | S1 to S4, command line only. No worker job and no web page (S5) until the platform is deployed. |
 
 ---
 
@@ -245,9 +257,24 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 
 | # | Decision | Default |
 |---|---|---|
-| D-E1 | Does an order add points, on which axis, and does an active order count more than a new one? | Signals only, no points |
-| D-E2 | Open the OCC API key in the firm's name (data-sources D3) | Not opened; the OCC source waits |
-| D-E3 | Does a bank under an active order get a different first-touch rule (for example, letters only, or no touch until a principal reviews)? | No change, but the card shows it |
+**Decided by a principal on November 16, 2026** (the E18 interview).
+
+| # | Decision | Decided |
+|---|---|---|
+| D-E1 | Does an order add points? | **Not yet: signals only.** The backtest decides. Teaching it to replay orders as of each past date waits for the first FDIC orders run, since without the FDIC most of our banks' orders would be missing and orders would look weaker than they are (Q6). |
+| D-E2 | Open the OCC API key | **Closed: no key.** The OCC source reads the monthly releases. Release dates are at most about a month late, which changes nothing for a signal shown for a year. |
+| D-E3 | A first-touch rule for a bank under an order in force | **A principal confirms seeing each order in force, once per order, before any touch to the bank is approved** (Q7). A new order needs a new confirmation; later touches about an order already confirmed need none. A pending merger needs none (Q8): its card warning and the call brief's not-say rule are enough. Built: see below. |
+| — | Who runs the FDIC orders | **Josh, monthly, in the week after the FDIC's release** (usually the last Friday). The first run also runs `outbound coverage`, which fills the private-bank baseline in section 0 and E18-S1. |
+| — | Mergers the H.2 cannot show (FDIC- or OCC-only, no holding company) | **Accept the gap, and count it** (Q5). If the share seen only at close is large, a principal decides whether to build an OCC applications reader on a principal's machine. Built: `outbound mergers gap`. |
+| — | State orders | Not built (decided earlier, E18-S2 source 3). |
+
+**The confirmation, as built (D-E3, November 16, 2026).**
+- `approveDraft` (`src/draft.mjs`) refuses with `ORDER_NOT_CONFIRMED` for each order in force against the account's bank (`account.institutionKey`, read from `regulatory/<key>.json`) that the account's `orderConfirmations` do not hold. The refusal names the order, its regulator and date, its link, and the command that confirms it. It never reaches a message.
+- `confirmOrder` (`src/accounts.mjs`; `outbound account confirm-order --account ID --order ORDER --by NAME`; the account page's "I have read this order" button) records `{ order, by, at }` on the account and an `order_confirmed` audit line. It refuses an order that is not in force against that bank, and a second confirmation of the same order changes nothing.
+- Approval runs with its own load list, `LOADS.approve`: the drafter's list plus `regulatory/`. Approving is a person's act; no model reads anything in it. `LOADS.draft` is unchanged, so the drafter still cannot load an order (the E18-S4 handoff test).
+- The account page lists the orders in force, each with its confirmation or the button.
+
+**The gap, as built (Q5, November 16, 2026).** `mergerGap` (`src/sources/mergerapps.mjs`; `outbound mergers gap`) counts the mergers and assisted mergers in `sources/fdic/events.json` that closed from `config.mergers.gapLeadDays` (placeholder 180) after the first H.2 week read, and splits them by whether an H.2 application closed on them (`closedBy`). It lists the ones seen only at close. From stored data; no network.
 
 ---
 
@@ -306,9 +333,23 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 
 | # | Decision | Default |
 |---|---|---|
-| D-I1 | Which intermediary kinds are in scope first | Loan-sale advisors and special servicers |
-| D-I2 | Who owns buyer-list registrations and proof of funds | A named principal; nothing until D9 is approved |
-| D-I3 | The ranking's weights and recency half-life | Placeholders |
+**Decided by a principal on November 16, 2026** (the E19 interview).
+
+| # | Decision | Decided |
+|---|---|---|
+| D-I1 | Which intermediary kinds first | **Loan-sale advisors and CMBS special servicers** (`config.intermediaries.kinds`). Receivers and counsel wait for county records (E5). |
+| — | Where firms come from, for now | **The FDIC sale pages and the CMBS data, plus mandates principals enter.** Separately, a spike reads the terms of the four listing sites (DebtX, First Financial Network, Mission Capital, JLL) and builds a feeder for each site whose terms allow it. |
+| D-I2 | Who owns buyer-list registrations and proof of funds | **Josh.** The tracker is built now; proof of funds stays refused until the credibility package (D9) is recorded as approved, which it is not yet. |
+| — | Scope of this pass | **S1 to S4**, command line and web. S5 (intermediaries as accounts) waits for approved message wording for intermediaries. |
+| D-I3 | The ranking's weights and recency half-life | **Placeholders** (`config.intermediaries.weights`); a principal tunes them after reading the first ranked list. |
+
+**As built (S1 to S4, November 16, 2026).** `src/intermediaries.mjs`; `outbound intermediaries build|list|show|mandate|referral|direct|alias|register|credibility-approved|nda|route|reminders`; the web app's Intermediaries pages (the nav's Servicers link now opens them; `/servicers` still works), the route on the candidate page, and re-certification reminders on the Status page.
+- **S1.** The registry (`intermediaries/registry.json`, a data folder, never tracked) is rebuilt with the sale ledger: by `sales build`, by the CMBS and FDIC loan-sale runs, and by their worker jobs (`LOADS.sales` holds `intermediaries/`). Feeders: an FDIC sale's advisor (the seller is the FDIC as receiver, so it ranks the advisor but routes no bank); a CMBS liquidation's special servicer; CMBS loans now in special servicing or coded for a note sale, one mandate per servicer and trust; a listing's advisor, once a listing feeder exists; and a principal's mandate (`intermediaries mandate`, with the date and how they know, audited). A firm's key comes from its name with legal suffixes dropped, or from an alias a principal adds. An "Unknown" servicer is never a firm. A referral (`intermediaries referral`) is kept apart, shown on the firm, and never ranked. No person, phone or email is stored.
+- **S2.** `rankFirms`: each component earns weight × min(value ÷ full, 1). An unknown seller never counts toward named sellers, and two sellerless listings never merge into one.
+- **S3.** States as specified, for loan-sale advisors only, each audited. `proof_of_funds_sent` is refused until `intermediaries credibility-approved` is recorded. Only the state, who and when are kept. `intermediaries nda` puts an asset or institution on the existing suppression (NDA) list, and only once an agreement is signed. A re-certification due within `reminderDays` (placeholder 30) shows on the Status page.
+- **S4.** `routeFor`: `unknown` by default; `advisor` only from an advisor mandate that names the seller; `direct` only from `intermediaries direct` (a principal's evidence); `both` when both exist. The candidate page shows it, with each advisor and whether we are on its buyer list.
+- **Not built:** the route in the paper estimate's Q6, since the scoring run does not load `intermediaries/` (the candidate page shows it instead); entering mandates, referrals and direct sales in the web app (command line only, for now); the listing feeders, which wait for the terms spike.
+- **Principals only.** No model-facing action (`LOADS.draft`, `research`, `callPrep`) loads `intermediaries/`, and a test proves it.
 
 ---
 
@@ -343,13 +384,21 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 - [ ] A nurture draft links to the note and quotes no figure from it. The linter already rejects a figure that is not in a cleared fact (`src/lint.mjs`); a test confirms it does so for a nurture draft that quotes the note.
 - [ ] The same note can go to Group B intermediaries (E19-S5) under the same rules.
 
-**Decisions for a principal.**
+**Decided by a principal on November 16, 2026** (the E20 interview).
 
-| # | Decision | Default |
+| # | Decision | Decided |
 |---|---|---|
-| D-M1 | Publish a market note at all, and under whose name | Not published; the pack can still be built for principals |
-| D-M2 | Which sections the note may carry beyond the defaults (failures, FDIC sales, recoveries) | Defaults only |
-| D-M3 | The disclosure thresholds | 5 institutions; no one over half |
+| D-M1 | Publish at all, and under whose name | **Build the pack now, for principals. Publishing waits for counsel (Q25), then goes out under the firm's name.** |
+| — | A new note, or the existing watch | **A data section in the news desk's monthly Hotel loan watch, widened to multifamily and retail.** The bank figures change quarterly; the CMBS figures, monthly. |
+| D-M2 | Sections beyond the defaults | **Defaults only:** no failures, FDIC loan sales or implied recoveries. |
+| D-M3 | The disclosure thresholds | **The strict defaults:** 5 banks and no one over half; 10 loans, 3 trusts, 2 servicers and no one loan over half. |
+| — | Scope of this pass | **S1 and S2**, command line and a principals' page. S3 (the handoff) waits for publishing and a look at the desk's input format in the website repository; S4 (nurture links) waits for the published page. |
+
+**As built (S1, S2, November 16, 2026).** `src/market.mjs`; `outbound market pack --quarter YYYY-MM-DD` and `market show`; the web app's Market page (principals only). The pack is written to `market/<quarter>.json` and `.md` (a data folder, never tracked).
+- **Bank figures:** the CRE noncurrent and nonaccrual ratios by metro and Call Report category (construction, multifamily, nonfarm nonresidential, and all CRE), with the bank count and the change on the quarter and the year. Each bank's balances are split by its deposit share in each metro (`sources/fdic/footprint.json`), so each dollar counts once. Call Reports cannot split hotel or retail out of nonfarm nonresidential, so bank figures are by category, not by buy-box sector.
+- **CMBS figures,** by metro and buy-box sector: loans in special servicing now (count and balance), new transfers in the quarter (`specialServicingSince`), and dispositions in the quarter (count only). A loan counts in its first metro.
+- **The guard:** the thresholds above, with the reasons for each hidden figure. Complementary suppression runs along each metro's row, whose all-CRE figure is its total. No total across metros is published, so columns are not lines; the pack says so, and that totals must not be made by summing it. A change is shown only when the figure is published in both quarters.
+- **Names nothing:** no bank, servicer, trust, property or person is in the pack; a test proves it. No model-facing action loads `market/`.
 
 ---
 
@@ -424,8 +473,8 @@ Numbered after the main PRD's Q18.
 |---|---|---|---|---|
 | Q19 | The backtest's horizon, label kinds and universe (D-B1 to D-B3) | Principals | E17-S2, S3 | The defaults in E17 |
 | Q20 | May weights change on the backtest alone, before 30 outcomes? (D-B4, D-B5) | Principals | Weight changes | Yes, with at least 20 labelled banks in the holdout and a `_calibration` note citing a holdout run |
-| Q21 | Open the OCC API key in the firm's name (D-E2, data-sources D3) | Principals | Nothing now: the OCC source reads the monthly releases with no key (E18-S2); the API would add exact order dates | Not opened |
-| Q22 | Does an active enforcement order change how, or whether, a bank is approached? (D-E3) | Principals, then counsel | E18-S4 | No change; the card shows it |
+| Q21 | Open the OCC API key in the firm's name (D-E2, data-sources D3) | Principals | **Decided 2026-11-16: no key** | — |
+| Q22 | Does an active enforcement order change how, or whether, a bank is approached? (D-E3) | Principals, then counsel | **Principals decided 2026-11-16:** a principal confirms each order in force before any touch is approved. Counsel's view is still open. | The confirmation (built) |
 | Q23 | Who owns the advisor registrations and the proof of funds? (D-I2) | Principals | E19-S3 | Nothing is sent to an advisor |
 | Q24 | Publish a market note, and under whose name? (D-M1) | Principals | E20-S3, S4 | The pack for principals only |
 | Q25 | Counsel's view on publishing aggregates of regulatory data, and on FRED if it is used | Counsel | E20 publication | Not published |

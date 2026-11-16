@@ -61,6 +61,7 @@ npm run outbound -- research run --account acme-bank --dry-run   # see exactly w
 npm run outbound -- research run --account acme-bank             # deep research: costs money
 npm run outbound -- research show --account acme-bank            # read the brief
 npm run outbound -- account confirm-role --account acme-bank --by "Pat Example"
+npm run outbound -- account confirm-order --account acme-bank --order frb:12345 --by "Pat Example"   # only if the bank is under an order in force: once per order, before any touch is approved
 npm run outbound -- draft run --account acme-bank --channel letter --step 1
 npm run outbound -- draft approve --account acme-bank --channel letter --step 1 --by "Pat Example"
 # a person sends it, then:
@@ -278,14 +279,16 @@ npm run outbound -- enforcement alias --key fdic:CERT --name "Example Bancorp, I
   - **The briefer** reads it as fenced data, told to confirm each order or application on the regulator's own page.
   - **The call brief** cites it by id, warns of an order in force or a pending merger, and adds a rule never to mention either.
   - **The drafter** cannot load it, and the linter rejects "consent order", "enforcement", "regulator" and "cease and desist" in any draft.
+  - **Approval** of any touch to a bank under an order in force is refused (`ORDER_NOT_CONFIRMED`) until a principal confirms seeing that order, once per order: `outbound account confirm-order`, or the account page (decided 2026-11-16, D-E3). A pending merger needs no confirmation.
 
-**FDIC orders, on your own machine.** The FDIC's order lists are on orders.fdic.gov, a site that draws them in the browser, so a headless Chrome reads the public page. Nothing appears on screen, and the site's internal API is not called. It runs on a principal's computer because the platform's worker has no browser:
+**FDIC orders, on your own machine (Josh, monthly).** The FDIC's order lists are on orders.fdic.gov, a site that draws them in the browser, so a headless Chrome reads the public page. Nothing appears on screen, and the site's internal API is not called. It runs on a principal's computer because the platform's worker has no browser:
 
 ```bash
 npm run fdic-orders:setup                               # once: Playwright and its Chromium (not saved to package.json; again after npm ci)
 npm run outbound -- sources run fdicorders              # each month, after the FDIC's release (usually the last Friday); the first run reads 12 months
 npm run outbound -- sources verify fdicorders           # fresh, every party an organization, every release on www.fdic.gov captured
 npm run outbound -- platform push                       # then copy the data folder into the platform, if you use it
+npm run outbound -- coverage                            # on the first run: the private-bank baseline the PRD still has blank (E18-S1)
 ```
 
 - **Built blind.** The rendered table could not be seen from where this was written, so columns are mapped by their header words.
@@ -293,6 +296,32 @@ npm run outbound -- platform push                       # then copy the data fol
   - The file holds the headers and the table's shape. Every word that is not an enforcement term, an organization word, a state or a month is masked, so it names no one.
 - **No people.** Rows against individuals (prohibitions, Section 19, a respondent with no organization word) are skipped as the table is read. Deposit-insurance terminations and waiver orders are skipped too.
 - FDIC orders carry no phrase flags yet: their PDFs are on a host Node cannot verify.
+
+### The market data pack (PRD next-five E20)
+
+Aggregate figures by metro, naming no bank, loan or person: bank CRE noncurrent ratios by Call Report category (each bank's balances split by its deposit share in each metro), and CMBS loans in special servicing, new transfers and dispositions by buy-box sector. A disclosure guard hides any figure with too few sources or one dominant source. For the principals now (the Market page); it becomes a data section in the Hotel loan watch only after counsel answers.
+
+```bash
+npm run outbound -- market pack --quarter 2026-06-30      # writes market/2026-06-30.json and .md
+npm run outbound -- market show                           # the latest pack
+```
+
+### Intermediaries (PRD next-five E19)
+
+The firms that act for sellers in our market: loan-sale advisors and CMBS special servicers. Built from stored data, and rebuilt whenever the sale ledger is. For the principals only; nothing here reaches a message.
+
+```bash
+npm run outbound -- intermediaries list [--kind loan_sale_advisor]    # ranked (placeholder weights), with each firm's buyer-list state
+npm run outbound -- intermediaries show --key intermediary:example-advisors
+npm run outbound -- intermediaries mandate --firm "Example Advisors" --kind loan_sale_advisor --seller fdic:12345 --date 2026-09-01 --how "their sale notice" --by Josh
+npm run outbound -- intermediaries register --key intermediary:example-advisors --state agreement_signed --by Josh [--recertify-by 2027-09-01]
+npm run outbound -- intermediaries credibility-approved --by Josh      # only then may proof of funds be sent
+npm run outbound -- intermediaries route --seller fdic:12345           # unknown, advisor, direct or both
+```
+
+- **Mandates** come from FDIC sale advisors, CMBS special servicers (liquidations and loans in special servicing), listings once their feeders exist, and principals. A seller no source names never counts toward sellers served. A call's referral is kept apart and never ranked.
+- **Buyer-list registration** is for loan-sale advisors, owned by Josh. Only the state is stored, never the agreement. `intermediaries nda` puts anything learned under an agreement on the NDA list.
+- **The route** on a candidate is `unknown` unless a source shows an advisor acting for that bank or a principal records a direct sale (`intermediaries direct`).
 
 ### Merger applications (PRD next-five E18-S3)
 
@@ -302,6 +331,7 @@ A merger heard of when it is applied for, not when it closes, puts a principal i
 npm run outbound -- sources run mergerapps              # the Federal Reserve's weekly H.2, every district (the first run reads 26 weeks)
 npm run outbound -- sources verify mergerapps           # fresh, sourced, no person stored, the latest week read again
 npm run outbound -- mergers list [--all]                # open applications naming a bank in the list, with their roles
+npm run outbound -- mergers gap                         # mergers seen only at their close (no H.2 application): the count that decides an OCC reader
 ```
 
 - **What it sees:** applications the Federal Reserve decides. That covers holding-company acquisitions, which most bank acquisitions are, and state member banks' mergers. A merger the OCC or the FDIC decides alone is not seen until it closes and FDIC's /history shows it.
@@ -344,7 +374,7 @@ npm run outbound -- network remove --id np-1 --by "Pat Example"   # also removes
 
 ### A backtest of the score (PRD E17)
 
-Every weight in `scoring.json` is a placeholder. The backtest asks whether the score, run on the data that existed at the time, ranked banks under pressure a few quarters before the event. Every setting is a placeholder in `config.json` `backtest` (decisions D-B1 to D-B5).
+Every weight in `scoring.json` is a placeholder. The backtest asks whether the score, run on the data that existed at the time, ranked banks under pressure a few quarters before the event. The settings live in `config.json` `backtest`. The window (2006 to 2026, read by era), the holdout (a third of banks, fixed by a declared seed), the horizons (2, 4 and 8 quarters, 4 the headline), the universe and the label kinds were decided on November 14, 2026; the rest are placeholders.
 
 ```bash
 npm run outbound -- backtest panel                       # the point-in-time panel (free, no key): window and lookback in config.json
@@ -354,8 +384,8 @@ npm run outbound -- backtest labels                      # failures, assisted me
 npm run outbound -- backtest run                         # the training quarters; writes backtest/report-<hash>.json and .md
 npm run outbound -- backtest run --scoring alt.json      # another scoring file; the committed one is untouched
 npm run outbound -- backtest run --compare a.json b.json # two side by side, training quarters only
-npm run outbound -- backtest run --holdout               # the declared holdout, once, for the scoring file a principal chose
-npm run outbound -- backtest run --rolling               # rolling origin, when the holdout holds too few labelled banks
+npm run outbound -- backtest run --holdout               # the held-out banks, once, for the scoring file a principal chose
+npm run outbound -- backtest run --rolling               # rolling origin, on the training banks only
 npm run outbound -- backtest report                      # the latest report's summary (--hash H for another)
 ```
 

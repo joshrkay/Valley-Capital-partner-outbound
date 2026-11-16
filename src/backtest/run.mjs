@@ -10,6 +10,7 @@
 // Labels are incomplete, and the words say so: an observed-label yield, its lift over the base rate, and the share of observed labels
 // captured. A bank with no observed label is unlabelled.
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { readJson, writeJson, writeText, readJsonl, appendJsonl, listFiles, audit } from '../store.mjs';
 import { scoreBank, contentHash, validateScoring, validateBuybox } from '../score.mjs';
@@ -45,31 +46,36 @@ const quarterEndsBefore = (asOf, date) => { let n = 0; for (let r = repOf(asOf);
 
 // ---- The replay -----------------------------------------------------------------------------------------------------------------
 // One observation per bank-quarter: the points by axis and component, the all-axis tier (context), and the first label in the horizon.
-export function replay({ panel, quarters, scoring, buybox, metros, labelIndex, horizon, k, secFilers = new Set() }) {
+export function replay({ panel, quarters, scoring, buybox, metros, labelIndex, horizon, k, secFilers = new Set(), horizons = [horizon], include = () => true }) {
+  const hs = [...new Set([horizon, ...horizons])].sort((a, b) => a - b);
   const metroCodes = new Set((metros?.metros ?? []).map((m) => String(m.cbsa)));
   const tierA = scoring.tiers?.A?.distress ?? Infinity;
   const obs = [], byQuarter = [], topByQuarter = {};
   for (const d of quarters) {
     const pit = pointInTime({ panel, asOf: d });
     const end = horizonEnd(d, horizon);
+    const firstLabel = (key, h) => { const e = horizonEnd(d, h); const l = (labelIndex.get(key) ?? []).find((x) => x.date > d && x.date <= e); return l ? { kind: l.kind, date: l.date } : null; };
     const rows = pit.banks.map((b) => {
       const item = scoreBank({ ...b, scoring, buybox, metros });
-      const label = (labelIndex.get(item.key) ?? []).find((l) => l.date > d && l.date <= end) ?? null;
+      const labelBy = Object.fromEntries(hs.map((h) => [h, firstLabel(item.key, h)]));
+      const label = labelBy[horizon];
       return {
         asOf: d, key: item.key, cert: item.cert, distress: item.axes.distress, timing: item.axes.timing, fit: item.axes.fit, dt: r2(item.axes.distress + item.axes.timing),
         score: item.score, tier: item.tier, points: Object.fromEntries(item.components.map((c) => [c.id, c.points])),
         metro: Object.entries(b.footprint.branchesByMetro ?? {}).some(([c, n]) => metroCodes.has(String(c)) && Number(n) > 0), secFiler: secFilers.has(item.key),
-        label: label ? { kind: label.kind, date: label.date } : null,
+        label, labelBy,
       };
     });
-    // The headline rank: distress and timing points only, banks above 0, ties broken by FDIC cert so the group is reproducible.
+    // The headline rank: distress and timing points only, banks above 0, ties broken by FDIC cert so the group is reproducible. It is
+    // ranked over the whole universe; `include` then chooses which banks are counted (the training banks, or the held-out banks).
     const ranked = rows.filter((r) => r.dt > 0).sort((a, b) => (b.dt - a.dt) || (Number(a.cert) - Number(b.cert))).slice(0, k);
     const top = new Set(ranked.map((r) => r.key));
     for (const r of rows) { r.inTopK = top.has(r.key); r.tierADistress = r.distress >= tierA; }
-    obs.push(...rows);
-    byQuarter.push({ asOf: d, knownQuarter: pit.knownQuarter, sodYear: pit.sodYear, universe: pit.universeSize, scored: rows.length, notScored: pit.notScored.length,
-      labelled: rows.filter((r) => r.label).length, topKLabelled: ranked.filter((r) => r.label).length, horizonEnd: end });
-    topByQuarter[d] = ranked.map((r) => ({ key: r.key, distress: r.distress, timing: r.timing, label: r.label }));
+    const kept = rows.filter((r) => include(r.cert));
+    obs.push(...kept);
+    byQuarter.push({ asOf: d, knownQuarter: pit.knownQuarter, sodYear: pit.sodYear, universe: pit.universeSize, scored: kept.length, notScored: pit.notScored.length,
+      labelled: kept.filter((r) => r.label).length, topKLabelled: kept.filter((r) => r.inTopK && r.label).length, horizonEnd: end });
+    topByQuarter[d] = ranked.filter((r) => include(r.cert)).map((r) => ({ key: r.key, distress: r.distress, timing: r.timing, label: r.label }));
   }
   return { obs, byQuarter, topByQuarter };
 }
@@ -124,7 +130,9 @@ function cell(g, minLabels) {
   return { observations: g.length, labelled: gl.length, rate: g.length ? r4(gl.length / g.length) : null, labelledBanks: n, ...(n < minLabels ? { tooFewToTune: true } : {}) };
 }
 
-function results({ obs, byQuarter, topByQuarter, scoring, file, opts }) {
+const atHorizon = (obs, h) => obs.map((o) => ({ ...o, label: o.labelBy?.[h] ?? null }));
+
+function results({ obs, byQuarter, topByQuarter, scoring, file, opts, horizons = [opts.horizon], eras = [], labelsAsOf = null }) {
   const metroObs = obs.filter((o) => o.metro);
   const headline = { ...block(obs, opts), metro: { ...block(metroObs, opts), size: { observations: metroObs.length, banks: new Set(metroObs.map((o) => o.key)).size }, note: METRO_NOTE } };
   const components = (scoring.components ?? []).map((c) => {
@@ -134,7 +142,61 @@ function results({ obs, byQuarter, topByQuarter, scoring, file, opts }) {
       ...(c.axis === 'fit' ? { note: 'a fit component: not tested, since fit has no history' } : {}) };
   });
   const context = { label: CONTEXT_LABEL, tiers: { A: cell(obs.filter((o) => o.tier === 'A'), opts.minLabels), B: cell(obs.filter((o) => o.tier === 'B'), opts.minLabels), untiered: cell(obs.filter((o) => !o.tier), opts.minLabels) } };
-  return { scoring: { path: file.path, hash: file.hash }, headline, components, context, byQuarter, topByQuarter };
+  // The same groups at each reported horizon (D-B1), and the headline horizon in each era: a pooled figure is never read alone.
+  // Every horizon is computed on the same bank-quarters: the as-of quarters whose LONGEST reported horizon ends by the labels' date.
+  // Otherwise a long horizon would count still-unobservable events as unlabelled more often than a short one, and the difference
+  // would read as the score being early or late when it is only label availability.
+  const maxH = Math.max(...horizons);
+  const allQ = [...new Set(obs.map((o) => o.asOf))].sort();
+  const commonQ = new Set(allQ.filter((d) => !labelsAsOf || horizonEnd(d, maxH) <= labelsAsOf));
+  const common = obs.filter((o) => commonQ.has(o.asOf));
+  const byHorizon = horizons.map((h) => ({ horizon: h, headline: h === opts.horizon, ...figures(atHorizon(common, h), { ...opts, horizon: h }) }));
+  const horizonSample = { quarters: commonQ.size, from: [...commonQ][0] ?? null, to: [...commonQ].at(-1) ?? null, left: allQ.length - commonQ.size, longest: maxH };
+  // The eras partition the evaluated quarters: validateEras refuses overlaps, and quarters outside every era get a row of their own.
+  const byEra = eras.map((e) => {
+    const sub = obs.filter((o) => o.asOf >= e.from && o.asOf <= e.to);
+    return { id: e.id, label: e.label ?? e.id, from: e.from, to: e.to, quarters: new Set(sub.map((o) => o.asOf)).size, ...figures(sub, opts) };
+  });
+  if (eras.length) {
+    const outside = obs.filter((o) => !eras.some((e) => o.asOf >= e.from && o.asOf <= e.to));
+    if (outside.length) { const q = [...new Set(outside.map((o) => o.asOf))].sort(); byEra.push({ id: '(outside every era)', label: 'Outside every era', from: q[0], to: q.at(-1), quarters: q.length, outside: true, ...figures(outside, opts) }); }
+  }
+  return { scoring: { path: file.path, hash: file.hash }, headline, byHorizon, horizonSample, byEra, components, context, byQuarter, topByQuarter };
+}
+
+// ---- The holdout (D-B5) ---------------------------------------------------------------------------------------------------------
+// By bank (the default): a fixed share of banks, chosen by a hash of a seed declared before any comparison, is held out across every
+// as-of quarter. A bank's place never depends on the panel, the labels or a score, so the split cannot be tuned. By quarter: the
+// as-of quarters from holdoutFrom on.
+export function holdoutSpec(cfg = {}) {
+  const h = cfg.holdout;
+  if (h && h.by === 'bank') {
+    if (!(typeof h.share === 'number' && h.share > 0 && h.share < 1)) throw new Error('config.backtest.holdout.share must be a number between 0 and 1: the share of banks held out (D-B5).');
+    if (!String(h.seed ?? '').trim()) throw new Error('config.backtest.holdout.seed must be declared before any backtest runs: a fixed string that chooses the held-out banks (D-B5).');
+    return { by: 'bank', share: h.share, seed: String(h.seed), key: `bank:${h.share}:${h.seed}` };
+  }
+  if (h && h.by !== undefined && h.by !== 'quarter') throw new Error(`config.backtest.holdout.by "${h.by}" is not built: "bank" or "quarter".`);
+  const from = h?.from ?? cfg.holdoutFrom;
+  if (!QE.test(String(from ?? ''))) throw new Error('config.backtest.holdoutFrom must be declared before any backtest runs: the first as-of quarter of the holdout, a quarter-end date (YYYY-MM-DD). Decision D-B5.');
+  return { by: 'quarter', from, key: `quarter:${from}` };
+}
+export function inHoldout(cert, spec) {
+  if (spec.by !== 'bank') return false;
+  const x = parseInt(createHash('sha256').update(`${spec.seed}:${cert}`).digest('hex').slice(0, 8), 16) / 0x100000000;
+  return x < spec.share;
+}
+const priorKey = (l) => l.holdout ?? (l.holdoutFrom ? `quarter:${l.holdoutFrom}` : null);
+
+export function validateEras(eras) {
+  if (eras === undefined) return [];
+  if (!Array.isArray(eras)) throw new Error('config.backtest.eras must be a list of { id, label, from, to }.');
+  for (const e of eras) {
+    if (!String(e?.id ?? '').trim() || !QE.test(String(e.from ?? '')) || !QE.test(String(e.to ?? '')) || e.to < e.from) throw new Error(`config.backtest.eras: each era needs an id and quarter-end dates from <= to (got ${JSON.stringify(e)}).`);
+  }
+  const ids = eras.map((e) => e.id);
+  if (new Set(ids).size !== ids.length) throw new Error(`config.backtest.eras: era ids must be unique (got ${ids.join(', ')}).`);
+  for (let i = 1; i < eras.length; i++) if (eras[i].from <= eras[i - 1].to) throw new Error(`config.backtest.eras: eras must be in order and must not overlap (${eras[i - 1].id} ends ${eras[i - 1].to}, ${eras[i].id} starts ${eras[i].from}), or a bank-quarter would be counted twice.`);
+  return eras;
 }
 
 // ---- The run --------------------------------------------------------------------------------------------------------------------
@@ -153,7 +215,8 @@ function loadScoringFiles({ rules, scoringPaths }) {
 export function runBacktest({ dir, rules, mode = 'training', scoringPaths = [], horizon, k, now = new Date() }) {
   if (!MODES.includes(mode)) throw new Error(`Unknown mode "${mode}" (${MODES.join(', ')}).`);
   const cfg = rules.config?.backtest ?? {};
-  if (!QE.test(String(cfg.holdoutFrom ?? ''))) throw new Error('config.backtest.holdoutFrom must be declared before any backtest runs: the first as-of quarter of the holdout, a quarter-end date (YYYY-MM-DD). Decision D-B5.');
+  const split = holdoutSpec(cfg);
+  const eras = validateEras(cfg.eras);
   const panel = readPanel(dir);
   if (!panel) throw new Error('No backtest panel yet. Run: outbound backtest panel');
   const labels = readLabels(dir);
@@ -164,14 +227,20 @@ export function runBacktest({ dir, rules, mode = 'training', scoringPaths = [], 
   if (mode !== 'compare' && mode !== 'holdout' && files.length !== 1) throw new Error('Give one scoring file with --scoring PATH, or two with --compare A B.');
   const H = horizon ?? cfg.horizonQuarters ?? 4, K = k ?? cfg.topK ?? 25, minLabels = cfg.minLabels ?? 20;
   for (const [name, v] of [['the horizon', H], ['K', K]]) if (!(Number.isInteger(v) && v >= 1)) throw new Error(`${name} must be a whole number of 1 or more.`);
+  const horizons = [...new Set([...(cfg.horizonsReported ?? []), H])].sort((a, b) => a - b);
+  for (const h of horizons) if (!(Number.isInteger(h) && h >= 1)) throw new Error('config.backtest.horizonsReported must hold whole numbers of quarters, 1 or more.');
   const vb = validateBuybox(rules.buybox, { metros: rules.metros });
   if (vb.errors.length) throw new Error(`buybox.json has errors:\n  ${vb.errors.join('\n  ')}`);
 
   const bp = backtestPaths(dir);
   const all = panel.state.asOf;
-  const training = all.filter((d) => d < cfg.holdoutFrom), holdout = all.filter((d) => d >= cfg.holdoutFrom);
+  const byBank = split.by === 'bank';
+  const training = byBank ? all : all.filter((d) => d < split.from), holdout = byBank ? all : all.filter((d) => d >= split.from);
   const evaluated = mode === 'holdout' ? holdout : mode === 'rolling' ? all : training;
-  if (!evaluated.length) throw new Error(`No ${mode === 'holdout' ? 'holdout' : 'training'} quarters: the panel runs ${all[0]} to ${all.at(-1)} and config.backtest.holdoutFrom is ${cfg.holdoutFrom}.`);
+  if (!evaluated.length) throw new Error(`No ${mode === 'holdout' ? 'holdout' : 'training'} quarters: the panel runs ${all[0]} to ${all.at(-1)} and config.backtest.holdoutFrom is ${split.from}.`);
+  // Which banks are counted: by bank, the held-out banks for --holdout and the rest for everything else (rolling included, so it never
+  // touches the holdout); by quarter, every bank.
+  const include = !byBank ? () => true : mode === 'holdout' ? (cert) => inHoldout(cert, split) : (cert) => !inHoldout(cert, split);
   if (mode === 'rolling' && all.length < 5) throw new Error('A rolling-origin split needs at least 5 as-of quarters (train to T, test T+1 to T+4).');
 
   // The labels that count, by bank, oldest first.
@@ -183,23 +252,28 @@ export function runBacktest({ dir, rules, mode = 'training', scoringPaths = [], 
 
   // How many labelled banks the holdout holds: labels and the universe only, no score, so counting them reveals nothing about a ranking.
   const holdoutLabelled = new Set();
+  const heldOut = new Set();
   for (const d of holdout) {
     const u = panel.universe[d]; const end = horizonEnd(d, H);
-    for (const [cert, m] of Object.entries(u?.members ?? {})) if (m.rows && (labelIndex.get(`fdic:${cert}`) ?? []).some((l) => l.date > d && l.date <= end)) holdoutLabelled.add(cert);
+    for (const [cert, m] of Object.entries(u?.members ?? {})) {
+      if (byBank && !inHoldout(cert, split)) continue;
+      if (byBank) heldOut.add(cert);
+      if (m.rows && (labelIndex.get(`fdic:${cert}`) ?? []).some((l) => l.date > d && l.date <= end)) holdoutLabelled.add(cert);
+    }
   }
 
   const inputs = {
     scoring: files.map((f) => ({ path: f.path, hash: f.hash })), buyboxHash: contentHash(rules.buybox), panelRunId: panel.state.runId, labelsRunId: labels.runId,
-    holdoutFrom: cfg.holdoutFrom, horizonQuarters: H, topK: K, minLabels, labelKinds: on, callReportLagDays: panel.state.callReportLagDays, sodReleaseLagDays: panel.state.sodReleaseLagDays,
+    holdoutFrom: split.by === 'quarter' ? split.from : null, holdout: split.key, horizonQuarters: H, horizonsReported: horizons, eras: eras.map((e) => ({ id: e.id, from: e.from, to: e.to })), topK: K, minLabels, labelKinds: on, callReportLagDays: panel.state.callReportLagDays, sodReleaseLagDays: panel.state.sodReleaseLagDays,
   };
   // The report's name: a hash of what it was computed from. A scoring file counts by its content, not by where it is.
   const hash = contentHash({ mode, inputs: { ...inputs, scoring: files.map((f) => f.hash) }, evaluated, metros: (rules.metros?.metros ?? []).map((m) => m.cbsa) });
 
   const out = files.map((file) => {
     const opts = { k: K, horizon: H, minLabels, tierADistress: file.scoring.tiers?.A?.distress ?? null };
-    const r = replay({ panel, quarters: evaluated, scoring: file.scoring, buybox: rules.buybox, metros: rules.metros, labelIndex, horizon: H, k: K, secFilers });
+    const r = replay({ panel, quarters: evaluated, scoring: file.scoring, buybox: rules.buybox, metros: rules.metros, labelIndex, horizon: H, horizons, k: K, secFilers, include });
     for (const q of r.byQuarter) q.horizonComplete = q.horizonEnd <= labels.labelsAsOf;
-    const res = results({ ...r, scoring: file.scoring, file, opts });
+    const res = results({ ...r, scoring: file.scoring, file, opts, horizons, eras, labelsAsOf: labels.labelsAsOf });
     if (mode === 'rolling') {
       res.folds = [];
       for (let i = 0; i + 4 < all.length; i++) {
@@ -213,25 +287,31 @@ export function runBacktest({ dir, rules, mode = 'training', scoringPaths = [], 
 
   // The holdout is scored once. A later holdout run on the same quarters with a different scoring file has seen them: reused.
   const holdoutLog = readJsonl(bp.holdout);
-  const touchesHoldout = mode === 'holdout' || mode === 'rolling';
-  const prior = holdoutLog.filter((l) => (l.quarters ?? []).some((q) => holdout.includes(q)) && l.scoringHash !== files[0].hash);
+  const touchesHoldout = mode === 'holdout' || (mode === 'rolling' && !byBank);
+  const prior = holdoutLog.filter((l) => l.scoringHash !== files[0].hash && (byBank ? priorKey(l) === split.key : priorKey(l)?.startsWith('quarter:') && (l.quarters ?? []).some((q) => holdout.includes(q))));
   const reusedHoldout = touchesHoldout && prior.length > 0;
   const earlierRuns = readJsonl(bp.runs);
-  const movedFrom = [...new Set(earlierRuns.map((l) => l.holdoutFrom).filter((h) => h && h !== cfg.holdoutFrom))];
+  const movedFrom = [...new Set(earlierRuns.map(priorKey).filter((h) => h && h !== split.key))];
 
   const notes = [
     'Groups are ranked over the whole universe each quarter; the strata and the metro subset count which of their banks were in each group.',
     'Branches and deposits come from the Summary of Deposits released by each as-of date (the live list counts branches from FDIC /locations today). Headquarters state is FDIC\'s state for the charter today, or when it closed.',
     'Event signals from SEC filings and the sale ledger are not replayed; they add no points, so no figure here would change. Structure events are, from their own dates.',
     'The SEC filer strata use the filers confirmed today (sources/edgar/filers.json), not as they stood on each as-of date.',
+    ...(byBank ? [mode === 'holdout'
+      ? `The holdout is ${heldOut.size} bank(s), a share of ${split.share} chosen by the seed in config.backtest.holdout; every figure counts only them. The top K is still ranked over the whole universe.`
+      : `${heldOut.size} bank(s) are held out (a share of ${split.share}, chosen by the declared seed) and are not counted here. The top K is still ranked over the whole universe.`] : []),
+    ...(eras.length ? ['The pooled headline mixes eras. Read it beside the table by era: a score that ranked distress in one era may not in another.'] : []),
     ...(panel.state.suspect ? [`The panel run ${panel.state.runId} was suspect: coverage below minCoverage on ${panel.state.coverageBelow.join(', ')}. Read the figures for those quarters with care (outbound backtest verify).`] : []),
     ...(labels.panelRunId && labels.panelRunId !== panel.state.runId ? [`The labels were built against an earlier panel (run ${labels.panelRunId}). Rebuild them: outbound backtest labels`] : []),
     ...(cfg.callReportLagDays !== undefined && cfg.callReportLagDays !== panel.state.callReportLagDays ? [`config.backtest.callReportLagDays is ${cfg.callReportLagDays}, but the panel was built with ${panel.state.callReportLagDays}, which the replay uses. Re-pull the panel to change it.`] : []),
     ...(cfg.sodReleaseLagDays !== undefined && cfg.sodReleaseLagDays !== panel.state.sodReleaseLagDays ? [`config.backtest.sodReleaseLagDays is ${cfg.sodReleaseLagDays}, but the panel was built with ${panel.state.sodReleaseLagDays}, which the replay uses. Re-pull the panel to change it.`] : []),
   ];
+  const modeLabel = byBank ? { training: 'training banks (the held-out banks left out), every as-of quarter', holdout: 'HELD-OUT banks, every as-of quarter', compare: 'two scoring files side by side, training banks only', rolling: 'rolling origin on the training banks (train to T, test T+1 to T+4)' }[mode] : MODE_LABEL[mode];
   const report = {
     kind: 'backtest-report', hash, generatedAt: now.toISOString(), provisional: vb.placeholders.length > 0, placeholders: vb.placeholders,
-    mode, modeLabel: MODE_LABEL[mode], reusedHoldout, reusedFrom: [...new Set(prior.map((l) => l.reportHash))], holdoutMovedFrom: movedFrom, inputs,
+    mode, modeLabel, reusedHoldout, reusedFrom: [...new Set(prior.map((l) => l.reportHash))], holdoutMovedFrom: movedFrom, inputs,
+    split: { by: split.by, ...(byBank ? { share: split.share, seed: split.seed, heldOutBanks: heldOut.size } : { from: split.from }) },
     quarters: { all, training, holdout, evaluated, horizonIncomplete: evaluated.filter((d) => horizonEnd(d, H) > labels.labelsAsOf), labelsAsOf: labels.labelsAsOf },
     labelKinds: labels.kinds, holdoutLabelledBanks: holdoutLabelled.size, rollingOffered: holdoutLabelled.size < minLabels,
     results: out, ...(mode === 'rolling' ? { folds: out[0].folds } : {}),
@@ -244,8 +324,8 @@ export function runBacktest({ dir, rules, mode = 'training', scoringPaths = [], 
   const head = out[0].headline.all;
   const counts = { quarters: evaluated.length, observations: head.observations, labelledBanks: head.labelledBanks };
   appendJsonl(bp.runs, { at: now.toISOString(), mode, reportHash: hash, scoring: files.map((f) => f.hash), buyboxHash: inputs.buyboxHash, panelRunId: inputs.panelRunId, labelsRunId: inputs.labelsRunId,
-    holdoutFrom: cfg.holdoutFrom, horizonQuarters: H, topK: K, reusedHoldout, ...counts });
-  if (touchesHoldout) appendJsonl(bp.holdout, { at: now.toISOString(), mode, reportHash: hash, scoringHash: files[0].hash, quarters: evaluated.filter((d) => holdout.includes(d)), holdoutFrom: cfg.holdoutFrom, panelRunId: inputs.panelRunId, labelsRunId: inputs.labelsRunId });
+    holdoutFrom: inputs.holdoutFrom, holdout: split.key, horizonQuarters: H, topK: K, reusedHoldout, ...counts });
+  if (touchesHoldout) appendJsonl(bp.holdout, { at: now.toISOString(), mode, reportHash: hash, scoringHash: files[0].hash, quarters: evaluated.filter((d) => holdout.includes(d)), holdoutFrom: inputs.holdoutFrom, holdout: split.key, banks: byBank ? heldOut.size : null, panelRunId: inputs.panelRunId, labelsRunId: inputs.labelsRunId });
   audit(dir, { type: 'backtest_run', mode, reportHash: hash, reusedHoldout, ...counts });
   return { hash, report, paths };
 }
@@ -288,19 +368,25 @@ const strataRow = (name, f) => `| ${name} | ${f.observations} | ${f.labelledBank
 const STRATA_HEAD = ['| | Bank-quarters | Labelled banks | Base rate | Top K yield | Top K lift | Top K captured | Tier A distress yield | Tier A distress lift | |', '|---|---|---|---|---|---|---|---|---|---|'];
 const cellText = (c) => `${c.observations} | ${c.labelled} | ${pct(c.rate)}${c.tooFewToTune ? ' (too few to tune on)' : ''}`;
 
+const splitText = (key) => { const [by, a, ...b] = String(key).split(':'); return by === 'bank' ? `a bank holdout (share ${a}, seed "${b.join(':')}")` : `a quarter holdout from ${a}`; };
+
 export function renderReport(r) {
   const L = [];
   L.push(r.provisional ? `# PROVISIONAL: backtest of the score, report ${r.hash}` : `# Backtest of the score, report ${r.hash}`, '');
   if (r.provisional) L.push(`**PROVISIONAL.** The buy box still has placeholders (${r.placeholders.join(', ')}). The hard filters ran with it as it stands. The headline figures do not use fit, but the context table does.`, '');
   L.push(`Mode: ${r.modeLabel}. Generated ${r.generatedAt}. The known limits at the end apply to every figure.`, '');
-  if (r.reusedHoldout) L.push(`**REUSED HOLDOUT.** These holdout quarters were scored before with a different scoring file (report ${r.reusedFrom.join(', ')}). Its figures are no longer an unseen test, and a _calibration note should not cite them.`, '');
-  if (r.holdoutMovedFrom.length) L.push(`**The holdout moved.** Earlier runs used holdoutFrom ${r.holdoutMovedFrom.join(', ')}; this one uses ${r.inputs.holdoutFrom}. Quarters that were in an earlier holdout may have been looked at.`, '');
+  const bank = r.split?.by === 'bank';
+  const what = bank ? 'held-out banks' : 'holdout quarters';
+  if (r.reusedHoldout) L.push(`**REUSED HOLDOUT.** These ${what} were scored before with a different scoring file (report ${r.reusedFrom.join(', ')}). Its figures are no longer an unseen test, and a _calibration note should not cite them.`, '');
+  if (r.holdoutMovedFrom.length) L.push(`**The holdout moved.** Earlier runs used ${r.holdoutMovedFrom.map(splitText).join('; ')}; this one uses ${splitText(r.inputs.holdout ?? `quarter:${r.inputs.holdoutFrom}`)}. ${bank ? 'Banks' : 'Quarters'} that were in an earlier holdout may have been looked at.`, '');
   const i = r.inputs;
   L.push('## Inputs', '',
     ...i.scoring.map((s) => `- Scoring file: ${s.path} (hash ${s.hash})`),
     `- Buy box: hash ${i.buyboxHash}`, `- Panel run: ${i.panelRunId}. Labels run: ${i.labelsRunId}, complete through ${r.quarters.labelsAsOf}.`,
-    `- Holdout: declared from ${i.holdoutFrom} (${r.quarters.holdout.length} quarter(s): ${r.quarters.holdout.join(', ') || 'none'}). It holds ${r.holdoutLabelledBanks} labelled bank(s).`,
-    `- Horizon: ${i.horizonQuarters} quarter(s). K: ${i.topK}. minLabels: ${i.minLabels}. A Call Report counts from quarter-end plus ${i.callReportLagDays} days; the Summary of Deposits from June 30 plus ${i.sodReleaseLagDays} days.`,
+    r.split?.by === 'bank'
+      ? `- Holdout: by bank, a share of ${r.split.share} chosen by the seed "${r.split.seed}" (${r.split.heldOutBanks} bank(s)), across every as-of quarter. It holds ${r.holdoutLabelledBanks} labelled bank(s).`
+      : `- Holdout: declared from ${i.holdoutFrom} (${r.quarters.holdout.length} quarter(s): ${r.quarters.holdout.join(', ') || 'none'}). It holds ${r.holdoutLabelledBanks} labelled bank(s).`,
+    `- Horizon: ${i.horizonQuarters} quarter(s) for the headline${(i.horizonsReported ?? []).length > 1 ? `; also reported at ${i.horizonsReported.join(', ')}` : ''}. K: ${i.topK}. minLabels: ${i.minLabels}. A Call Report counts from quarter-end plus ${i.callReportLagDays} days; the Summary of Deposits from June 30 plus ${i.sodReleaseLagDays} days.`,
     `- As-of quarters evaluated: ${r.quarters.evaluated.join(', ')}.`, '');
   if (r.rollingOffered && r.mode !== 'rolling') L.push(`The holdout holds ${r.holdoutLabelledBanks} labelled bank(s), fewer than minLabels (${i.minLabels}): too few to tune on. A rolling-origin split is offered instead (train on quarters up to T, test on T+1 to T+4, for each T): outbound backtest run --rolling`, '');
   if (r.quarters.horizonIncomplete.length) L.push(`${r.quarters.horizonIncomplete.length} as-of quarter(s) have a horizon that ends after ${r.quarters.labelsAsOf}, the date the labels are complete through: ${r.quarters.horizonIncomplete.join(', ')}. Their horizon runs past the labels, so their labels are incomplete and their yields understate.`, '');
@@ -310,7 +396,7 @@ export function renderReport(r) {
     const [a, b] = r.results;
     const row = (name, fa, fb) => `| ${name} | ${fa} | ${fb} |`;
     const ha = a.headline.all, hb = b.headline.all;
-    L.push('## Side by side (training quarters only)', '', `| | ${a.scoring.path} | ${b.scoring.path} |`, '|---|---|---|',
+    L.push(`## Side by side (${r.split?.by === 'bank' ? 'training banks' : 'training quarters'} only)`, '', `| | ${a.scoring.path} | ${b.scoring.path} |`, '|---|---|---|',
       row('Scoring hash', a.scoring.hash, b.scoring.hash), row('Base rate', pct(ha.baseRate), pct(hb.baseRate)),
       row('Top K yield', pct(ha.groups.topK.yield), pct(hb.groups.topK.yield)), row('Top K lift', lift(ha.groups.topK.lift), lift(hb.groups.topK.lift)),
       row('Top K share captured', pct(ha.groups.topK.captured), pct(hb.groups.topK.captured)),
@@ -319,7 +405,18 @@ export function renderReport(r) {
   }
   for (const res of r.results) {
     const h = res.headline;
-    L.push(`## Headline: ${res.scoring.path} (distress and timing points only; fit left out)`, '', ...(r.mode === 'rolling' ? ['Pooled over every as-of quarter, the holdout included; the folds below are the test windows.', ''] : []), ...figureLines(h.all, ''));
+    L.push(`## Headline: ${res.scoring.path} (distress and timing points only; fit left out)`, '', ...(r.mode === 'rolling' ? [r.split?.by === 'bank' ? 'Pooled over every as-of quarter, training banks only (the held-out banks are left out); the folds below are the test windows.' : 'Pooled over every as-of quarter, the holdout included; the folds below are the test windows.', ''] : []), ...figureLines(h.all, ''));
+    if (res.byEra?.length) L.push('### By era (the headline horizon)', '', 'The pooled figure above mixes eras. Read it with this table.', '',
+      '| Era | As-of quarters | Bank-quarters | Labelled banks | Base rate | Top K yield | Top K lift | Top K captured | Median lead | |', '|---|---|---|---|---|---|---|---|---|---|',
+      ...res.byEra.map((e) => `| ${e.label} (${e.from} to ${e.to}) | ${e.quarters} | ${e.observations} | ${e.labelledBanks} | ${pct(e.baseRate)} | ${pct(e.groups.topK.yield)} | ${lift(e.groups.topK.lift)} | ${pct(e.groups.topK.captured)} | ${e.leadTime.median ?? '–'} | ${e.tooFewToTune ? e.note : 'enough to read'} |`), '');
+    if ((res.byHorizon ?? []).length > 1) {
+      const hs = res.horizonSample;
+      L.push('### By horizon', '', hs.quarters
+        ? `The same ranking, with a label counted when it falls within each horizon. Every horizon is computed on the same ${hs.quarters} as-of quarter(s), ${hs.from} to ${hs.to}: those whose longest horizon (${hs.longest} quarters) ends by the labels' date.${hs.left ? ` The ${hs.left} later quarter(s) are left out here, so this table does not match the headline exactly.` : ''} On this common sample, strong at long horizons and weak at short ones means the score is early; the reverse, late.`
+        : `No as-of quarter has a complete ${hs.longest}-quarter horizon yet, so the horizons cannot be compared on a common sample.`, '');
+      if (hs.quarters) L.push('| Horizon (quarters) | Base rate | Top K yield | Top K lift | Top K captured | Median lead | Labelled banks |', '|---|---|---|---|---|---|---|',
+        ...res.byHorizon.map((b) => `| ${b.horizon}${b.headline ? ' (headline)' : ''} | ${pct(b.baseRate)} | ${pct(b.groups.topK.yield)} | ${lift(b.groups.topK.lift)} | ${pct(b.groups.topK.captured)} | ${b.leadTime.median ?? '–'} | ${b.labelledBanks}${b.tooFewToTune ? ' (too few to tune on)' : ''} |`), '');
+    }
     L.push('### By label coverage', '', ...STRATA_HEAD, strataRow('With a confirmed SEC filer', h.bySecFiler.withFiler), strataRow('Without one', h.bySecFiler.withoutFiler), '', h.bySecFiler.note, '');
     L.push(`### The metro subset: ${h.metro.size.observations} bank-quarters, ${h.metro.size.banks} banks (a small sample)`, '', ...STRATA_HEAD, strataRow('All in the subset', h.metro.all), strataRow('With a confirmed SEC filer', h.metro.bySecFiler.withFiler), strataRow('Without one', h.metro.bySecFiler.withoutFiler), '', h.metro.note, '');
     L.push('### Per component', '', 'For each component, the labelled rate among bank-quarters where it scored more than 0, against the rest.', '',
@@ -344,12 +441,14 @@ export function summarize(r) {
   const lines = [];
   if (r.provisional) lines.push('PROVISIONAL: the buy box still has placeholders.');
   lines.push(`Backtest report ${r.hash}: ${r.modeLabel}, ${r.quarters.evaluated.length} as-of quarter(s) from ${r.quarters.evaluated[0]} to ${r.quarters.evaluated.at(-1)}, horizon ${r.inputs.horizonQuarters}, K ${r.inputs.topK}.`);
-  if (r.reusedHoldout) lines.push('REUSED HOLDOUT: these holdout quarters were scored before with a different scoring file.');
+  if (r.reusedHoldout) lines.push(`REUSED HOLDOUT: these ${r.split?.by === 'bank' ? 'held-out banks' : 'holdout quarters'} were scored before with a different scoring file.`);
   for (const res of r.results) {
     const h = res.headline.all;
     lines.push(`${res.scoring.path} (${res.scoring.hash}): Base rate ${pct(h.baseRate)} of ${h.observations} bank-quarters, ${h.labelledBanks} labelled bank(s).${h.tooFewToTune ? ` ${h.note}.` : ''}`,
       `  top ${h.groups.topK.k} by distress and timing: observed-label yield ${pct(h.groups.topK.yield)}, lift ${lift(h.groups.topK.lift)}, share of observed labels captured ${pct(h.groups.topK.captured)}; median lead time ${h.leadTime.median ?? '–'} quarter(s)`,
       `  distress at or above ${h.groups.tierADistress.threshold}: yield ${pct(h.groups.tierADistress.yield)}, lift ${lift(h.groups.tierADistress.lift)}, captured ${pct(h.groups.tierADistress.captured)}`);
+    for (const e of res.byEra ?? []) lines.push(`  era ${e.label}: base rate ${pct(e.baseRate)}, top K yield ${pct(e.groups.topK.yield)}, lift ${lift(e.groups.topK.lift)}, ${e.labelledBanks} labelled bank(s)${e.tooFewToTune ? ' (too few to tune on)' : ''}`);
+    if ((res.byHorizon ?? []).length > 1 && res.horizonSample?.quarters) lines.push(`  by horizon (common sample, ${res.horizonSample.from} to ${res.horizonSample.to}): ${res.byHorizon.map((b) => `${b.horizon}q lift ${lift(b.groups.topK.lift)}`).join(', ')}`);
   }
   const off = Object.entries(r.labelKinds).filter(([, x]) => x.status === 'unavailable').map(([k]) => k);
   if (off.length) lines.push(`Unavailable label kinds: ${off.join(', ')} (see the report).`);

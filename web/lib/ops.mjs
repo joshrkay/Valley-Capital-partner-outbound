@@ -73,7 +73,8 @@ export async function accountDetail(client, id) {
   const { LOADS, store, pilot } = await mods();
   const rules = await loadRules();
   store.safeId(need(id, 'An account id'));   // checked before it becomes part of a path
-  const own = [`accounts/${id}.json`, `briefs/${id}.md`, `research/${id}.json`, `drafts/${id}/`, 'pilot/status.json'];
+  const own = [`accounts/${id}.json`, `briefs/${id}.md`, `research/${id}.json`, `drafts/${id}/`, 'pilot/status.json', 'regulatory/'];
+  const regulatory = await engine('src/regulatory.mjs');
   const { result } = await client.unitOfWork(own, (dir) => {
     const account = store.readJson(join(dir, 'accounts', `${id}.json`), null);
     if (!account) return null;
@@ -83,6 +84,8 @@ export async function accountDetail(client, id) {
       account, brief: store.readText(join(dir, 'briefs', `${id}.md`), null),
       research: research ? { date: research.date, mode: research.mode ?? 'person', findings: research.findings?.length ?? 0, risk: research.riskScreen?.approach ?? null, person: research.personCheck?.status ?? null } : null,
       gate: pilot.researchGate({ dir, account, config: rules.config }), drafts,
+      // Orders in force against the bank, each with whether a principal has confirmed seeing it (D-E3). For principals only.
+      orders: regulatory.ordersInForce(dir, account.institutionKey).map((o) => ({ ...o, confirmation: (account.orderConfirmations ?? []).find((c) => c.order === o.id) ?? null })),
     };
   });
   return result;
@@ -93,6 +96,13 @@ export async function accountDetail(client, id) {
 export async function setPerson(client, { id, name, title, by, source }) {
   const [uow, accounts] = await Promise.all([engine('src/uow.mjs'), engine('src/accounts.mjs')]);
   await client.unitOfWork(uow.contactLoads('person', need(id, 'An account id')), (dir) => accounts.setPerson({ dir, id, name, title: typeof title === 'string' ? title : '', by, source: sourceOf(source) }));
+}
+
+// Confirming an enforcement order in force (D-E3): the same function `outbound account confirm-order` calls.
+export async function confirmOrder(client, { id, order, by }) {
+  const [{ LOADS }, accounts] = await Promise.all([engine('src/uow.mjs'), engine('src/accounts.mjs')]);
+  const { result } = await client.unitOfWork(LOADS.orderConfirm, (dir) => accounts.confirmOrder({ dir, id: need(id, 'An account id'), order: need(order, 'An order'), by }));
+  return { already: result.already, order: result.order };
 }
 
 export async function confirmRole(client, { id, by }) {
@@ -240,7 +250,8 @@ export async function listDrafts(client) {
 export async function approve(client, { id, channel, step, by }) {
   const { LOADS, store, guard, draft } = await mods();
   const rules = await loadRules();
-  const { result } = await client.unitOfWork(LOADS.draft, (dir) => {
+  // LOADS.approve: the drafter's list plus regulatory/, so an order in force that no principal has confirmed refuses the approval (D-E3).
+  const { result } = await client.unitOfWork(LOADS.approve, (dir) => {
     const account = store.readJson(join(dir, 'accounts', `${need(id, 'An account id')}.json`), null);
     if (!account) throw new Error(`There is no account ${id}.`);
     const ctx = guard.loadContext({ dir, config: rules.config });
@@ -350,4 +361,58 @@ export async function salesOverview(client, { recent = 50 } = {}) {
     buyers: sales.groupBuyers(ledger).map((b) => ({ ...b, link: partyLink(b) })),
     pricing: sales.pricing(ledger),
   };
+}
+
+// ---- Intermediaries (PRD next-five E19) -------------------------------------------------------------------------------------------
+// The engine's own functions (src/intermediaries.mjs), on the stored registry. For the principals only; never in a message.
+const INTERMEDIARY_DOCS = ['intermediaries/registry.json', 'intermediaries/manual.json', 'intermediaries/registrations.json'];
+export async function listIntermediaries(client, { kind = null } = {}) {
+  const [I, rules] = await Promise.all([engine('src/intermediaries.mjs'), loadRules()]);
+  const snap = await client.load(INTERMEDIARY_DOCS);
+  const registry = snap.docs['intermediaries/registry.json'] ?? null;
+  const regs = snap.docs['intermediaries/registrations.json'] ?? { firms: {} };
+  const today = new Date().toISOString().slice(0, 10);
+  const rows = registry ? I.rankFirms({ registry, config: rules.config, buybox: rules.buybox, asOf: today }).filter((r) => !kind || r.kinds.includes(kind)) : [];
+  return { builtAt: registry?.builtAt ?? null, kinds: I.KINDS, rows: rows.map((r) => ({ ...r, registration: regs.firms?.[r.key]?.state ?? null })) };
+}
+
+export async function intermediaryDetail(client, key) {
+  const [I, rules] = await Promise.all([engine('src/intermediaries.mjs'), loadRules()]);
+  const snap = await client.load(INTERMEDIARY_DOCS);
+  const registry = snap.docs['intermediaries/registry.json'] ?? null;
+  const firm = registry?.firms?.[need(key, 'A firm key')];
+  if (!firm) return null;
+  const regs = snap.docs['intermediaries/registrations.json'] ?? { firms: {}, credibilityPackage: null };
+  const row = I.rankFirms({ registry, config: rules.config, buybox: rules.buybox, asOf: new Date().toISOString().slice(0, 10) }).find((r) => r.key === key);
+  return { firm, row, kinds: I.KINDS, states: I.REG_STATES, mandates: firm.mandates.map((id) => registry.mandates[id]).filter(Boolean).sort((a, b) => String(b.date).localeCompare(String(a.date))),
+    registration: regs.firms?.[key] ?? null, credibilityPackage: regs.credibilityPackage ?? null };
+}
+
+export async function setRegistration(client, { key, state, by, recertifyBy }) {
+  const [{ LOADS }, I] = await Promise.all([engine('src/uow.mjs'), engine('src/intermediaries.mjs')]);
+  const { result } = await client.unitOfWork(LOADS.intermediaries, (dir) => I.setRegistration({ dir, key: need(key, 'A firm key'), state, by, recertifyBy: recertifyBy || null }));
+  return result;
+}
+
+// The route to a seller (E19-S4), for the candidate page.
+export async function routeOf(client, sellerKey) {
+  const I = await engine('src/intermediaries.mjs');
+  const snap = await client.load(INTERMEDIARY_DOCS);
+  if (!snap.docs['intermediaries/registry.json']) return null;
+  return I.routeFor({ registry: snap.docs['intermediaries/registry.json'], manual: snap.docs['intermediaries/manual.json'] ?? {}, registrations: snap.docs['intermediaries/registrations.json'] ?? {}, sellerKey });
+}
+
+// Buyer-list re-certifications due soon (E19-S3), for the Status page.
+export async function registrationReminders(client) {
+  const [I, rules] = await Promise.all([engine('src/intermediaries.mjs'), loadRules()]);
+  const snap = await client.load(['intermediaries/registrations.json']);
+  return I.registrationReminders({ registrations: snap.docs['intermediaries/registrations.json'] ?? {}, asOf: new Date().toISOString().slice(0, 10), withinDays: rules.config.intermediaries?.reminderDays ?? 30 });
+}
+
+// ---- The market data pack (PRD next-five E20) -----------------------------------------------------------------------------------
+// The latest stored pack (market/<quarter>.json), aggregates only. For the principals; publishing waits for counsel (Q25).
+export async function latestMarketPack(client) {
+  const snap = await client.load(['market/']);
+  const keys = Object.keys(snap.docs).filter((k) => /^market\/\d{4}-\d{2}-\d{2}\.json$/.test(k)).sort();
+  return keys.length ? snap.docs[keys.at(-1)] : null;
 }

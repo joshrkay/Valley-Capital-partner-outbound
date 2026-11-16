@@ -1,5 +1,5 @@
 import { requirePrincipal } from '../../../lib/session.mjs';
-import { candidateDetail } from '../../../lib/ops.mjs';
+import { candidateDetail, routeOf } from '../../../lib/ops.mjs';
 import { period, moneyThousands, pct, num, source } from '../../../lib/format.mjs';
 import { NotAuthorized, Problem, Sourced } from '../../ui.jsx';
 import { promoteAction, dismissAction, snoozeAction } from '../actions.js';
@@ -18,6 +18,9 @@ export default async function Candidate({ params }) {
   try { d = await candidateDetail(ctx.client, key); } catch (e) { return <Problem text={`This candidate could not be loaded: ${e.message}`} />; }
   if (!d) return <Problem text={`There is no candidate ${key} in the latest scoring run.`} />;
   const { item, decision, suppressed, paper } = d;
+  // How this bank sells (next-five E19-S4): unknown unless a source or a principal shows it. Its own load; a failure hides only this line.
+  let route = null;
+  try { route = await routeOf(ctx.client, item.key); } catch { route = null; }
   const p = item.profile ?? {};
   return (
     <>
@@ -32,6 +35,7 @@ export default async function Candidate({ params }) {
             <dt>Tier</dt><dd><span className={`tier ${item.tier ?? ''}`}>{item.tier ?? 'none'}</span> <span className="muted small">{item.tierNote}</span></dd>
             <dt>Score</dt><dd>{num(item.score, 2)} = distress {num(item.axes?.distress, 2)} + fit {num(item.axes?.fit, 2)} + timing {num(item.axes?.timing, 2)}</dd>
             <dt>Hard filters</dt><dd>{item.filtersFailed?.length ? item.filtersFailed.join('; ') : 'passed'}</dd>
+            <dt>How it sells</dt><dd>{route ? route.label : 'unknown'}{route?.advisors?.map((a) => <span key={a.key} className="small"><br /><a href={`/intermediaries/${encodeURIComponent(a.key)}`}>{a.name}</a>, last {a.last}{a.notRegistered ? <strong> · we are not on its buyer list ({a.registration.replace(/_/g, ' ')})</strong> : ' · on its buyer list'}</span>)}{route?.direct?.length ? <span className="small"><br />direct sale recorded {route.direct.map((x) => x.date).join(', ')}</span> : null}</dd>
           </dl>
         </div>
         <div className="panel">

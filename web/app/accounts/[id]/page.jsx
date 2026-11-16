@@ -3,7 +3,7 @@ import { accountDetail } from '../../../lib/ops.mjs';
 import { loadRules } from '../../../lib/engine.mjs';
 import { period, num } from '../../../lib/format.mjs';
 import { NotAuthorized, Problem, Markdown } from '../../ui.jsx';
-import { confirmRoleAction, queueResearchAction, queueDraftAction } from '../actions.js';
+import { confirmRoleAction, confirmOrderAction, queueResearchAction, queueDraftAction } from '../actions.js';
 import { Calls } from './calls.jsx';
 import { Routes } from './routes.jsx';
 import { Contact } from './contact.jsx';
@@ -16,7 +16,7 @@ export default async function Account({ params }) {
   let d, rules;
   try { [d, rules] = await Promise.all([accountDetail(ctx.client, id), loadRules()]); } catch (e) { return <Problem text={`This account could not be loaded: ${e.message}`} />; }
   if (!d) return <Problem text={`There is no account ${id}.`} />;
-  const { account: a, brief, research, gate, drafts } = d;
+  const { account: a, brief, research, gate, drafts, orders = [] } = d;
   const pipe = a.pipeline;
   return (
     <>
@@ -52,6 +52,21 @@ export default async function Account({ params }) {
           {drafts.length ? <ul className="small">{drafts.map((x) => <li key={`${x.step}-${x.channel}`}>Step {x.step}, {x.channel}: {x.status}{x.approvedBy ? ` by ${x.approvedBy}` : ''}</li>)}</ul> : null}
         </div>
       </div>
+
+      {orders.length ? (
+        <>
+          <h2>Enforcement orders in force</h2>
+          <div className="panel small">
+            <p style={{ marginTop: 0 }}>No touch to this bank is approved until a principal has confirmed seeing each order below, once. Read the order first. Never mention it in a message.</p>
+            <ul>{orders.map((o) => (
+              <li key={o.id}>{o.type} from the {o.regulator}, {o.date} {o.link ? <a href={o.link} rel="noopener noreferrer nofollow" target="_blank">(the order)</a> : null}{' '}
+                {o.confirmation ? <span className="muted">confirmed by {o.confirmation.by}, {String(o.confirmation.at).slice(0, 10)}</span> : (
+                  <form action={confirmOrderAction} className="inline"><input type="hidden" name="id" value={a.id} /><input type="hidden" name="order" value={o.id} /><button type="submit">I have read this order</button></form>
+                )}
+              </li>))}</ul>
+          </div>
+        </>
+      ) : null}
 
       <Contact client={ctx.client} id={a.id} />
 
