@@ -31,7 +31,8 @@ export const LOADS = Object.freeze({
   callNotes: ['accounts/', 'calls/'],
   callExtract: ['accounts/', 'calls/'],
   callConfirm: [...GUARD, 'accounts/', 'calls/', 'paper/', 'outcomes.jsonl'],
-  outcomes: ['outcomes.jsonl', 'reports/'],
+  // The outcomes report also counts meetings recorded by hand: the touch log, and the accounts they name (for their origin signals).
+  outcomes: ['outcomes.jsonl', 'reports/', 'touches.jsonl', 'accounts/'],
   // The weekly triage (src/triage.mjs): the candidate list and decisions, accounts, the guard's log and suppression list, the run log, the
   // few source files it reads, and its own snapshot. The day's two output files are added per run (triageLoads), so past triages are
   // never loaded. No research or drafting action loads triage/, so the triage never reaches a brief or a message.
@@ -83,6 +84,9 @@ export const LOADS = Object.freeze({
   backtestPanel: ['backtest/panel/', 'sources/runs.jsonl'],
   backtestLabels: ['backtest/', 'sources/fdic/failed.json', 'sources/fdic/events.json', 'sources/fdic/sales.json', 'sources/fdic/state.json', 'sources/edgar/filers.json', 'sources/runs.jsonl'],
   backtestRun: ['backtest/'],
+  // The Calibration page (next-five E17-S5), read-only: the run log, which names every stored report. calibrationLoads() adds the one
+  // report the page shows. Never backtest/ whole: the panel is far too large for a page view, and the page needs none of it.
+  calibration: ['backtest/runs.jsonl'],
   // Recording what happened, by hand, from the web app (working without Gmail): a send a principal already made from their own mailbox
   // (recordObservedSend), or a reply, opt-out, bounce, meeting or handoff (recordEvent). The guard's files and the one account, narrowed
   // by recordLoads(). An opt-out writes suppression.json, which the guard's list holds; the touch log is only appended to.

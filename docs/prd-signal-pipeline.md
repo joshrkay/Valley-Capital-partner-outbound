@@ -712,31 +712,38 @@ Rules across the epic:
 
 ### E9. Mailbox: Gmail drafts, sends and replies
 
+**Built November 17, 2026** (`src/mailbox.mjs`, `outbound mailbox draft|sync|review`, `test/mailbox.test.mjs`, against a fake Gmail; not yet run against a real mailbox).
+- **Setup is a principal's:** an OAuth client in Google Cloud and a refresh token for the sender's own Gmail, in the environment as `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` and `GMAIL_REFRESH_TOKEN`. They are never kept in a data file. The scopes needed are Gmail's compose (drafts) and read-only ones **[verify]**; compose also allows delivery, so the limit is in code.
+- **The limit in code:** the client has six calls (profile, create draft, get draft, get thread, list messages, get message). None delivers mail, and a test fails if the source names a delivery endpoint.
+- **It runs from the command line, on a principal's machine,** not in the platform worker: the credentials belong to a person's mailbox. A worker job can follow once the credentials have a place on the platform.
+- **S4's model sees up to 500 characters of a reply** (subject and snippet, no address), so reply text does reach the model provider. Nothing is kept: only the category and the date. Opt-outs, bounces and auto-replies are decided in code and never sent to it.
+- **Opt-out wording is a pattern** (unsubscribe, remove me, stop emailing, do not contact, and similar) **[verify with real replies]**. Anything unclear is a reply and stops outreach.
+
 **E9-S1. Approve creates a Gmail draft.** *As a principal, I want an approved email to appear as a draft in my own Gmail so that I can send it with one click from my real mailbox.* P0, R2.
-- [ ] The draft holds the approved text exactly, in plain text, with the sender's signature. No tracking pixel, no tracked links. It is from the principal's mailbox on the sending domain.
-- [ ] The code calls only Gmail's draft-creation and read endpoints. Google's permission for creating drafts also allows sending **[verify scope]**, so the limit is enforced in code: a test fails if any send method is referenced.
-- [ ] The guard runs again at draft creation (caps, suppression, kill switch). If it refuses, no draft is created.
+- [x] The draft holds the approved text exactly, in plain text, with the sender's signature. No tracking pixel, no tracked links. It is from the principal's mailbox on the sending domain.
+- [x] The code calls only Gmail's draft-creation and read endpoints. Google's permission for creating drafts also allows sending **[verify scope]**, so the limit is enforced in code: a test fails if any send method is referenced.
+- [x] The guard runs again at draft creation (caps, suppression, kill switch). If it refuses, no draft is created.
 
 **E9-S2. Noticing a send.** *As a principal, I want the system to notice when I've sent a draft so that the touch log and cadence are right without me typing a command.* P0, R2.
-- [ ] A sync reads the draft's thread. When it sees the message sent, it **always** records the touch with the actual send date, using `recordObservedSend` (built).
+- [x] A sync reads the draft's thread. When it sees the message sent, it **always** records the touch with the actual send date, using `recordObservedSend` (built).
   - The pre-send `recordTouch` refuses a touch the guard rejects. For a send that has already happened, refusing to log it would leave the caps and cadence counting from a false history.
   - Any rule the send broke (a cap filled, or a suppression added after approval) is kept on the record, audited, and shown to the principal.
   - `outbound guard record` uses the same function.
-- [ ] Given the principal edited the text in Gmail before sending, then the sent text is linted, and any failure is flagged for review and noted in the audit log. Message text is not stored in the touch log.
+- [x] Given the principal edited the text in Gmail before sending, then the sent text is linted, and any failure is flagged for review and noted in the audit log. Message text is not stored in the touch log.
 
 **E9-S3. Any reply stops outreach.** *As a principal, I want any reply from anyone at a bank to stop outreach to everyone there immediately so that we never send a next step after someone has answered.* P0, R2.
-- [ ] Inbound mail is matched to accounts by thread first. Otherwise by sender domain, against the institution's **verified `domains`** list, not its name aliases. Names and DNS domains are different things.
+- [x] Inbound mail is matched to accounts by thread first. Otherwise by sender domain, against the institution's **verified `domains`** list, not its name aliases. Names and DNS domains are different things.
   - Each domain carries its source.
   - Personal domains (`config.personalDomains`) never match.
   - A domain shared by several institutions (a holding company, an affiliate, a shared service provider) goes to a principal for review rather than stopping or missing one institution.
   - Given a reply from an unknown domain on no known thread, then it is flagged for review and never silently dropped.
-- [ ] Any reply records a `reply` event, which stops outreach across the bank (existing rule).
-- [ ] An opt-out, or anything that reads like one, suppresses the person and the address at once.
-- [ ] Ambiguous mail is treated as a reply and flagged. A bounce records a `bounce` event.
-- [ ] Only a category and a date are stored. Reply text is not kept.
+- [x] Any reply records a `reply` event, which stops outreach across the bank (existing rule).
+- [x] An opt-out, or anything that reads like one, suppresses the person and the address at once.
+- [x] Ambiguous mail is treated as a reply and flagged. A bounce records a `bounce` event.
+- [x] Only a category and a date are stored. Reply text is not kept.
 
 **E9-S4. Reply sorting** (agent 6). *As a principal, I want replies sorted into interested, not now, wrong person, opt-out, bounce and out-of-office so that I answer the interested ones first.* P1, R3.
-- [ ] Haiku at low effort sorts replies. Opt-outs are handled at once regardless of how confident the sort is. It alerts a principal on "interested" and never replies with substance.
+- [x] Haiku at low effort sorts replies. Opt-outs are handled at once regardless of how confident the sort is. It alerts a principal on "interested" and never replies with substance.
 
 ---
 
@@ -975,8 +982,14 @@ Rules across the epic:
 - [x] One confirmed outcome per call date. A confirmed or rejected proposal cannot be confirmed. A confirmed call's notes are not replaced. `outbound call reject` and `outbound call list` complete the set.
 - [x] **People named in the notes are never added automatically.** They stay on the proposal and the outcome as "unconfirmed, from call notes". A principal adds one through `account set-person`, then `account confirm-role` (E7).
 - [x] Logs carry counts only. Audit lines and job results hold codes, counts and ids, never a name or note text. The outcome line holds no name either. A test checks both.
-- [ ] A principal can correct a proposal before confirming it. Today they reject it and log the notes again.
-- [ ] A meeting recorded by hand (`guard event --type meeting`) has no outcome, so the report does not count it.
+- [x] **A principal can correct a proposal before confirming it**, instead of rejecting it and logging the notes again. `outbound call edit --account ID --proposal PID --by NAME` with `--codes`, `--when`, `--referral`, `--objection` (repeatable), `--commitment "who|what|by"` (repeatable), `--follow-up` (`none` clears a field), then `call confirm`. On the web, a correction form under each pending proposal, then the same confirm button.
+  - Only the fields given change, each replaced whole: the outcome codes (with `when` and `referral`), the objections, the commitments and the follow-up date. The call date is not editable, since the notes are filed under it.
+  - The same checks as the model's proposal, refused instead of flagged, since a principal typed it: codes from the fixed list, once each; `who` from the list; real dates; no follow-up date or dated deadline before the call; a call date later than today refused. People named in the notes are not editable and never added to the account.
+  - A code, objection or commitment kept from the model keeps its quote, still looked for in the notes. One a principal adds is marked as theirs. The model's original stays on the proposal beside the correction.
+  - **The notes digest still holds:** a corrected proposal whose notes changed can be neither corrected again nor confirmed. A superseded, rejected, confirmed or unfinished proposal cannot be corrected.
+  - **Audited:** `call_proposal_edited` names who and which fields, never a value. The confirmed outcome (on the account and in `outcomes.jsonl`) carries `edited: { by, fields }`, and `call_confirmed` says `edited: true`.
+  - The web page sends how many corrections it showed; a proposal corrected since is neither corrected over nor confirmed, so no one records what they did not read. `confirmProposal` stays idempotent: a correction is refused once a confirmation has started, and a retry finishes it as corrected.
+- [x] **A meeting recorded by hand** (`guard event --type meeting`, or the account page) is counted by the outcomes report as a held call with no other outcome code, under "by hand", linked to its account's `originSignals`. A confirmed call's own meeting (`ref: call:<id>`, or a meeting on the same account and date, which confirming finds instead of logging a second) is counted once, as the call. The same account and date recorded twice is one meeting. `--since` counts only meetings on or after it; an account's first meeting, and so its lead time, still counts every meeting. Hand meetings do not count toward `minToTune`: they carry no outcome.
 
 **E15-S3. The follow-up.** *As a principal, I want what was agreed on the call turned into a follow-up so that nothing promised is forgotten.* P1, R2. **Built as a checklist. The email is deferred.**
 - [x] On confirmation, a checklist is written to `calls/<id>/<date>-followup.md` and `.json`, and shown on the account page. Its facts are only what was agreed:
@@ -994,7 +1007,7 @@ Rules across the epic:
 - [ ] **A decision for a principal.** The guard has no record type for a principal's own message after a meeting. Recorded with `guard record`, it is logged with the violation `SEQUENCE_STOPPED`. That is right for the sequence, but it reads as a broken rule. One option: a `correspondence` record that the guard logs outside the sequence, still under the kill switch, suppression and opt-out. A post-call email could then go through the drafter with the agreed facts as its only facts. Not built.
 
 **E15-S4. What led to conversations.** *As a principal, I want to see which signals led to conversations, confidentiality agreements and tapes so that the score can be tuned on outcomes, not guesses.* P1, R2. **Built.**
-- [x] `outbound outcomes report [--since D]`. Deterministic, with no model. It reads confirmed outcomes only (`outcomes.jsonl`). `--since` chooses which calls are counted. An account's first signal and first held call still come from all its confirmed calls, so the window never moves its lead time.
+- [x] `outbound outcomes report [--since D]`. Deterministic, with no model. It reads confirmed outcomes (`outcomes.jsonl`), and the meetings recorded by hand from the touch log (E15-S2). `--since` chooses which calls are counted. An account's first signal and first held call still come from all its confirmed calls, so the window never moves its lead time.
 - [x] For each group it counts the accounts, the confirmed calls, and the accounts that reached each outcome code:
   - by the signal types in `originSignals`. An account started by several types counts once under each. An account picked by hand has its own row.
   - by tier;
@@ -1006,14 +1019,14 @@ Rules across the epic:
 
 **Plumbing.**
 - [x] Migration `20261114120000_jobs_calls.sql` adds `call.prep` and `call.extract` to `jobs_kind_check`, with every earlier kind. `test/db.test.mjs` runs it on Postgres 16, and `test/postgrest-fake.mjs` knows the kinds. A test checks that the newest migration lists exactly the worker's kinds.
-- [x] Units of work (`src/uow.mjs`, `LOADS`): `callPrep`, `callNotes`, `callExtract`, `callConfirm` and `outcomes`, each narrowed to one account's folders. `callConfirm` also reads `outcomes.jsonl`, to finish an interrupted confirmation without a second line.
+- [x] Units of work (`src/uow.mjs`, `LOADS`): `callPrep`, `callNotes`, `callExtract`, `callConfirm` and `outcomes`, each narrowed to one account's folders. `callConfirm` also reads `outcomes.jsonl`, to finish an interrupted confirmation without a second line. A correction runs under `callExtract`'s list. `outcomes` also reads `touches.jsonl` and the accounts, for the meetings recorded by hand.
 - [x] **Web**, on the account page, through `web/lib/ops.mjs` and the principal's session:
   - the latest call brief, marked NOT USABLE with its reasons when a check failed;
   - a form to paste notes, which saves them as the principal and queues `call.extract`;
-  - each pending proposal, with confirm and reject;
+  - each pending proposal, with correct, confirm and reject;
   - the confirmed outcomes, and the follow-up checklist.
 - [x] `test/calls-handoff.test.mjs` proves, end to end, that the research and the paper estimate never reach the drafter, and that the follow-up carries only what was agreed.
-- [ ] The outcomes report on the web (the Status screen). The command line has it.
+- [x] **The outcomes report on the web:** a section of the Status page, rendered on the server from the same `src/outcomes.mjs` the command line uses (`web/lib/ops.mjs` `outcomesOverview`, `web/lib/outcomes-view.mjs`). Counts by signal type, tier and lead time, with "by hand" and the "too few to tune" wording below `minToTune`. Counts only: no name, note or account. It writes nothing.
 
 ### E16. Who sells to whom
 
@@ -1149,14 +1162,23 @@ Rules across the epic:
 - [x] **A deletion request reaches the network and the routes (E7-S3).** If the firm knows the forgotten person, their entry is removed the same way: their name at their institution, or their address or phone if an entry ever held one. A routes file that names them is rebuilt from the scrubbed research. Both are in `LOADS.forget`, and the `person_forgotten` line counts them.
 - [x] A test proves no network name reaches an audit line, a job, or the repository.
 
-**E22-S2. The lender side, researched with sources.** *As a principal, I want the briefer to find the bank's directors and officers, its outside counsel, the advisors it has used and the associations it belongs to, each with a source, so that routes rest on evidence.* P1, R2. **Built** (`playbooks.json`, `docs/research-agenda.md`, `src/research.mjs`). Not yet run live.
+**E22-S2. The lender side, researched with sources.** *As a principal, I want the briefer to find the bank's directors and officers, its outside counsel, the advisors it has used and the associations it belongs to, each with a source, so that routes rest on evidence.* P1, R2. **Built** (`playbooks.json`, `docs/research-agenda.md`, `src/research.mjs`, and the forum event list: `events.json`, `src/events.mjs`). Not yet run live.
 - [x] Four playbook questions, in `playbooks.json` and `docs/research-agenda.md`: `bank.board`, `bank.counsel`, `bank.advisors` and `bank.memberships`. They replace `bank.access`.
 - [x] Findings keep the existing format, with tiers and sources. Each also lists the **entities** its quote names: type (person, firm or association), name, affiliation and role. Code keeps an entity only if its name appears in the quote, and an affiliation only if it does too.
 - [x] **These four topics are context only.** A finding under them is never cleared for a message, whatever the model proposes. Who connects to a bank is for a principal choosing a way in.
 - [x] `bank.advisors` says that an FDIC loan sale's advisor works for the FDIC as receiver, not for a bank.
 - [x] Public pages only: never a members-only directory, or an attendee list that needs a login.
 - [x] `src/research.mjs` changes only as much as this needs, and every existing research test passes unchanged.
-- [ ] **The forum event list** (data-sources 2.4, build step 19): an event-list rule file of about 10–15 public event pages (name, host, URL, dates), kept by a principal; a loader that passes the pages applicable to the account to the briefer as fenced data; and a test that a configured page reaches `bank.memberships`. Not built: today the briefer's prompt receives only the account, the playbooks, the models, the date and the paper estimate.
+- [x] **The forum event list** (data-sources 2.4, build step 19). **Built** (`events.json`, `src/events.mjs`); every entry is a placeholder until a principal confirms it.
+  - **The rule file**, `events.json` at the repository root, kept by a principal: public event pages, each with its name, host, URL, dates, association (written as a network membership would be, so a forum route can match it), where it applies (national, or states and metros) and the day a principal read the site's terms (`termsCheckedOn`). It ships with 12 entries, the series in listening-sources B.5: IMN Bank Special Assets Texas and East, IMN Distressed CRE West and East, CREFC's January and June conferences, the California Bankers Association's Lending & Credit Conference, and five RMA chapters. None was fetched from here, so each is marked `[CONFIRM]`.
+  - **A placeholder is never passed on.** An entry with no terms date, or with `[CONFIRM]` anywhere in it, is checked but never reaches the briefer. So with the list as shipped, or empty, the prompt is exactly as before.
+  - **Checked on load** (`loadEvents`): an https URL with a real host name and no credentials, port or tracking parameter; real dates; metros that are in `metros.json`; one entry per id and per page. **Events only:** an unknown field is refused, so no speaker list can be pasted in. A confirmed entry needs its URL and dates.
+  - **Public pages only, in code:** a URL whose path, query or subdomain suggests an attendee list, a members-only page or directory, a login or a portal is refused (CREFC's "See Who's Attending" page among them).
+  - **The loader** (`eventsFor`) picks the confirmed events for the bank's metros, then its states, then national ones, newest first, up to `maxPerAccount` (a placeholder, 6). The bank's metros are those with a branch (the pipeline's footprint). Its states are its headquarters state, its metros' states, and any a principal writes on a hand-picked account (`states`, `metros`). A promoted account now carries its headquarters state (`pipeline.hqState`).
+  - **To the briefer, for `bank.memberships` only.** The events go into the prompt fenced as data, as the paper estimate is (`<forum_events>`), and only where the playbook asks `bank.memberships`. A finding that cites a listed page under another question is filed under `bank.memberships` (`refiledFrom` says so), so its people are forum targets and never a board or direct route. Such a page never counts as a corroboration for another question. The brief's run report names the events given.
+  - **Never the drafter.** `loadRules()` does not load the list; only `outbound research run` and the worker's research job call `loadEvents()`.
+  - **Tests** (`test/events.test.mjs`): the loader's choice and cap; the fence; refused URLs and dates; and, end to end, a configured page reaching `bank.memberships`. With no list, an empty one or placeholders, the prompt is unchanged. `test/handoff.test.mjs`: the drafter receives none of it and no drafting code loads it. `test/private-stores-handoff.test.mjs`: with a list configured, the network still never reaches the briefer's prompt.
+- [ ] **Each event confirmed by a principal:** open the page, check it is public, read the site's terms, fill in the URL and dates, set `termsCheckedOn`, and remove `[CONFIRM]` (data-sources 2.4).
 
 **E22-S3. County-record counsel: the shape and the seam.** *As a principal, I want the law firm a county foreclosure filing names for the lender recorded, so that the lender's own counsel is a route.* P1, R3. **The shape and the seam are built** (`src/routes.mjs`); the feeder is not.
 - [x] **The shape, with no adapter:** `counselEvent` in `src/routes.mjs`. County, document number and type, recording date, the lender (MERS resolved as in E16-S7), the lender's counsel (the firm and the attorneys named), the trustee, the APN, the source and link. Tier `observed`. `validateCounselEvent` checks each event.

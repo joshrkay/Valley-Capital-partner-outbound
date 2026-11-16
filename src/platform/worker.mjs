@@ -16,6 +16,7 @@ import { writeRegistry } from '../intermediaries.mjs';
 import { runScoring } from '../score.mjs';
 import { runTriage, triageLoads, triageSummary, ymd } from '../triage.mjs';
 import { runBriefer } from '../research.mjs';
+import { loadEvents } from '../events.mjs';
 import { runDrafter } from '../draft.mjs';
 import { loadContext } from '../guard.mjs';
 import { researchGate } from '../pilot.mjs';
@@ -98,11 +99,12 @@ export async function runJob({ client, job, rules, deps = {} }) {
     case 'research.run': {
       const model = deps.makeModelClient ? await deps.makeModelClient({ timeout: rules.models.research.timeoutMs }) : null;
       if (!model) throw new Error('No model client: research needs ANTHROPIC_API_KEY on the worker.');
+      const events = loadEvents();   // events.json, the forum event list (PRD E22-S2): a rule file, checked before any spend
       const { result } = await client.unitOfWork(LOADS.research, async (dir) => {
         const a = account(dir, p.account);
         const g = researchGate({ dir, account: a, config: rules.config });
         if (!g.allowed) return { ok: false, reason: 'pilot_gate', detail: g.reason };
-        return runBriefer({ client: model, dir, account: a, models: rules.models, playbooks: rules.playbooks, now: deps.now?.() ?? new Date() });
+        return runBriefer({ client: model, dir, account: a, models: rules.models, playbooks: rules.playbooks, events, now: deps.now?.() ?? new Date() });
       }, { retries: 0 });
       return { ok: !!result.ok, summary: { mode: result.mode, findings: result.findings, draftReady: result.draftReady, dropped: result.dropped, risk: result.risk, person: result.person, costUsd: result.costUsd, reason: result.reason } };
     }

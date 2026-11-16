@@ -9,7 +9,8 @@ import { rules, ID, NOTES, PROPOSAL_REPLY, GOOD_BRIEF, PAPER, CARD, PIPELINE, FI
 import { readJson } from '../src/store.mjs';
 import { loadContext } from '../src/guard.mjs';
 import { buildDraftPrompt, runDrafter, approveDraft } from '../src/draft.mjs';
-import { runCallPrep, saveNotes, runCallExtract, confirmProposal } from '../src/calls.mjs';
+import { runCallPrep, saveNotes, runCallExtract, confirmProposal, editProposal } from '../src/calls.mjs';
+import { LOADS } from '../src/uow.mjs';
 
 const DATE = '2026-11-17';
 const NOW = new Date('2026-11-14T15:00:00Z');     // the brief, before the call
@@ -54,6 +55,21 @@ test('after the call is confirmed, the account carries the outcome, and the draf
   assert.equal(acct(dir).outcomes.length, 1);
   const input = drafterInput(dir);
   for (const leak of [...PAPER_LEAKS, ...RESEARCH_LEAKS, ...PIPELINE_LEAKS, ...CALL_LEAKS, 'outcome', 'commitment', 'confidentiality agreement by']) assert.ok(!input.includes(leak), `drafter input leaked "${leak}"`);
+});
+
+test('a proposal a principal corrected, then confirmed, reaches the drafter in no form', async () => {
+  const { dir, ex } = await throughTheCall();
+  editProposal({ dir, id: ID, proposalId: ex.proposalId, by: 'Sam Example', now: AFTER, edits: {
+    outcomes: [{ code: 'held' }, { code: 'wrong_person', referral: 'Morgan Example in special assets' }],
+    objections: ['They distrust zebra-striped buyers.'],
+    commitments: [{ who: 'us', what: 'Mail the quokka memo', by: '2026-11-25' }],
+    followUpDate: '2026-12-09',
+  } });
+  confirmProposal({ dir, id: ID, proposalId: ex.proposalId, by: 'Pat Example', rules, now: AFTER });
+  assert.deepEqual(acct(dir).outcomes[0].edited.by, ['Sam Example']);
+  const input = drafterInput(dir);
+  for (const leak of [...PAPER_LEAKS, ...RESEARCH_LEAKS, ...PIPELINE_LEAKS, ...CALL_LEAKS, 'Morgan Example', 'zebra-striped', 'quokka', '2026-12-09', '2026-11-25', 'wrong_person', 'Sam Example']) assert.ok(!input.includes(leak), `drafter input leaked "${leak}"`);
+  for (const p of [`calls/${ID}/proposals/${ex.proposalId}.json`, 'outcomes.jsonl']) assert.ok(!LOADS.draft.some((x) => x === '' || p.startsWith(x)), `LOADS.draft covers ${p}`);
 });
 
 test('the follow-up carries only what was agreed: the commitments, the follow-up date, the matching approved claim and the tape request', async () => {

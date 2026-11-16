@@ -4,6 +4,7 @@ import { coverageCard } from '../../lib/coverage-view.mjs';
 import { when, period } from '../../lib/format.mjs';
 import { NotAuthorized, Problem } from '../ui.jsx';
 import { queueSourcesAction, queueScoreAction, queueEdgarAction } from './actions.js';
+import { Outcomes } from './outcomes.jsx';
 
 export const metadata = { title: 'Status · Valley Capital outbound' };
 
@@ -23,6 +24,7 @@ export default async function Status() {
   return (
     <>
       <h1>Status</h1>
+      <p className="sub">Whether the score ranks banks under pressure well: the latest backtest is on the <a href="/calibration">Calibration</a> page.</p>
       <div className={`banner ${killed ? 'error' : 'ok'}`}>{killed ? `Kill switch ON (${[s.kill.config ? 'config.json' : null, s.kill.document ? 'KILL document' : null].filter(Boolean).join(' and ')}): no draft is created and no mailbox is touched.` : 'Kill switch off.'}</div>
       <div className="panel row">
         <form action={queueSourcesAction} className="inline"><button type="submit">Queue FDIC pull</button></form>
@@ -84,6 +86,7 @@ export default async function Status() {
           ))}</tbody>
         </table></div>
       )}
+      <Outcomes client={ctx.client} />
     </>
   );
 }

@@ -13,7 +13,7 @@ The agents in `docs/outbound-plan.md` that exist so far:
 
 **The goal** (PRD section 0): purposeful outreach to the right person at the right time, backed by research into what paper the institution holds, what those loans look like, and where the firm has an advantage. **Nothing in this folder can send a message.** A principal sends; the guard then records it.
 
-Start with `docs/prd-signal-pipeline.md` for the pipeline, and `docs/research-agenda.md` for the briefer. The next epics (E17 to E21: a backtest of the score, enforcement orders and merger applications, intermediaries, a market note, and credit unions and non-bank lenders) are in `docs/prd-next-five.md`. Of those, the backtest (E17-S1 to S4, from the command line) and the coverage report (E18-S1, `outbound coverage` and the Status page) are built; the backtest's web page (E17-S5) and the rest are not. The briefer's questions (`playbooks.json`) are that agenda turned into data.
+Start with `docs/prd-signal-pipeline.md` for the pipeline, and `docs/research-agenda.md` for the briefer. The next epics (E17 to E21: a backtest of the score, enforcement orders and merger applications, intermediaries, a market note, and credit unions and non-bank lenders) are in `docs/prd-next-five.md`. Of those, the backtest (E17-S1 to S4, from the command line) and the coverage report (E18-S1, `outbound coverage` and the Status page) are built, and so is the backtest's read-only web page (E17-S5, `/calibration`); the rest are not. The briefer's questions (`playbooks.json`) are that agenda turned into data.
 
 ## Status: read this first
 
@@ -175,14 +175,15 @@ When the person who decides on loan sales agrees to talk:
 ```bash
 npm run outbound -- call prep --account acme-bank --date 2026-11-17     # a one-page call brief, checked in code
 npm run outbound -- call log --account acme-bank --date 2026-11-17 --by "Pat Example" --notes notes.txt   # or --notes - for stdin
+npm run outbound -- call edit --account acme-bank --proposal <PID> --by "Pat Example" --codes held,nda_requested --follow-up 2026-12-01   # optional: correct it first
 npm run outbound -- call confirm --account acme-bank --proposal <PID> --by "Pat Example"
 npm run outbound -- outcomes report                                     # which signals led to conversations
 ```
 
 - **The brief** (`calls/<id>/<date>-prep.md`) is written by one model call from fixed inputs, each with an id: the account, the research, the signals and card, the paper estimate if there is one, the touch history, the approved claims and the playbook. Code checks that every cited id exists, every number is in the inputs, every claim is approved and quoted word for word, and no estimate is stated as a fact. A brief that fails says **NOT USABLE** first. An unconfirmed role is a warning at the top.
-- **The notes** stay in `calls/<id>/`, for principals only. A model turns them into a proposal: outcome codes from a fixed list, objections, commitments, a follow-up date, and the people mentioned. **Nothing is recorded until a principal confirms it.** Confirming records a guard `meeting` event (which ends the sequence), a line in `outcomes.jsonl` linked to the account's origin signals, and the outcome on the account. People named in the notes are never added; a principal uses `account set-person`.
+- **The notes** stay in `calls/<id>/`, for principals only. A model turns them into a proposal: outcome codes from a fixed list, objections, commitments, a follow-up date, and the people mentioned. **Nothing is recorded until a principal confirms it.** Confirming records a guard `meeting` event (which ends the sequence), a line in `outcomes.jsonl` linked to the account's origin signals, and the outcome on the account. People named in the notes are never added; a principal uses `account set-person`. Before confirming, a principal may correct the codes, objections, commitments and follow-up date (`call edit`, or the form on the account page), with the same checks; the audit and the outcome name who corrected which fields, never the values.
 - **The follow-up** is a checklist of what was agreed (`calls/<id>/<date>-followup.md`). No email is drafted: after a meeting the guard refuses every touch, and the drafter only writes from the briefer's facts. PRD E15-S3 says why.
-- **The report** (`reports/outcomes-<date>.json`) counts confirmed outcomes by signal type, tier and lead time. It uses no model and never changes the weights.
+- **The report** (`reports/outcomes-<date>.json`, and a section of the web app's Status page) counts confirmed outcomes by signal type, tier and lead time. A meeting recorded by hand (`guard event --type meeting`) counts as a held call with no other outcome, never twice. It uses no model and never changes the weights.
 
 On the platform, the account page does the same: queue a brief, paste notes, confirm or reject.
 
@@ -205,6 +206,17 @@ npm run outbound -- account contact --account acme-bank     # each field and its
 - **Vendors** are tested before anyone pays (E7-S2). Write `contacts/known.json` in the data folder (people we know: name, institution, email, title, asOf). Then run `contacts vendor-test --vendor NAME --results export.csv`, and `contacts vendor-pass --vendor NAME --by NAME`, which records a pass only if the latest test meets the thresholds in `contacts.json` (placeholders). Without a pass, a vendor cannot be a source.
 
 On the platform, the account page's contact section does the same. The deletion needs the account's name typed, and migration `20261114200000_log_redaction.sql` lets it reach the touch log.
+
+### The mailbox: Gmail drafts, noticed sends, replies (PRD E9)
+With `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` and `GMAIL_REFRESH_TOKEN` set (an OAuth client and a refresh token for the sender's own Gmail; never kept in a data file):
+```bash
+outbound mailbox draft --account ID --step N --by "Pat Example"
+outbound mailbox sync [--days 14] [--sort]
+outbound mailbox review
+```
+- **`draft`** puts an approved email in the sender's own Gmail as a plain-text draft, with the guard run again first. **Nothing here delivers mail**: the Gmail client has six calls and none of them sends, and a test fails if the source names a delivery endpoint. A person presses the button.
+- **`sync`** notices a draft that was sent and records the touch with its real date (an edit is checked for banned words and flagged), then reads the inbox: any reply stops outreach at that bank, found by thread first and then by a confirmed domain; a bounce is a bounce; an opt-out suppresses the address at once. `--sort` asks a model (Haiku) to sort replies into interested, not now, wrong person and out of office. Only a category and a date are kept, never message text.
+- **`review`** lists mail that matched no account (shared, personal or unknown domain): the message id, the date, the reason and the sender's domain.
 
 ### Working without Gmail (PRD E8-S5)
 
@@ -417,6 +429,7 @@ npm run outbound -- backtest report                      # the latest report's s
   - Every report states its known limits.
 - **It never writes `scoring.json`.** A PR that changes weights adds a `_calibration` note, `{ report, evaluation, by, on }`, naming a holdout report's 16-character hash. A test checks its form.
 - It runs from the command line only, with no worker job kind. The full panel is about 45 to 50 MB; the PRD (E17) has the estimate and the platform follow-up.
+- **The Calibration page** (`/calibration` in the web app, E17-S5) shows the stored reports, read-only. It loads the run log and the one report it shows, never the panel. A report reaches it through `outbound platform push`.
 
 ### Checking the scrapers
 
@@ -532,10 +545,11 @@ It stores no message text, and writes an audit line for every decision.
 | `scoring.json` | Score components (distress, fit, timing), signal rules, tier cuts and the CMBS maturity window; every number a placeholder |
 | `triage.json` | The weekly triage: the window, what counts as act now and watch, the calendar settings and staleness limits; every value a placeholder |
 | `routes.json` | Routes to the decision-maker: which playbook topics feed which route, the route order, tiers, matching, consent and currency; every value a placeholder |
+| `events.json` | The forum event list (PRD E22-S2): public conference and association event pages the briefer reads for `bank.memberships`, chosen by the bank's metros and states; never attendee lists, member pages or logins. Every entry is a `[CONFIRM]` placeholder until a principal checks the page and its terms (docs/data-sources.md 2.4) |
 | `supabase/migrations/` | The platform's tables, access rules and functions. Structure only, no data |
 | `web/` | The principals' web app (Next.js) |
 | `.github/workflows/` | The platform worker's schedule (off until enabled) |
-| `src/` | `guard`, `research`, `draft`, `lint`, `model` (the only file that calls the Anthropic API), `rules`, `store`, `paths`, plus the pipeline: `sources/` (`http`, `runlog`, `fdic`, `edgar`, `fdicsales`, `filings`, `enforcement`, `fdicorders`, `occorders`, `mergerapps`), `metrics`, `score`, `paper` (the paper estimate), `candidates`, `triage`, `sales`, `pilot`, call prep and outcomes: `calls`, `outcomes`, routes to the decision-maker: `network`, `routes`, the backtest: `backtest/` (`panel`, `labels`, `run`), and the platform: `uow`, `platform/` (`client`, `worker`, `move`) |
+| `src/` | `guard`, `research`, `draft`, `lint`, `model` (the only file that calls the Anthropic API), `rules`, `store`, `paths`, plus the pipeline: `sources/` (`http`, `runlog`, `fdic`, `edgar`, `fdicsales`, `filings`, `enforcement`, `fdicorders`, `occorders`, `mergerapps`), `metrics`, `score`, `paper` (the paper estimate), `candidates`, `triage`, `sales`, `pilot`, call prep and outcomes: `calls`, `outcomes`, routes to the decision-maker: `network`, `routes`, `events` (the forum event list), the backtest: `backtest/` (`panel`, `labels`, `run`), and the platform: `uow`, `platform/` (`client`, `worker`, `move`) |
 | `scripts/sync-site.mjs` | Refreshes `site-snapshot/` from the website repository (see below) |
 | `site-snapshot/` | A copy of the 7 website files the rules depend on, a list of the site's pages, and a record of the commit it came from. Committed. Refresh it; do not edit it. |
 | `docs/` | The plan, the research agenda, and the PRD for the signal pipeline |

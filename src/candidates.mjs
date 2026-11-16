@@ -266,8 +266,10 @@ export function promote({ dir, key, by, suppression = [], now = new Date() }) {
     id, name: it.name, aliases: loadAliases(dir)[key] ?? [], type: 'bank', audience: 'bank',
     sectors: lead.leadSector ? [lead.leadSector] : (lead.leadSectorOptions.length ? lead.leadSectorOptions : it.sectors ?? []), tier: it.tier,
     institutionKey: key, originSignals: it.signals.map((s) => s.id),
+    // hqState: the bank's headquarters state, so the forum event list (src/events.mjs) finds its state's events even with no branch in
+    // the six metros (PRD E22-S2).
     pipeline: {
-      key, period: it.latestRepdte, tier: it.tier, score: it.score, axes: it.axes, profile: it.profile, signals: it.signals,
+      key, period: it.latestRepdte, tier: it.tier, score: it.score, axes: it.axes, profile: it.profile, signals: it.signals, hqState: it.state || null,
       leadSector: lead.leadSector, leadSectorOptions: lead.leadSectorOptions, leadSectorBasis: lead.basis, leadSectorNote: lead.note, runId: latest.runId,
     },
     person: { name: '', title: '', email: '', phone: '', phoneType: '', timezone: '', mailingAddress: '' },
