@@ -106,6 +106,13 @@ export function recordLoads(id) {
   return LOADS.record.map((p) => (p === 'accounts/' ? `accounts/${id}.json` : p));
 }
 
+// The Calibration page's load list with the one stored report it shows. The hash is checked before it becomes part of a path; its form
+// is the backtest's REPORT_HASH (src/backtest/run.mjs).
+export function calibrationLoads(hash) {
+  if (!/^[0-9a-f]{16}$/.test(String(hash ?? ''))) throw new Error(`"${hash}" is not a report hash (16 hexadecimal characters).`);
+  return [...LOADS.calibration, `backtest/report-${hash}.json`];
+}
+
 // The call desk's load list, narrowed to one account and its own drafts folder.
 export function callDeskLoads(id) {
   safeId(id);
