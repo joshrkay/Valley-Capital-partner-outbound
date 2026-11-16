@@ -44,7 +44,7 @@ export function buildRegulatory({ dir, institutions, asOf, activeWithinDays = 36
     for (const s of list) {
       const a = apps[s.evidence[0]];
       ensure(k).mergers.push({
-        id: s.evidence[0], kind: KINDS[s.applicationKind] ?? s.applicationKind, role: s.role === 'acquirer' ? 'acquirer' : 'bank acquired', filedWeekEnding: s.date,
+        id: s.evidence[0], kind: KINDS[s.applicationKind] ?? s.applicationKind, role: s.role === 'acquirer' ? 'acquirer' : s.applicationKind === '3A1' ? 'bank the new holding company would hold' : 'bank acquired', filedWeekEnding: s.date,
         commentPeriodEnds: s.commentEnds ?? null, approvedOn: s.approvedOn ?? null, otherParties: (a?.parties ?? []).filter((p) => p.role !== s.role).map((p) => `${p.name}${p.state ? `, ${p.state}` : ''}`), link: s.link,
       });
     }

@@ -301,7 +301,7 @@ export function mergerSignals({ dir, institutions, aliases } = {}) {
       (out[key] ??= []).push({
         id: `merger:${a.key}:${p.role}`, kind: 'event', type: 'merger_pending', source: 'mergerapps', key, role: p.role, applicationKind: a.kind,
         date: a.filedWeek, period: a.filedWeek, approvedOn: a.approvedOn ?? null, commentEnds: a.commentEnds ?? null, link: a.link, evidence: [a.key], firstSeenAt: a.firstSeenAt ?? null,
-        label: `${a.kind === '3A1' ? `An application for the ${what}` : `A pending ${what}`}, with this bank as the ${p.role === 'acquirer' ? (a.kind === '3A1' ? 'holding company or its bank' : 'acquirer') : 'bank acquired'}: filed with the Federal Reserve in the week ending ${a.filedWeek}${a.approvedOn ? `, approved ${a.approvedOn}` : ', not yet approved'}`,
+        label: `${a.kind === '3A1' ? `An application for the ${what}` : `A pending ${what}`}, with this bank as the ${p.role === 'acquirer' ? (a.kind === '3A1' ? 'holding company or its bank' : 'acquirer') : (a.kind === '3A1' ? 'bank the new holding company would hold' : 'bank acquired')}: filed with the Federal Reserve in the week ending ${a.filedWeek}${a.approvedOn ? `, approved ${a.approvedOn}` : ', not yet approved'}`,
       });
     }
   }

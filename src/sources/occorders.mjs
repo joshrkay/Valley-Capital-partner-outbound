@@ -84,7 +84,8 @@ export function parseRelease(rel, { path } = {}) {
     const own = dockets.at(-1);
     if (section === 'terminations' || /^Order Terminating/i.test(m[1])) {
       const ended = /^Order Terminating (?:the )?(.+)$/i.exec(m[1])?.[1] ?? m[1];
-      const t = occType(ended);
+      // "Order Terminating the Amended Consent Order": what ends is the consent order, not a modification.
+      const t = occType(ended.replace(/\b(?:amended|amendment to(?: the)?)\s+/i, ''));
       const ends = dockets.length > 1 ? dockets[0] : null;
       out.orders.push({ key: `occ:${own}:termination`, regulator: 'occ', sourceId: own, type: 'termination', types: ['termination'], terminates: ends ? `occ:${ends}` : null, terminatesType: t.type,
         terminatesDated: parseDate(line), date: rel.released, dateBasis: 'release', terminatedOn: null, parties: [party], link: pdf(own) ?? (path ? new URL(path, OCC_WWW).toString() : null), linkKind: pdf(own) ? 'order' : 'release', kind: 'termination', month: rel.month });

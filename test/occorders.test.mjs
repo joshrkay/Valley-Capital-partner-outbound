@@ -70,6 +70,8 @@ test('a release: the month, the date, and its bank actions and terminations; ind
   assert.deepEqual(t.orders.map((o) => [o.key, o.terminates, o.terminatesType, o.terminatesDated, o.parties[0].name]), [['occ:AA-WE-2026-2:termination', 'occ:AA-WE-2025-10', 'written_agreement', '2025-01-10', 'Example Coast Bank, National Association']]);
   assert.equal(t.skippedIndividual, 1);
   assert.equal(readRelease(R2026_1).enforcement, false);
+  const amended = parseRelease(readRelease(page('OCC Announces Enforcement Actions for May 2026', 'May 21, 2026', `${TERM_INTRO}<p>Order Terminating the Amended Consent Order against Example Desert Bank, Mesa Example, Arizona, dated May 1, 2023 (Docket No. AA-ENF-2023-1). (Docket No. AA-ENF-2026-80)</p>`)), { path: 'x' });
+  assert.equal(amended.orders[0].terminatesType, 'consent_order', 'an amended order ends as its own type');
   assert.deepEqual(validateOccConfig(rules.config.enforcement.occ), []);
 });
 

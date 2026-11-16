@@ -527,7 +527,7 @@ async function main() {
   }
 
   if (cmd === 'enforcement') {   // enforcement orders (PRD next-five E18-S2): for the principals; never in a message
-    const line = (o) => `${o.date}  ${o.kind === 'termination' ? `termination of ${o.terminates} (${ORDER_TYPES[o.terminatesType] ?? ''})` : `${ORDER_TYPES[o.type] ?? o.type}${o.terminatedOn ? `, terminated ${o.terminatedOn}` : ', no termination recorded'}`}  [${o.key}]${o.flags?.found?.length ? `  phrases: ${o.flags.found.join(', ')}` : ''}\n    ${o.link ?? '(no document link)'}`;
+    const line = (o) => `${o.date}  ${o.kind === 'termination' ? `termination of ${o.terminates ?? 'an earlier order not stored'} (${ORDER_TYPES[o.terminatesType] ?? ORDER_TYPES.other})` : `${ORDER_TYPES[o.type] ?? o.type}${o.terminatedOn ? `, terminated ${o.terminatedOn}` : ', no termination recorded'}`}  [${o.key}]${o.flags?.found?.length ? `  phrases: ${o.flags.found.join(', ')}` : ''}\n    ${o.link ?? '(no document link)'}`;
     if (sub === 'list') {
       if (flags.key) { const key = need(flags, 'key'); const l = ordersFor({ dir, key }); return out(`${key}: ${l.length} order record(s).\n\n${l.map(line).join('\n')}`); }
       const latest = readJson(join(dir, 'candidates', 'latest.json'), null);

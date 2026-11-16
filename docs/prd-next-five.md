@@ -179,6 +179,12 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
      - **Not stored:** the reason text, and phrase flags. The order PDFs' fonts are not single-byte, so the repository's PDF reader cannot read them.
      - **Dates:** a new action is dated by its release, since the release gives no date per action. A termination closes the stored order it names.
      - **The API key (D-E2) is no longer needed for this source.** The API would add exact order dates.
+     - **First live run (November 16, 2026; 2025 and 2026):**
+       - 311 releases read, 34 of them monthly enforcement releases.
+       - 49 actions against banks and 56 terminations stored; 25 of the terminations closed an order stored here.
+       - 112 actions against individuals skipped; 3 entries could not be read and are noted in the run log.
+       - The source check passed.
+       - With the Federal Reserve's orders and the merger applications, scoring then gave 11 banks in the list an enforcement or merger signal and wrote 22 regulatory records (E18-S4).
 - [x] **A spike first** for the Federal Reserve, written at the top of the adapter: `robots.txt` (404, so nothing is disallowed) and the terms page, read November 16, 2026; the fields an action carries; no FDIC cert or RSSD ID, only "Name, City, State", often the holding company's; a termination is published as the original action's termination date (`tdt`, with 1950-01-01 for none), not as its own record. The terms say Board information is public domain unless marked otherwise **[verify: a principal reads them before the first scheduled run]**.
 - [x] **One record per order:** regulator, type codes (consent order, cease and desist, formal written agreement, prompt corrective action directive, civil money penalty against the bank, a modification, other), the effective date, the parties (organization, city, state), a link, and the termination date. A **termination** is its own record (`<key>:termination`), dated, with the type of the order it ends and `terminates`, the key of that order. Its link is the order's: the Fed's files carry no link to the termination's own release. Stored in `sources/enforcement/orders.json`. Orders against every organization nationwide are kept, so an alias added later takes effect without another pull. Matching happens when the orders are read, never at write time.
   - Some old records give "DNE" as the link: no document is published. The order is kept with `link: null`.
