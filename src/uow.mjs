@@ -19,6 +19,10 @@ export const LOADS = Object.freeze({
   // regulatory/: the bank's orders and open merger applications (next-five E18-S4), as data for the briefer. Never in the drafter's list.
   research: ['accounts/', 'research/', 'facts/', 'briefs/', 'pilot/', 'paper/', 'regulatory/'],
   draft: [...GUARD, 'accounts/', 'research/', 'facts/', 'drafts/'],
+  // Approving a draft (a person, not a model): the drafter's list plus regulatory/, so the guard can refuse a touch to a bank under an
+  // order in force that no principal has confirmed (next-five D-E3). Confirming an order reads the account and its regulatory record.
+  approve: [...GUARD, 'accounts/', 'research/', 'facts/', 'drafts/', 'regulatory/'],
+  orderConfirm: ['accounts/', 'regulatory/'],
   sources: ['sources/'],
   score: ['sources/', 'candidates/', 'paper/', 'sales/', 'regulatory/'],
   // Call prep and outcomes (PRD E15, src/calls.mjs). calls/, drafts/ and research/ are narrowed to one account by callLoads().

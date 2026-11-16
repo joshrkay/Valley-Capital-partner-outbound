@@ -172,3 +172,28 @@ test('no drafting, research or call action loads the applications; the job\'s lo
   assert.match(out, /2 application\(s\) open and naming a bank in the list/);
   assert.match(out, /in the list: fdic:1001 \(target\)/);
 });
+
+// Decided 2026-11-16 (next-five Q5): accept the gap, and count it. Invented applications and events only.
+test('THE GAP: mergers that closed from leadDays after the first H.2 week, split by whether an application named them first', async () => {
+  const { mergerGap } = await import('../src/sources/mergerapps.mjs');
+  assert.equal(mergerGap({ dir: makeDir() }).ran, false, 'no applications yet');
+  const dir = makeDir();
+  put(dir, 'sources/mergers/applications.json', {
+    'h2:a': { key: 'h2:a', filedWeek: '2025-06-07', closedBy: 'fdic-event:1', parties: [] },
+    'h2:b': { key: 'h2:b', filedWeek: '2025-09-06', closedBy: null, parties: [] },
+  });
+  assert.equal(mergerGap({ dir }).ran, false, 'no FDIC events yet');
+  put(dir, 'sources/fdic/events.json', {
+    1: { transnum: '1', kind: 'merger', effective: '2026-02-01', targetCert: '11', acquirerCert: '12' },          // closed an application
+    2: { transnum: '2', kind: 'merger', effective: '2026-03-01', targetCert: '21', acquirerCert: '22' },          // seen only at close
+    3: { transnum: '3', kind: 'assisted-merger', effective: '2026-04-01', targetCert: '31', acquirerCert: '32' }, // seen only at close
+    4: { transnum: '4', kind: 'merger', effective: '2025-07-01', targetCert: '41', acquirerCert: '42' },          // before the lead: not counted
+    5: { transnum: '5', kind: 'failure', effective: '2026-05-01', targetCert: '51', acquirerCert: '52' },         // not a merger
+    6: { transnum: '6', kind: 'affiliate-reorganization', effective: '2026-05-02', targetCert: '61' },            // not a merger
+  });
+  const g = mergerGap({ dir, leadDays: 180 });
+  assert.deepEqual([g.firstWeek, g.since, g.closes, g.seenAsApplication, g.notSeen, g.share], ['2025-06-07', '2025-12-04', 3, 1, 2, 0.667]);
+  assert.deepEqual(g.rows.map((r) => r.transnum), ['2', '3']);
+  const out = execFileSync('node', [join(REPO, 'cli.mjs'), 'mergers', 'gap'], { env: { ...process.env, OUTBOUND_DATA_DIR: dir }, encoding: 'utf8' });
+  assert.match(out, /Seen only at their close: 2 \(66\.7%\)/);
+});

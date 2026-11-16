@@ -196,10 +196,35 @@ export function validateMergerConfig(c) {
   if (!c || typeof c !== 'object') return ['config.mergers is missing'];
   const posInt = (v, k, max) => { if (!Number.isInteger(v) || v < 0 || v > max) errors.push(`mergers.${k} must be a whole number from 0 to ${max}`); };
   posInt(c.minIntervalMs, 'minIntervalMs', 600000); posInt(c.backfillWeeks, 'backfillWeeks', 260); posInt(c.maxWeeksPerRun, 'maxWeeksPerRun', 520); posInt(c.minRowsPerWeek, 'minRowsPerWeek', 100);
+  if (c.gapLeadDays !== undefined) posInt(c.gapLeadDays, 'gapLeadDays', 1095);
   if (!Array.isArray(c.districts) || !c.districts.length || c.districts.some((d) => !DISTRICTS.includes(d))) errors.push(`mergers.districts: one or more of ${DISTRICTS.join(', ')}`);
   return errors;
 }
 const placeholder = (v) => !String(v ?? '').trim() || /\[confirm/i.test(String(v));
+
+// ---- The gap: mergers seen only at their close (decided 2026-11-16, Q5) -----------------------------------------------------------
+// A merger the FDIC or the OCC decides alone, with no holding-company application, is not on the H.2: it surfaces only when it closes,
+// in FDIC's /history (E3-S6). This counts, among the mergers stored in sources/fdic/events.json, how many closed an H.2 application
+// (closedBy) and how many no application ever named. Only closes from leadDays after the first week read count, since an application
+// is filed months before its close. Deterministic, from stored data. If the gap is large, a principal decides whether to build the OCC
+// applications reader (Q5 option b).
+export const GAP_KINDS = Object.freeze(['merger', 'assisted-merger']);
+export function mergerGap({ dir, leadDays = 180 } = {}) {
+  const apps = Object.values(readJson(mergerPaths(dir).applications, {}));
+  const weeks = apps.map((a) => a.filedWeek).filter((w) => DATE.test(String(w))).sort();
+  if (!weeks.length) return { ran: false, note: 'No merger applications stored yet. Run: outbound sources run mergerapps' };
+  const events = Object.values(readJson(fdicPaths(dir).events, {}));
+  if (!events.length) return { ran: false, note: 'No FDIC structure events stored yet. Run: outbound sources run fdic' };
+  const since = addDays(weeks[0], leadDays);
+  const closedBy = new Set(apps.map((a) => a.closedBy).filter(Boolean).map((c) => String(c).replace(/^fdic-event:/, '')));
+  const closes = events.filter((e) => GAP_KINDS.includes(e?.kind) && e.effective && e.effective >= since).sort((a, b) => (a.effective < b.effective ? -1 : 1));
+  const notSeen = closes.filter((e) => !closedBy.has(String(e.transnum)));
+  return {
+    ran: true, firstWeek: weeks[0], since, leadDays, closes: closes.length, seenAsApplication: closes.length - notSeen.length, notSeen: notSeen.length,
+    share: closes.length ? Math.round((notSeen.length / closes.length) * 1000) / 1000 : null,
+    rows: notSeen.map((e) => ({ transnum: String(e.transnum), effective: e.effective, kind: e.kind, targetCert: e.targetCert ?? null, acquirerCert: e.acquirerCert ?? null })),
+  };
+}
 
 // ---- The run -------------------------------------------------------------------------------------------------------------------
 // The index; each week not read before, oldest first, back to backfillWeeks (at most maxWeeksPerRun): its district pages, then its

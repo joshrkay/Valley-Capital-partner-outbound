@@ -279,3 +279,45 @@ test('the drafter is told the audience\'s own words and what never to ask', () =
   assert.match(system, /Never ask what the recipient has for sale/);
   assert.match(system, /never use a term to suggest experience the firm has not claimed/);
 });
+
+// ---- Decided 2026-11-16 (next-five D-E3, Q7, Q8): an order in force must be confirmed, once per order, before a touch is approved ----
+test('ORDER IN FORCE: approval is refused until a principal confirms seeing each order in force, once; ended orders and pending mergers need none', async () => {
+  const { writeRegulatory } = await import('../src/regulatory.mjs');
+  const { confirmOrder } = await import('../src/accounts.mjs');
+  const { LOADS, withUnitOfWork, snapshotFromDir } = await import('../src/uow.mjs');
+  const s = setup();
+  await run(s, fakeClient([textReply(GOOD)]));
+  const acct = { ...A, institutionKey: 'fdic:999' };
+  put(s.dir, 'accounts/acme-bank.json', acct);
+  const order = (id, inForce, over = {}) => ({ id, regulator: 'Federal Reserve', kind: 'order', type: 'a cease-and-desist order', date: '2026-03-17', dateBasis: 'order', terminatedOn: inForce ? null : '2026-06-01', inForce, phrasesInTheOrder: [], link: `https://example.test/${id}`, ...over });
+  const record = (orders) => ({ 'fdic:999': { key: 'fdic:999', asOf: '2026-11-16', orders, mergers: [{ id: 'h2:abc', kind: 'merger', role: 'bank acquired', filedWeekEnding: '2026-10-31', link: 'https://example.test/h2' }] } });
+  writeRegulatory({ dir: s.dir, records: record([order('frb:1', true), order('occ:2', false, { regulator: 'OCC' })]) });
+  const args = { dir: s.dir, channel: 'email', step: 2, ctx: s.ctx, rules, by: 'Pat Example', now: new Date('2026-11-16T13:00:00Z') };
+  const codes = (r) => r.errors.filter((e) => e.code === 'ORDER_NOT_CONFIRMED');
+
+  const refused = approveDraft({ ...args, account: acct });
+  assert.equal(refused.ok, false);
+  assert.equal(codes(refused).length, 1, 'one order in force; the ended one and the pending merger need no confirmation');
+  assert.match(codes(refused)[0].message, /\[frb:1\].*outbound account confirm-order --account acme-bank --order frb:1/);
+  assert.equal(readJson(join(s.dir, 'drafts', 'acme-bank', '2-email.json')).status, 'draft', 'a refusal changes nothing');
+
+  assert.throws(() => confirmOrder({ dir: s.dir, id: 'acme-bank', order: 'occ:2', by: 'Pat Example' }), /not an order in force/);
+  assert.throws(() => confirmOrder({ dir: s.dir, id: 'acme-bank', order: 'frb:1', by: ' ' }), /--by/);
+  const c = confirmOrder({ dir: s.dir, id: 'acme-bank', order: 'frb:1', by: 'Pat Example', now: new Date('2026-11-16T12:30:00Z') });
+  assert.equal(c.already, false);
+  assert.deepEqual(readJson(join(s.dir, 'accounts', 'acme-bank.json')).orderConfirmations, [{ order: 'frb:1', by: 'Pat Example', at: '2026-11-16T12:30:00.000Z' }]);
+  assert.equal(confirmOrder({ dir: s.dir, id: 'acme-bank', order: 'frb:1', by: 'Someone Else' }).already, true, 'once per order');
+  assert.ok(readJsonl(join(s.dir, 'audit.jsonl')).some((l) => l.type === 'order_confirmed' && l.order === 'frb:1'));
+
+  const confirmed = readJson(join(s.dir, 'accounts', 'acme-bank.json'));
+  // Approval runs with LOADS.approve (the drafter's list plus regulatory/), as the web app does; the drafter's own list never holds it.
+  assert.ok(LOADS.approve.includes('regulatory/') && !LOADS.draft.includes('regulatory/'));
+  const { result: ok } = await withUnitOfWork({ load: async () => snapshotFromDir(s.dir), flush: async () => {} }, LOADS.approve, async (root) =>
+    approveDraft({ ...args, dir: root, account: confirmed, ctx: loadContext({ dir: root, config: rules.config, env: {} }) }));
+  assert.equal(ok.ok, true, JSON.stringify(ok.errors));
+
+  // A new order needs a new confirmation; the one already confirmed does not.
+  writeRegulatory({ dir: s.dir, records: record([order('frb:1', true), order('frb:3', true, { date: '2026-10-01' })]) });
+  const again = approveDraft({ ...args, account: confirmed });
+  assert.deepEqual(codes(again).map((e) => e.message.match(/\[([^\]]+)\]/)[1]), ['frb:3']);
+});

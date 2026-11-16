@@ -27,7 +27,7 @@ import { runDrafter, approveDraft } from './src/draft.mjs';
 import { makeClient } from './src/model.mjs';
 import { writeTruthTemplate, reviewList, markFinding, scorecard, passPilot, researchGate } from './src/pilot.mjs';
 import { platformClient } from './src/platform/client.mjs';
-import { setPerson, confirmRole, setEmail, setPhone, setAddress, addDomain, verifyEmail, contactStatus, sourceLabel, FIELDS, ATTEST_METHODS } from './src/accounts.mjs';
+import { setPerson, confirmRole, confirmOrder, setEmail, setPhone, setAddress, addDomain, verifyEmail, contactStatus, sourceLabel, FIELDS, ATTEST_METHODS } from './src/accounts.mjs';
 import { forgetInFolder } from './src/forget.mjs';
 import { runVendorTest, passVendor, listVendors } from './src/vendors.mjs';
 import { work, JOB_KINDS } from './src/platform/worker.mjs';
@@ -52,6 +52,9 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound account set-person --account ID --name N [--title T] --by NAME SOURCE   a principal names the person, usually one of an institution
                                                   brief's candidates (--finding F3); a new person starts with an unconfirmed role and no address
   outbound account confirm-role --account ID --by NAME    a principal confirms the named person's role after reading the brief
+  outbound account confirm-order --account ID --order ORDER --by NAME
+                                                  a principal confirms seeing an enforcement order in force against the bank;
+                                                  no touch is approved until each order in force is confirmed, once (D-E3)
 
   Contact details (PRD E7-S3). Every field records where it came from. SOURCE is one of:
     --finding F3                                  a finding in the account's brief (its page and date come from the brief)
@@ -134,6 +137,8 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
 
   Merger applications (PRD next-five E18-S3): signals only, no points. Never in a message.
   outbound mergers list [--all]                   open applications naming a bank in the list (--all: every stored one), newest first
+  outbound mergers gap                            mergers seen only at their close (no H.2 application named them): the count
+                                                  that decides whether an OCC applications reader is worth building (Q5)
 
   Enforcement orders (PRD next-five E18-S2): signals only, no points. Never in a message.
   outbound enforcement list [--key fdic:CERT]      orders matched to a bank in the list (or one bank's), newest first, with terminations
@@ -403,6 +408,11 @@ async function main() {
     return out(`Removed from account ${r.accountId} and every record that held them. A hashed suppression entry keeps them from being contacted or named again.\nFiles or lines changed, by store: ${Object.entries(r.counts).map(([k, n]) => `${k} ${n}`).join(', ')}.\nCopies outside the data folder (a vendor export you saved, your mailbox, notes on paper) are yours to remove.`);
   }
 
+  if (cmd === 'account' && sub === 'confirm-order') {   // next-five D-E3: once per order in force, before any touch is approved
+    const r = confirmOrder({ dir, id: need(flags, 'account'), order: need(flags, 'order'), by: need(flags, 'by') });
+    return out(r.already ? `${r.order.id} was already confirmed for ${r.account.name}. Nothing changed.` : `Confirmed: ${need(flags, 'by')} has seen ${r.order.type} from the ${r.order.regulator}, ${r.order.date} [${r.order.id}], against ${r.account.name}. Touches to it can now be approved. Never mention the order in a message.`);
+  }
+
   if (cmd === 'account' && sub === 'confirm-role') {
     const by = need(flags, 'by');
     const a = confirmRole({ dir, id: need(flags, 'account'), by });
@@ -514,6 +524,13 @@ async function main() {
       const pr = pricing(ledger);
       return out(`${head}\n${pr.label}\n\n${pr.groups.map((g) => `${g.propertyType} · ${label.get(g.metro) ?? g.metro ?? 'metro not stated'}: ${g.events} liquidation(s), ${g.withRecovery} with balance and loss; implied recovery ${pctOf(g.impliedRecovery)}${g.withRecovery > 1 ? `, range ${(g.min * 100).toFixed(1)}–${(g.max * 100).toFixed(1)}%` : ''}`).join('\n')}${pr.rows.length ? `\n\n${pr.rows.map((r) => `${r.date}  ${r.kind.padEnd(20)} ${r.propertyType} · ${label.get(r.metro) ?? r.metro ?? ''}  balance ${money(r.balance)}  loss ${money(r.loss)}  ${pctOf(r.impliedRecovery)}  (${r.seller ?? ''}; ${r.id})`).join('\n')}` : '\nNo CMBS liquidation recorded yet.'}`);
     }
+  }
+
+  if (cmd === 'mergers' && sub === 'gap') {   // next-five Q5 (decided 2026-11-16): accept the gap, and count it
+    const { mergerGap } = await import('./src/sources/mergerapps.mjs');
+    const g = mergerGap({ dir, leadDays: rules.config.mergers?.gapLeadDays ?? 180 });
+    if (!g.ran) return out(g.note);
+    return out(`Mergers that closed from ${g.since} (the first H.2 week read, ${g.firstWeek}, plus ${g.leadDays} days): ${g.closes}.\n- Seen first as an H.2 application: ${g.seenAsApplication}.\n- Seen only at their close: ${g.notSeen}${g.share === null ? '' : ` (${(g.share * 100).toFixed(1)}%)`}. These are the FDIC- or OCC-only mergers the H.2 cannot show.\n${g.rows.map((r) => `  ${r.effective}  ${r.kind}  target fdic:${r.targetCert ?? '?'}  acquirer fdic:${r.acquirerCert ?? '?'}  [fdic-event:${r.transnum}]`).join('\n')}\nIf the share is large, a principal decides whether to build the OCC applications reader (PRD next-five E18-S3, Q5).`);
   }
 
   if (cmd === 'mergers' && sub === 'list') {   // merger applications (PRD next-five E18-S3): for the principals; never in a message

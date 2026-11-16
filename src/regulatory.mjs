@@ -73,3 +73,18 @@ export function readRegulatory(dir, key) {
   }
   return null;
 }
+
+// ---- Confirming an order before a touch (decided 2026-11-16, D-E3) ------------------------------------------------------------
+// A bank under an order in force may be approached, but no touch is approved until a principal has confirmed, once per order, that
+// they have seen it (src/accounts.mjs confirmOrder; approveDraft refuses with ORDER_NOT_CONFIRMED). A new order needs a new
+// confirmation; an order already confirmed needs none for later touches. A pending merger needs none (D-E3, Q8).
+export function ordersInForce(dir, key) {
+  if (!key) return [];
+  const r = readRegulatory(dir, key);
+  return (r?.record?.orders ?? []).filter((o) => o.kind === 'order' && o.inForce)
+    .map((o) => ({ id: o.id, regulator: o.regulator, type: o.type, date: o.date, link: o.link ?? null }));
+}
+export function unconfirmedOrders({ dir, account }) {
+  const seen = new Set((account?.orderConfirmations ?? []).map((c) => c.order));
+  return ordersInForce(dir, account?.institutionKey).filter((o) => !seen.has(o.id));
+}

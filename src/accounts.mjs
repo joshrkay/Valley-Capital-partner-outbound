@@ -13,6 +13,7 @@ import { promises as dnsPromises } from 'node:dns';
 import { readJson, writeJson, listFiles, audit, safeId } from './store.mjs';
 import { normName, nameTokens, suppressedEmail, suppressedPerson, emailCheck } from './guard.mjs';
 import { vendorPassed, vendorSlug } from './vendors.mjs';
+import { ordersInForce } from './regulatory.mjs';
 
 const DAY = 86400000;
 const need = (v, what) => { const s = String(v ?? '').trim(); if (!s || s === 'true') throw new Error(`${what} is required.`); return s; };
@@ -146,6 +147,25 @@ export function confirmRole({ dir, id, by, now = new Date() }) {
   save(dir, a);
   audit(dir, { type: 'role_confirmed', accountId: id, by: who });
   return a;
+}
+
+// ---- Orders in force (decided 2026-11-16, D-E3) ---------------------------------------------------------------------------------
+// A principal confirms, once per order, that they have seen an enforcement order in force against the account's bank. Until then no
+// touch to the account is approved (src/draft.mjs approveDraft, ORDER_NOT_CONFIRMED). Only the order's id, who and when are kept.
+export function confirmOrder({ dir, id, order, by, now = new Date() }) {
+  const who = need(by, 'A name for who confirmed it (--by)');
+  const orderId = need(order, 'The order to confirm (--order), as the account page or the refusal names it');
+  const a = load(dir, id);
+  if (!a.institutionKey) throw new Error(`${a.name} is not linked to a bank in the list, so it has no enforcement record to confirm.`);
+  const inForce = ordersInForce(dir, a.institutionKey);
+  const o = inForce.find((x) => x.id === orderId);
+  if (!o) throw new Error(`${orderId} is not an order in force against ${a.name}. ${inForce.length ? `Orders in force: ${inForce.map((x) => x.id).join(', ')}.` : 'It has no order in force: nothing to confirm.'}`);
+  const list = a.orderConfirmations ?? [];
+  if (list.some((c) => c.order === orderId)) return { account: a, already: true, order: o };
+  a.orderConfirmations = [...list, { order: orderId, by: who, at: now.toISOString() }];
+  save(dir, a);
+  audit(dir, { type: 'order_confirmed', accountId: id, order: orderId, by: who });
+  return { account: a, already: false, order: o };
 }
 
 // ---- Contact details -----------------------------------------------------------------------------------------------------------

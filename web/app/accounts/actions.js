@@ -20,6 +20,9 @@ const sourceOf = (fd) => ({ kind: field(fd, 'source'), findingId: field(fd, 'fin
 // The contact section's "Name the person" form, the only one that names a person: it always carries its source fields (PRD E7-S3).
 export const setPersonAction = async (fd) => run(fd, (ctx, id) => ops.setPerson(ctx.client, { id, name: field(fd, 'name'), title: field(fd, 'title'), by: ctx.principal.name, source: sourceOf(fd) }),
   'Person recorded with its source. Their role is unconfirmed until a principal confirms it.');
+// D-E3: a principal confirms, once per order, seeing an enforcement order in force; until then no touch to the bank is approved.
+export const confirmOrderAction = async (fd) => run(fd, (ctx, id) => ops.confirmOrder(ctx.client, { id, order: field(fd, 'order'), by: ctx.principal.name }),
+  (r) => (r.already ? 'Already confirmed.' : 'Order confirmed. Touches to this bank can now be approved. Never mention the order in a message.'));
 export const confirmRoleAction = async (fd) => run(fd, (ctx, id) => ops.confirmRole(ctx.client, { id, by: ctx.principal.name }), 'Role confirmed.');
 export const queueResearchAction = async (fd) => run(fd, (ctx, id) => ops.queueResearch(ctx.client, { id }), 'Research queued. The worker runs it; the brief appears here when it is done.');
 // Calls (PRD E15). Saving notes and confirming run as the signed-in principal; the brief and the reading of the notes are queued.

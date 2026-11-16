@@ -257,9 +257,24 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 
 | # | Decision | Default |
 |---|---|---|
-| D-E1 | Does an order add points, on which axis, and does an active order count more than a new one? | Signals only, no points |
-| D-E2 | Open the OCC API key in the firm's name (data-sources D3) | Not opened; the OCC source waits |
-| D-E3 | Does a bank under an active order get a different first-touch rule (for example, letters only, or no touch until a principal reviews)? | No change, but the card shows it |
+**Decided by a principal on November 16, 2026** (the E18 interview).
+
+| # | Decision | Decided |
+|---|---|---|
+| D-E1 | Does an order add points? | **Not yet: signals only.** The backtest decides. Teaching it to replay orders as of each past date waits for the first FDIC orders run, since without the FDIC most of our banks' orders would be missing and orders would look weaker than they are (Q6). |
+| D-E2 | Open the OCC API key | **Closed: no key.** The OCC source reads the monthly releases. Release dates are at most about a month late, which changes nothing for a signal shown for a year. |
+| D-E3 | A first-touch rule for a bank under an order in force | **A principal confirms seeing each order in force, once per order, before any touch to the bank is approved** (Q7). A new order needs a new confirmation; later touches about an order already confirmed need none. A pending merger needs none (Q8): its card warning and the call brief's not-say rule are enough. Built: see below. |
+| — | Who runs the FDIC orders | **Josh, monthly, in the week after the FDIC's release** (usually the last Friday). The first run also runs `outbound coverage`, which fills the private-bank baseline in section 0 and E18-S1. |
+| — | Mergers the H.2 cannot show (FDIC- or OCC-only, no holding company) | **Accept the gap, and count it** (Q5). If the share seen only at close is large, a principal decides whether to build an OCC applications reader on a principal's machine. Built: `outbound mergers gap`. |
+| — | State orders | Not built (decided earlier, E18-S2 source 3). |
+
+**The confirmation, as built (D-E3, November 16, 2026).**
+- `approveDraft` (`src/draft.mjs`) refuses with `ORDER_NOT_CONFIRMED` for each order in force against the account's bank (`account.institutionKey`, read from `regulatory/<key>.json`) that the account's `orderConfirmations` do not hold. The refusal names the order, its regulator and date, its link, and the command that confirms it. It never reaches a message.
+- `confirmOrder` (`src/accounts.mjs`; `outbound account confirm-order --account ID --order ORDER --by NAME`; the account page's "I have read this order" button) records `{ order, by, at }` on the account and an `order_confirmed` audit line. It refuses an order that is not in force against that bank, and a second confirmation of the same order changes nothing.
+- Approval runs with its own load list, `LOADS.approve`: the drafter's list plus `regulatory/`. Approving is a person's act; no model reads anything in it. `LOADS.draft` is unchanged, so the drafter still cannot load an order (the E18-S4 handoff test).
+- The account page lists the orders in force, each with its confirmation or the button.
+
+**The gap, as built (Q5, November 16, 2026).** `mergerGap` (`src/sources/mergerapps.mjs`; `outbound mergers gap`) counts the mergers and assisted mergers in `sources/fdic/events.json` that closed from `config.mergers.gapLeadDays` (placeholder 180) after the first H.2 week read, and splits them by whether an H.2 application closed on them (`closedBy`). It lists the ones seen only at close. From stored data; no network.
 
 ---
 
@@ -436,8 +451,8 @@ Numbered after the main PRD's Q18.
 |---|---|---|---|---|
 | Q19 | The backtest's horizon, label kinds and universe (D-B1 to D-B3) | Principals | E17-S2, S3 | The defaults in E17 |
 | Q20 | May weights change on the backtest alone, before 30 outcomes? (D-B4, D-B5) | Principals | Weight changes | Yes, with at least 20 labelled banks in the holdout and a `_calibration` note citing a holdout run |
-| Q21 | Open the OCC API key in the firm's name (D-E2, data-sources D3) | Principals | Nothing now: the OCC source reads the monthly releases with no key (E18-S2); the API would add exact order dates | Not opened |
-| Q22 | Does an active enforcement order change how, or whether, a bank is approached? (D-E3) | Principals, then counsel | E18-S4 | No change; the card shows it |
+| Q21 | Open the OCC API key in the firm's name (D-E2, data-sources D3) | Principals | **Decided 2026-11-16: no key** | — |
+| Q22 | Does an active enforcement order change how, or whether, a bank is approached? (D-E3) | Principals, then counsel | **Principals decided 2026-11-16:** a principal confirms each order in force before any touch is approved. Counsel's view is still open. | The confirmation (built) |
 | Q23 | Who owns the advisor registrations and the proof of funds? (D-I2) | Principals | E19-S3 | Nothing is sent to an advisor |
 | Q24 | Publish a market note, and under whose name? (D-M1) | Principals | E20-S3, S4 | The pack for principals only |
 | Q25 | Counsel's view on publishing aggregates of regulatory data, and on FRED if it is used | Counsel | E20 publication | Not published |

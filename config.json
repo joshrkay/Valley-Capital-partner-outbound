@@ -55,9 +55,10 @@
     }
   },
   "mergers": {
-    "_note": "Merger applications (PRD next-five E18-S3, outbound sources run mergerapps): the Federal Reserve's weekly H.2 release, one page per district. PLACEHOLDERS. districts: the Reserve Bank districts read each week; all twelve, since a bank in our metros can be acquired by a holding company anywhere. backfillWeeks: how far back the first run reads. maxWeeksPerRun: weeks read per run (each week is 14 requests). minIntervalMs: at least this long between requests. minRowsPerWeek: a week with fewer filings across the districts is noted in the run log. userAgent: optional, as for enforcement.",
+    "_note": "Merger applications (PRD next-five E18-S3, outbound sources run mergerapps): the Federal Reserve's weekly H.2 release, one page per district. PLACEHOLDERS. districts: the Reserve Bank districts read each week; all twelve, since a bank in our metros can be acquired by a holding company anywhere. backfillWeeks: how far back the first run reads. maxWeeksPerRun: weeks read per run (each week is 14 requests). minIntervalMs: at least this long between requests. minRowsPerWeek: a week with fewer filings across the districts is noted in the run log. userAgent: optional, as for enforcement. gapLeadDays: PLACEHOLDER; outbound mergers gap counts only closes from this many days after the first H.2 week read, since an application is filed months before its close (Q5, decided 2026-11-16: accept the gap and count it).",
     "userAgent": "[CONFIRM: optional; firm name and a monitored business contact for Federal Reserve requests]",
     "districts": ["boston", "newyork", "philadelphia", "cleveland", "richmond", "atlanta", "chicago", "stlouis", "minneapolis", "kansascity", "dallas", "sanfrancisco"],
+    "gapLeadDays": 180,
     "backfillWeeks": 26,
     "maxWeeksPerRun": 30,
     "minIntervalMs": 1000,

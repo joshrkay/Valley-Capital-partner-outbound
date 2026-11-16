@@ -7,6 +7,7 @@ import { callJson, neutralize, estimateCost, addUsage } from './model.mjs';
 import { lintDraft, expandBody, splitMarkers } from './lint.mjs';
 import { checkTouch, touchFromAccount } from './guard.mjs';
 import { readJson, writeJson, writeText, audit, safeId } from './store.mjs';
+import { unconfirmedOrders } from './regulatory.mjs';
 
 const PERS = { type: 'array', items: { type: 'object', additionalProperties: false, required: ['text', 'fact_ids'], properties: { text: { type: 'string' }, fact_ids: { type: 'array', items: { type: 'string' } } } } };
 const STR = { type: 'string' };
@@ -161,7 +162,11 @@ export function approveDraft({ dir, account, channel, step, by, ctx, rules, now 
   const lint = lintOutput({ channel, account, out: rec.output, facts, allFacts, rules, sender: ctx.senders.find((s) => s.id === rec.sender) });
   const touchChannel = channel === 'call' ? 'call' : channel;
   const guard = checkTouch(touchFromAccount(account, { channel: touchChannel, step, date: rec.date, sender: rec.sender, text: rec.text }), ctx);
-  const errors = [...lint.errors, ...guard.errors.map((e) => ({ code: `GUARD_${e.code}`, message: e.message }))];
+  // D-E3 (decided 2026-11-16): an order in force against the bank must be confirmed by a principal, once per order, before any touch
+  // is approved. Approval runs with LOADS.approve, which holds regulatory/; the drafter's own list never does.
+  const orders = unconfirmedOrders({ dir, account });
+  const orderErrors = orders.map((o) => ({ code: 'ORDER_NOT_CONFIRMED', message: `The bank is under ${o.type} from the ${o.regulator}, ${o.date} [${o.id}], with no termination recorded, and no principal has confirmed seeing it. Read it${o.link ? ` (${o.link})` : ''}, then confirm: outbound account confirm-order --account ${account.id} --order ${o.id} --by NAME (or on the account page). Never mention it in a message.` }));
+  const errors = [...lint.errors, ...guard.errors.map((e) => ({ code: `GUARD_${e.code}`, message: e.message })), ...orderErrors];
   if (errors.length) { audit(dir, { type: 'approve_refused', accountId: account.id, channel, step, codes: errors.map((e) => e.code) }); return { ok: false, errors }; }
   rec.status = 'approved'; rec.approvedBy = String(by).trim(); rec.approvedAt = now.toISOString();
   writeJson(file, rec);

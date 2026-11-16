@@ -61,6 +61,7 @@ npm run outbound -- research run --account acme-bank --dry-run   # see exactly w
 npm run outbound -- research run --account acme-bank             # deep research: costs money
 npm run outbound -- research show --account acme-bank            # read the brief
 npm run outbound -- account confirm-role --account acme-bank --by "Pat Example"
+npm run outbound -- account confirm-order --account acme-bank --order frb:12345 --by "Pat Example"   # only if the bank is under an order in force: once per order, before any touch is approved
 npm run outbound -- draft run --account acme-bank --channel letter --step 1
 npm run outbound -- draft approve --account acme-bank --channel letter --step 1 --by "Pat Example"
 # a person sends it, then:
@@ -278,14 +279,16 @@ npm run outbound -- enforcement alias --key fdic:CERT --name "Example Bancorp, I
   - **The briefer** reads it as fenced data, told to confirm each order or application on the regulator's own page.
   - **The call brief** cites it by id, warns of an order in force or a pending merger, and adds a rule never to mention either.
   - **The drafter** cannot load it, and the linter rejects "consent order", "enforcement", "regulator" and "cease and desist" in any draft.
+  - **Approval** of any touch to a bank under an order in force is refused (`ORDER_NOT_CONFIRMED`) until a principal confirms seeing that order, once per order: `outbound account confirm-order`, or the account page (decided 2026-11-16, D-E3). A pending merger needs no confirmation.
 
-**FDIC orders, on your own machine.** The FDIC's order lists are on orders.fdic.gov, a site that draws them in the browser, so a headless Chrome reads the public page. Nothing appears on screen, and the site's internal API is not called. It runs on a principal's computer because the platform's worker has no browser:
+**FDIC orders, on your own machine (Josh, monthly).** The FDIC's order lists are on orders.fdic.gov, a site that draws them in the browser, so a headless Chrome reads the public page. Nothing appears on screen, and the site's internal API is not called. It runs on a principal's computer because the platform's worker has no browser:
 
 ```bash
 npm run fdic-orders:setup                               # once: Playwright and its Chromium (not saved to package.json; again after npm ci)
 npm run outbound -- sources run fdicorders              # each month, after the FDIC's release (usually the last Friday); the first run reads 12 months
 npm run outbound -- sources verify fdicorders           # fresh, every party an organization, every release on www.fdic.gov captured
 npm run outbound -- platform push                       # then copy the data folder into the platform, if you use it
+npm run outbound -- coverage                            # on the first run: the private-bank baseline the PRD still has blank (E18-S1)
 ```
 
 - **Built blind.** The rendered table could not be seen from where this was written, so columns are mapped by their header words.
@@ -302,6 +305,7 @@ A merger heard of when it is applied for, not when it closes, puts a principal i
 npm run outbound -- sources run mergerapps              # the Federal Reserve's weekly H.2, every district (the first run reads 26 weeks)
 npm run outbound -- sources verify mergerapps           # fresh, sourced, no person stored, the latest week read again
 npm run outbound -- mergers list [--all]                # open applications naming a bank in the list, with their roles
+npm run outbound -- mergers gap                         # mergers seen only at their close (no H.2 application): the count that decides an OCC reader
 ```
 
 - **What it sees:** applications the Federal Reserve decides. That covers holding-company acquisitions, which most bank acquisitions are, and state member banks' mergers. A merger the OCC or the FDIC decides alone is not seen until it closes and FDIC's /history shows it.

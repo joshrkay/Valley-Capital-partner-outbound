@@ -73,7 +73,8 @@ export async function accountDetail(client, id) {
   const { LOADS, store, pilot } = await mods();
   const rules = await loadRules();
   store.safeId(need(id, 'An account id'));   // checked before it becomes part of a path
-  const own = [`accounts/${id}.json`, `briefs/${id}.md`, `research/${id}.json`, `drafts/${id}/`, 'pilot/status.json'];
+  const own = [`accounts/${id}.json`, `briefs/${id}.md`, `research/${id}.json`, `drafts/${id}/`, 'pilot/status.json', 'regulatory/'];
+  const regulatory = await engine('src/regulatory.mjs');
   const { result } = await client.unitOfWork(own, (dir) => {
     const account = store.readJson(join(dir, 'accounts', `${id}.json`), null);
     if (!account) return null;
@@ -83,6 +84,8 @@ export async function accountDetail(client, id) {
       account, brief: store.readText(join(dir, 'briefs', `${id}.md`), null),
       research: research ? { date: research.date, mode: research.mode ?? 'person', findings: research.findings?.length ?? 0, risk: research.riskScreen?.approach ?? null, person: research.personCheck?.status ?? null } : null,
       gate: pilot.researchGate({ dir, account, config: rules.config }), drafts,
+      // Orders in force against the bank, each with whether a principal has confirmed seeing it (D-E3). For principals only.
+      orders: regulatory.ordersInForce(dir, account.institutionKey).map((o) => ({ ...o, confirmation: (account.orderConfirmations ?? []).find((c) => c.order === o.id) ?? null })),
     };
   });
   return result;
@@ -93,6 +96,13 @@ export async function accountDetail(client, id) {
 export async function setPerson(client, { id, name, title, by, source }) {
   const [uow, accounts] = await Promise.all([engine('src/uow.mjs'), engine('src/accounts.mjs')]);
   await client.unitOfWork(uow.contactLoads('person', need(id, 'An account id')), (dir) => accounts.setPerson({ dir, id, name, title: typeof title === 'string' ? title : '', by, source: sourceOf(source) }));
+}
+
+// Confirming an enforcement order in force (D-E3): the same function `outbound account confirm-order` calls.
+export async function confirmOrder(client, { id, order, by }) {
+  const [{ LOADS }, accounts] = await Promise.all([engine('src/uow.mjs'), engine('src/accounts.mjs')]);
+  const { result } = await client.unitOfWork(LOADS.orderConfirm, (dir) => accounts.confirmOrder({ dir, id: need(id, 'An account id'), order: need(order, 'An order'), by }));
+  return { already: result.already, order: result.order };
 }
 
 export async function confirmRole(client, { id, by }) {
@@ -240,7 +250,8 @@ export async function listDrafts(client) {
 export async function approve(client, { id, channel, step, by }) {
   const { LOADS, store, guard, draft } = await mods();
   const rules = await loadRules();
-  const { result } = await client.unitOfWork(LOADS.draft, (dir) => {
+  // LOADS.approve: the drafter's list plus regulatory/, so an order in force that no principal has confirmed refuses the approval (D-E3).
+  const { result } = await client.unitOfWork(LOADS.approve, (dir) => {
     const account = store.readJson(join(dir, 'accounts', `${need(id, 'An account id')}.json`), null);
     if (!account) throw new Error(`There is no account ${id}.`);
     const ctx = guard.loadContext({ dir, config: rules.config });
