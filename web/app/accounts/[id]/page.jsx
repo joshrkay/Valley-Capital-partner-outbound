@@ -7,6 +7,7 @@ import { confirmRoleAction, queueResearchAction, queueDraftAction } from '../act
 import { Calls } from './calls.jsx';
 import { Routes } from './routes.jsx';
 import { Contact } from './contact.jsx';
+import { Touches } from './touches.jsx';
 
 export default async function Account({ params }) {
   const ctx = await requirePrincipal();
@@ -54,6 +55,7 @@ export default async function Account({ params }) {
       </div>
 
       <Contact client={ctx.client} id={a.id} />
+      <Touches client={ctx.client} id={a.id} />
 
       {pipe ? (
         <>

@@ -40,6 +40,7 @@ import { buildRoutes, readRoutes, chooseRoute, removeNetworkEntry } from './src/
 import { runPanel, verifyPanel } from './src/backtest/panel.mjs';
 import { buildLabels } from './src/backtest/labels.mjs';
 import { runBacktest, readReport, summarize } from './src/backtest/run.mjs';
+import { readSenders, setSender, removeSender, sendingReadiness, validateSender } from './src/senders.mjs';
 import { readFileSync } from 'node:fs';
 
 const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE this repository first.
@@ -86,8 +87,16 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
 
   outbound guard check  --account ID --channel C [--step N] [--sender ID] [--date D]
   outbound guard due    [--sender ID] [--date D]
-  outbound guard record --account ID --channel C --step N --sender ID [--date D]     after a person has actually sent it (always logged; broken rules are shown)
-  outbound guard event  --account ID --type reply|opt_out|bounce|meeting|handoff [--date D] [--note TEXT]
+  outbound guard record --account ID --channel C --step N --sender ID [--date D] [--by NAME]   after a person has actually sent it (always logged; broken rules are shown)
+  outbound guard event  --account ID --type reply|opt_out|bounce|meeting|handoff [--date D] [--note TEXT] [--by NAME]
+                                                  --note is a short internal note, never the reply's text. An opt-out suppresses the person and the address
+
+  Senders (senders.json): who a message goes out under. The same rule as the web app's Senders page.
+  outbound senders list                           each sender, whether it is complete, and whether sending is ready (as status says)
+  outbound senders set --id ID [--name N] [--title T] [--phone P] [--address A] [--mailbox M] --by NAME
+                                                  add a sender, or change the fields given. Every field the guard requires, no [CONFIRM],
+                                                  a business mailbox for a person, and a full street address (CAN-SPAM)
+  outbound senders remove --id ID --by NAME       only a sender no recorded touch names; one that has sent stays
   outbound suppress add --type email|domain|person|institution|asset --value V --reason R [--alias A]...
   outbound suppress list
 
@@ -335,13 +344,29 @@ async function main() {
     return out(`Data folder ready: ${dir}\nNext: fill senders.json, add accounts/<id>.json for the accounts a principal chose, then: outbound status`);
   }
 
-  if (cmd === 'status') {
+  if (cmd === 'status') {   // readiness is src/senders.mjs's rule, the same one the web app's Senders page shows
     const c = ctx();
     const accts = listFiles(join(dir, 'accounts'), '.json').map((f) => f.replace(/\.json$/, ''));
-    const incomplete = c.senders.filter((s) => Object.values(s).some((v) => /\[confirm/i.test(String(v))));
-    return out({ dataDir: dir, killSwitch: !!(rules.config.killSwitch || c.kill), senders: c.senders.length, sendersIncomplete: incomplete.map((s) => s.id), accounts: accts.length,
+    const ready = sendingReadiness({ senders: c.senders, config: rules.config, kill: c.kill });
+    return out({ dataDir: dir, killSwitch: ready.killSwitch, senders: c.senders.length, sendersIncomplete: ready.incomplete, accounts: accts.length,
       researched: accts.filter((a) => exists(join(dir, 'research', `${a}.json`))), touchesLogged: c.touches.filter((t) => t.type === 'touch').length, suppressionEntries: c.suppression.length,
-      readyToSend: !incomplete.length && c.senders.length > 0 && !rules.config.killSwitch && !c.kill });
+      readyToSend: ready.ready, ...(ready.ready ? {} : { notReadyBecause: ready.reasons }) });
+  }
+
+  if (cmd === 'senders') {   // src/senders.mjs: the same rule as the web app's Senders page. Audit lines carry the sender's id only
+    if (sub === 'list') {
+      const list = readSenders(dir);
+      const ready = sendingReadiness({ senders: list, config: rules.config, kill: ctx().kill });
+      return out([
+        ...(list.length ? list.map((s) => { const v = validateSender(s, { config: rules.config }); return `${String(s.id).padEnd(16)} ${String(s.name ?? '').padEnd(24)} ${v.ok ? 'complete' : `INCOMPLETE: ${v.errors.map((e) => e.message).join(' ')}`}`; }) : ['No sender yet. Add one: outbound senders set --id ID --name N --title T --phone P --address A --mailbox M --by NAME']),
+        '', `Ready to send: ${ready.ready ? 'yes' : 'no'}`, ...ready.reasons.map((r) => `- ${r}`),
+      ].join('\n'));
+    }
+    if (sub === 'set') {
+      const r = setSender({ dir, sender: { id: need(flags, 'id'), ...Object.fromEntries(['name', 'title', 'phone', 'address', 'mailbox'].filter((k) => opt(flags, k) !== undefined).map((k) => [k, opt(flags, k)])) }, by: need(flags, 'by'), config: rules.config });
+      return out(`${r.created ? 'Added' : 'Updated'} sender ${r.sender.id}${r.changed.length ? ` (${r.changed.join(', ')})` : ''}. Check readiness: outbound senders list`);
+    }
+    if (sub === 'remove') { const r = removeSender({ dir, id: need(flags, 'id'), by: need(flags, 'by') }); return out(`Removed sender ${r.id}.`); }
   }
 
   if (cmd === 'research' && (sub === 'run' || sub === 'show')) {
@@ -431,13 +456,13 @@ async function main() {
       const accts = listFiles(join(dir, 'accounts'), '.json').map((f) => readJson(join(dir, 'accounts', f)));
       return out(dueList(accts, c, { date: flags.date ?? today(), sender: flags.sender ?? c.senders[0]?.id }));
     }
-    if (sub === 'event') { return out(recordEvent(dir, { accountId: need(flags, 'account'), institution: loadAccount(dir, flags.account).name, type: need(flags, 'type'), date: flags.date, note: flags.note === true ? undefined : flags.note, person: loadAccount(dir, flags.account).person }, c)); }
+    if (sub === 'event') { return out(recordEvent(dir, { accountId: need(flags, 'account'), institution: loadAccount(dir, flags.account).name, type: need(flags, 'type'), date: flags.date, note: flags.note === true ? undefined : flags.note, person: loadAccount(dir, flags.account).person, by: opt(flags, 'by') }, c)); }
     const account = loadAccount(dir, need(flags, 'account'));
     const sentCount = c.touches.filter((t) => t.accountId === account.id && t.type === 'touch').length;
     const t = touchFromAccount(account, { channel: need(flags, 'channel'), step: Number(flags.step ?? sentCount + 1), date: flags.date ?? today(), sender: flags.sender ?? c.senders[0]?.id });
     if (sub === 'check') return out(checkTouch(t, c));
     if (sub === 'record') {   // the send already happened, so it is always logged; a rule it broke is shown, not used to drop the record
-      const r = recordObservedSend(dir, t, c);
+      const r = recordObservedSend(dir, t, c, { by: opt(flags, 'by') });
       return out(r.violations.length ? `RECORDED, but this send broke ${r.violations.length} rule(s). Review before the next touch:\n${r.violations.map((e) => `- ${e.code}: ${e.message}`).join('\n')}` : r.rec);
     }
   }
