@@ -11,11 +11,13 @@
 // S3  Buyer-list registration for loan-sale advisors: a state per firm, recorded by a principal (Josh owns them, D-I2). Moving to
 //     proof_of_funds_sent is refused until a principal records that the credibility package (research agenda D9) is approved. The
 //     agreement itself is never stored. Anything learned under an agreement goes on the existing NDA list (suppression.json).
+// S5  A firm promoted to an account with audience `intermediary`, so it goes through research, the role check, drafting, the guard and the
+//     caps like a bank. Its mandates travel as research context only. The drafter refuses until claims.json holds approved claims for it.
 // S4  The route to a seller: unknown (the default: no advisor seen is not evidence of a direct sale), advisor, direct (only on a
 //     principal's recorded evidence), or both. Context for a principal only: no model-facing action loads intermediaries/.
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { readJson, writeJson, audit } from './store.mjs';
+import { readJson, writeJson, listFiles, exists, audit, safeId } from './store.mjs';
 import { readLedger, eventsOf, actingSeller } from './sales.mjs';
 import { edgarPaths } from './sources/edgar.mjs';
 import { addSuppression } from './guard.mjs';
@@ -273,3 +275,37 @@ export function routeFor({ registry, manual = {}, registrations = {}, sellerKey 
   return { route, label: ROUTES[route], advisors, direct: direct.map((d) => ({ date: d.date, how: d.how, by: d.by })) };
 }
 export const routeForDir = (dir, sellerKey) => routeFor({ registry: readRegistry(dir), manual: manualOf(dir), registrations: regsOf(dir), sellerKey });
+
+// ---- S5: a firm as an account ---------------------------------------------------------------------------------------------------
+// The account's `type` picks the research playbook (the kind of firm); its `audience` ("intermediary") picks the claims and terms, so
+// nothing is said to a firm until a principal approves claims for that audience (the drafter refuses first, src/draft.mjs).
+const PLAYBOOK_OF = Object.freeze({ loan_sale_advisor: 'broker', special_servicer: 'servicer', receiver: 'receiver', lender_counsel: 'counsel', trustee_counsel: 'counsel' });
+// A fixed sentence per mandate: the firm's kind, the seller a source names (an institution or trust, never a person), and the date.
+export const mandateLabel = (m) => `${KINDS[m.kind] ?? 'Firm'} acting for ${named(m.seller) ? m.seller.name : 'a seller no source names'}${DATE.test(String(m.date)) ? `, ${m.date}` : ''}`;
+export function promoteIntermediary({ dir, key, by, now = new Date() }) {
+  const who = need(by, 'A name for who promoted it (--by)');
+  const reg = readRegistry(dir);
+  const firm = reg?.firms?.[key];
+  if (!firm) throw new Error(`No firm "${key}" in the registry. Keys look like intermediary:<slug> (outbound intermediaries list).`);
+  const dirAccounts = join(dir, 'accounts');
+  const held = listFiles(dirAccounts, '.json').map((f) => readJson(join(dirAccounts, f), null)).find((a) => a?.intermediaryKey === key);
+  if (held) throw new Error(`Account ${held.id} already holds ${key}.`);
+  const kind = firm.kinds.find((k) => PLAYBOOK_OF[k]);
+  if (!kind) throw new Error(`${firm.name} has no kind a research playbook covers.`);
+  const base = slug(firm.name) || 'firm';
+  const id = safeId(exists(join(dirAccounts, `${base}.json`)) ? `${base}-${hashId(key).slice(0, 6)}` : base);
+  const ms = firm.mandates.map((m) => reg.mandates[m]).filter(Boolean).sort((a, b) => String(b.date ?? '').localeCompare(String(a.date ?? '')));
+  const sectors = [...new Set(ms.flatMap((m) => m.sectors ?? [m.sector]).filter(Boolean))];
+  const at = now.toISOString();
+  const account = {
+    id, name: firm.name, aliases: [], type: PLAYBOOK_OF[kind], audience: 'intermediary', sectors, intermediaryKey: key, intermediaryKinds: firm.kinds,
+    pipeline: { period: at.slice(0, 10), tier: null, signals: ms.slice(0, 12).map((m) => ({ type: 'mandate', label: mandateLabel(m), period: m.date ?? null })), profile: { mandates: ms.length, namedSellers: new Set(ms.map((m) => sellerId(m.seller)).filter(Boolean)).size }, runId: 'intermediaries' },
+    person: { name: '', title: '', email: '', phone: '', phoneType: '', timezone: '', mailingAddress: '' },
+    contact: { emailStatus: 'unverified', roleConfirmed: false, provenance: [] },
+    notes: `Promoted from the intermediary registry by ${who} on ${at.slice(0, 10)}. Name the person (person.name) before running research. Mandates are research context only: they never appear in a message.${sectors.length ? '' : ' No mandate names a sector: set one before drafting.'}`,
+    knownFacts: [], promoted: { by: who, at, runId: 'intermediaries' },
+  };
+  writeJson(join(dirAccounts, `${id}.json`), account);
+  audit(dir, { type: 'intermediary_promoted', key, accountId: id, by: who });
+  return account;
+}

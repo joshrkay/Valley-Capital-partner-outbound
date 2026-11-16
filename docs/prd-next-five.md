@@ -318,10 +318,10 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 - [ ] Where the route is `advisor` and the firm is not `registered` (S3), the card says so.
 - [ ] The route is principal context only. The drafter receives nothing from it, and a handoff test proves it.
 
-**E19-S5. Intermediaries as accounts.** *As a principal, I want to approach an intermediary through the same guard, drafter and caps as a bank, so that the discipline is the same for every touch.* P2, R2.
-- [ ] An intermediary can be promoted to an account with audience `intermediary`. It then goes through research, the role check, drafting, the guard and the caps unchanged.
-- [ ] The drafter refuses an `intermediary` draft until `claims.json` holds approved claims for that audience.
-- [ ] The intermediary's mandates are research context. Like every signal, they never appear in the message.
+**E19-S5. Intermediaries as accounts.** *As a principal, I want to approach an intermediary through the same guard, drafter and caps as a bank, so that the discipline is the same for every touch.* P2, R2. **Built** (`promoteIntermediary` in `src/intermediaries.mjs`, `outbound intermediaries promote --key KEY --by NAME`, `test/intermediaries.test.mjs`).
+- [x] An intermediary can be promoted to an account with audience `intermediary`. The account's `type` is the playbook of the firm's kind (advisor: broker; special servicer: servicer; receiver; counsel), and its `audience` is `intermediary`. It then goes through research, the role check, drafting, the guard and the caps unchanged.
+- [x] The drafter refuses an `intermediary` draft (`blocked: no_claims`) until `claims.json` holds an approved claim for that audience. **Today none does**, so no firm can be drafted for until a principal approves claims.
+- [x] The intermediary's mandates are research context. Like every signal, they never appear in the message. They reach the briefer as fixed-template pipeline signals (kind, seller, date); the drafter loads no `intermediaries/` path, and a test proves nothing reaches its input.
 
 **E19-S6. Warm paths (the referral mapper, plan agent 7).** *As a principal, I want to see which of my own contacts work at or with a ranked intermediary so that I can ask for an introduction.* P2, R3.
 - [ ] Reads a principal's contact export only with their written consent, recorded with a date, and only from the data folder. It matches on company name and email domain against the registry.

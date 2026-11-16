@@ -151,6 +151,7 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
                                                   a call named this firm as the way in: kept apart, never ranked
   outbound intermediaries direct --seller S --date D --how TEXT --by NAME
                                                   evidence the seller sold WITHOUT an advisor (the only way a route is "direct")
+  outbound intermediaries promote --key KEY --by NAME   a firm to an account (audience intermediary); no draft until claims.json approves claims for it
   outbound intermediaries alias --key KEY --alias NAME --by NAME
   outbound intermediaries register --key KEY --state STATE --by NAME [--recertify-by YYYY-MM-DD]
                                                   buyer-list registration with a loan-sale advisor (owner: Josh, D-I2)
@@ -566,6 +567,7 @@ async function main() {
     const regState = (k) => I.readRegistrations(dir).firms?.[k]?.state ?? null;
     const usd = (v) => `$${Math.round(v).toLocaleString('en-US')}`;
     if (sub === 'build') return out(I.writeRegistry({ dir, config: rules.config }));
+    if (sub === 'promote') { const a = I.promoteIntermediary({ dir, key: need(flags, 'key'), by: need(flags, 'by') }); return out(`Account ${a.id} created for ${a.name} (research playbook: ${a.type}, audience: intermediary). Name the person, then research. Nothing is drafted until claims.json holds approved claims for the intermediary audience.`); }
     if (sub === 'list') {
       const rows = I.rankFirms({ registry: reg(), config: rules.config, buybox: rules.buybox, asOf: today }).filter((r) => !flags.kind || r.kinds.includes(flags.kind));
       const line = (r, i) => `${String(i + 1).padStart(3)}. ${r.name}  [${r.key}]  score ${r.score}  ${r.kinds.map((k) => I.KINDS[k]).join(', ')}\n     ${r.mandates} mandate(s), latest ${r.latest ?? '-'}${r.referrals ? `, ${r.referrals} referral(s) (not ranked)` : ''}${regState(r.key) ? `; buyer list: ${regState(r.key)}` : ''}`;
@@ -598,7 +600,7 @@ async function main() {
       const r = I.registrationReminders({ registrations: I.readRegistrations(dir), asOf: today, withinDays: ic.reminderDays ?? 30 });
       return out(r.length ? r.map((x) => `${x.recertifyBy}  ${x.name} [${x.key}]${x.overdue ? '  OVERDUE' : ''}`).join('\n') : 'No buyer-list re-certification due.');
     }
-    throw new Error('Usage: outbound intermediaries build|list|show|mandate|referral|direct|alias|register|credibility-approved|nda|route|reminders (outbound help)');
+    throw new Error('Usage: outbound intermediaries build|list|show|mandate|referral|direct|promote|alias|register|credibility-approved|nda|route|reminders (outbound help)');
   }
 
   if (cmd === 'mergers' && sub === 'gap') {   // next-five Q5 (decided 2026-11-16): accept the gap, and count it
