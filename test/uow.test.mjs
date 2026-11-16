@@ -175,3 +175,11 @@ test('a unit of work whose only change is a redaction still flushes', async () =
     (dir) => redactJsonl(join(dir, 'touches.jsonl'), (l) => ({ ...l, note: REDACTED })));
   assert.equal(flushed?.redactions?.length, 1);
 });
+
+test('the Calibration page\'s load list (next-five E17-S5): the run log and one stored report, never a folder; no model-facing action loads them', async () => {
+  const { calibrationLoads } = await import('../src/uow.mjs');
+  assert.deepEqual(LOADS.calibration, ['backtest/runs.jsonl']);
+  assert.deepEqual(calibrationLoads('0123456789abcdef'), ['backtest/runs.jsonl', 'backtest/report-0123456789abcdef.json']);
+  for (const bad of ['../panel/state', '0123456789ABCDEF', '0123456789abcde', '', null, undefined]) assert.throws(() => calibrationLoads(bad), /not a report hash/, String(bad));
+  for (const kind of ['research', 'draft', 'approve', 'callPrep', 'callExtract', 'callNotes']) for (const p of calibrationLoads('0123456789abcdef')) assert.ok(!LOADS[kind].some((x) => x === p || (x.endsWith('/') && p.startsWith(x))), `${kind} loads ${p}`);
+});

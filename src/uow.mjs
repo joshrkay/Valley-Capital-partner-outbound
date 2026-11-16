@@ -83,6 +83,9 @@ export const LOADS = Object.freeze({
   backtestPanel: ['backtest/panel/', 'sources/runs.jsonl'],
   backtestLabels: ['backtest/', 'sources/fdic/failed.json', 'sources/fdic/events.json', 'sources/fdic/sales.json', 'sources/fdic/state.json', 'sources/edgar/filers.json', 'sources/runs.jsonl'],
   backtestRun: ['backtest/'],
+  // The Calibration page (next-five E17-S5), read-only: the run log, which names every stored report. calibrationLoads() adds the one
+  // report the page shows. Never backtest/ whole: the panel is far too large for a page view, and the page needs none of it.
+  calibration: ['backtest/runs.jsonl'],
   // Recording what happened, by hand, from the web app (working without Gmail): a send a principal already made from their own mailbox
   // (recordObservedSend), or a reply, opt-out, bounce, meeting or handoff (recordEvent). The guard's files and the one account, narrowed
   // by recordLoads(). An opt-out writes suppression.json, which the guard's list holds; the touch log is only appended to.
@@ -97,6 +100,13 @@ export const LOADS = Object.freeze({
 export function recordLoads(id) {
   safeId(id);
   return LOADS.record.map((p) => (p === 'accounts/' ? `accounts/${id}.json` : p));
+}
+
+// The Calibration page's load list with the one stored report it shows. The hash is checked before it becomes part of a path; its form
+// is the backtest's REPORT_HASH (src/backtest/run.mjs).
+export function calibrationLoads(hash) {
+  if (!/^[0-9a-f]{16}$/.test(String(hash ?? ''))) throw new Error(`"${hash}" is not a report hash (16 hexadecimal characters).`);
+  return [...LOADS.calibration, `backtest/report-${hash}.json`];
 }
 
 // The contact actions' load lists, narrowed to one account where the action touches only that account.
