@@ -107,6 +107,9 @@ export async function runDrafter({ client, dir, account, channel, step, senderId
   if (research.riskScreen.approach === 'do_not_approach') return { ok: false, blocked: 'risk', message: `The risk screen says DO NOT APPROACH: ${research.riskScreen.reasons.join(' ')}` };
   if (research.riskScreen.approach === 'wait' && !ackRisk) return { ok: false, blocked: 'risk', message: `The risk screen says WAIT: ${research.riskScreen.reasons.join(' ')} A principal can proceed with --ack-risk after reading the brief.` };
 
+  // An audience with no approved claim (an intermediary, until a principal approves some) is not drafted for: the model could say nothing about the firm.
+  const audience = account.audience ?? account.type;
+  if (audience === 'intermediary' && !rules.claims.some((c) => c.approved && (c.audiences ?? []).includes(audience))) return { ok: false, blocked: 'no_claims', message: `claims.json holds no approved claim for the "${audience}" audience. A principal approves claims for it first; nothing is drafted until then.` };
   const touchChannel = channel === 'call' ? 'call' : channel;
   const pre = checkTouch(touchFromAccount(account, { channel: touchChannel, step, date, sender: senderId }), ctx);
   if (!pre.allowed) return { ok: false, blocked: 'guard', errors: pre.errors, message: `The guard refuses this touch: ${pre.errors.map((e) => e.code).join(', ')}` };

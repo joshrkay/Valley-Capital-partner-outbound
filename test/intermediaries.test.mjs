@@ -168,3 +168,39 @@ test('PRINCIPALS ONLY: no model-facing action loads intermediaries/; the ledger 
   const out = execFileSync('node', [join(REPO, 'cli.mjs'), 'intermediaries', 'list'], { env: { ...process.env, OUTBOUND_DATA_DIR: dir }, encoding: 'utf8' });
   assert.match(out, /Example Special Servicing/);
 });
+
+// ---- S5: a firm as an account -------------------------------------------------------------------------------------------------
+test('S5: a ranked firm is promoted to an account with audience intermediary; its mandates are research context, and the drafter refuses until claims exist', async () => {
+  const dir = world();
+  const { promoteIntermediary } = await import('../src/intermediaries.mjs');
+  const { runDrafter } = await import('../src/draft.mjs');
+  const { runBriefer } = await import('../src/research.mjs');
+  const { loadContext } = await import('../src/guard.mjs');
+  const { models } = await import('./kit.mjs');
+  const key = firmKey('Example Special Servicing');
+  assert.throws(() => promoteIntermediary({ dir, key: 'intermediary:nope', by: 'Pat Example' }), /No firm/);
+  assert.throws(() => promoteIntermediary({ dir, key, by: '' }), /required/);
+  const a = promoteIntermediary({ dir, key, by: 'Pat Example', now: new Date('2026-11-17T12:00:00Z') });
+  assert.equal(a.audience, 'intermediary'); assert.equal(a.type, 'servicer'); assert.equal(a.intermediaryKey, key);
+  assert.ok(a.pipeline.signals.length && a.pipeline.signals.every((s) => s.type === 'mandate' && /^CMBS special servicer acting for /.test(s.label)));
+  assert.equal(a.person.name, '');
+  assert.throws(() => promoteIntermediary({ dir, key, by: 'Pat Example' }), /already holds/);
+  assert.ok(readJson(join(dir, 'accounts', `${a.id}.json`)).promoted.by === 'Pat Example');
+  assert.ok(readJsonl(join(dir, 'audit.jsonl')).some((e) => e.type === 'intermediary_promoted' && e.accountId === a.id));
+  // The briefer sees the mandates as pipeline context.
+  const withPerson = { ...a, person: { ...a.person, name: 'Robin Example', title: 'Head of asset management' } };
+  const b = await runBriefer({ client: null, dir, account: withPerson, models: models(), playbooks: rules.playbooks, now: new Date('2026-11-17T12:00:00Z'), dryRun: true });
+  assert.match(b.user, /CMBS special servicer acting for Example Trust 2019-C1/);
+  // The drafter refuses: no approved claim holds the intermediary audience.
+  put(dir, `research/${a.id}.json`, { account: a.id, riskScreen: { approach: 'ok', reasons: [], finding_ids: [] }, personCheck: { status: 'confirmed' } });
+  put(dir, `facts/${a.id}.json`, []);
+  const ctx = loadContext({ dir, config: rules.config, env: {} });
+  const d = await runDrafter({ client: null, dir, account: withPerson, channel: 'email', step: 1, senderId: 'pat', date: '2026-11-17', ctx, rules, dryRun: true });
+  assert.equal(d.blocked, 'no_claims', JSON.stringify(d));
+  // With an approved claim for the audience, the refusal lifts (the next check, the guard, may still say no, but not for claims).
+  const claimed = { ...rules, claims: [...rules.claims, { id: 'x', text: 'Example.', sectors: ['hospitality'], audiences: ['intermediary'], approved: true }] };
+  const d2 = await runDrafter({ client: null, dir, account: withPerson, channel: 'email', step: 1, senderId: 'pat', date: '2026-11-17', ctx, rules: claimed, dryRun: true });
+  assert.notEqual(d2.blocked, 'no_claims');
+  if (d2.dryRun) for (const leak of ['acting for', 'Example Trust', 'mandate', 'special servicer']) assert.ok(!(d2.system + d2.user).toLowerCase().includes(leak.toLowerCase()), `drafter input leaked "${leak}"`);
+  assert.ok(!LOADS.draft.some((p) => p.startsWith('intermediaries')), 'the drafter loads no intermediaries/ path');
+});
