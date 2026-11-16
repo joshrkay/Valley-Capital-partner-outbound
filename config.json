@@ -83,6 +83,14 @@
     { "step": 4, "channel": "call", "afterDays": 4 },
     { "step": 5, "channel": "email", "afterDays": 7 }
   ],
+  "nurture": {
+    "_note": "PRD E10 (quarterly follow-up). After the five-step sequence is complete, a non-responder may get at most maxPerQuarter nurture touch a calendar quarter, and only inside a window: it opens on each date in windows (month-day) and closes at the end of that quarter. Never after a reply, opt-out, meeting or handoff (stopEvents). channels: only email. linkTargets: the only pages a nurture draft may link, each one on the live site (site-snapshot/pages.json). All PLACEHOLDERS for a principal to set. The message never mentions quarter-end (terminology.json); nothing is drafted or sent without a person.",
+    "enabled": true,
+    "windows": ["03-10", "06-10", "09-10", "12-10"],
+    "maxPerQuarter": 1,
+    "channels": ["email"],
+    "linkTargets": ["/blog/", "/library/"]
+  },
   "stopEvents": ["reply", "opt_out", "meeting", "handoff"],
   "calls": { "callablePhoneTypes": ["landline"], "hours": [9, 17] },
   "outcomes": { "_note": "PRD E15-S4, the outcomes report. PLACEHOLDERS. Below minToTune confirmed call outcomes, the report says the counts are too few to tune scoring weights on. leadTimeBucketsDays are the edges of the lead-time groups, from an account's first signal to its first meeting. The report never changes weights; a principal does.", "minToTune": 30, "leadTimeBucketsDays": [30, 90, 180, 365] },

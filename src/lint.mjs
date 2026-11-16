@@ -29,7 +29,7 @@ const digits = (s) => String(s).replace(/[$,%]/g, '');
 
 // input: { channel, audience, sector, step, subject, body, personalization, spokenOnly?, internalText?, recipient, sender, facts, contextFacts, claims, rules, pages }
 export function lintDraft(input) {
-  const { channel, audience, sector, subject = '', body = '', personalization = [], recipient, sender, facts = [], contextFacts = [], claims, rules, pages } = input;
+  const { channel, audience, sector, subject = '', body = '', personalization = [], recipient, sender, facts = [], contextFacts = [], claims, rules, pages, nurture = false } = input;
   const errors = []; const warnings = [];
   const err = (code, message) => errors.push({ code, message });
   const warn = (code, message) => warnings.push({ code, message });
@@ -67,7 +67,7 @@ export function lintDraft(input) {
     else if (!c.sectors.includes(sector)) err('CLAIM_WRONG_SECTOR', `Claim "${id}" is not approved for ${sector}.`);
     else if (!c.audiences.includes(audience)) err('CLAIM_WRONG_AUDIENCE', `Claim "${id}" is not approved for a ${audience}.`);
   }
-  for (const id of config.requiredClaims?.[audience]?.[channel] ?? []) if (!claimIds.includes(id)) err('CLAIM_REQUIRED', `A ${audience} ${channel} must include {{claim:${id}}}.`);
+  for (const id of nurture ? [] : config.requiredClaims?.[audience]?.[channel] ?? []) if (!claimIds.includes(id)) err('CLAIM_REQUIRED', `A ${audience} ${channel} must include {{claim:${id}}}.`);
   for (const cp of terminology.claimPhrases ?? []) {
     const m = checked.match(re(cp.pattern));
     if (m) err('CLAIM_NOT_APPROVED', `"${m[0]}" is a statement about the firm. ${cp.claim ? `Use {{claim:${cp.claim}}} or remove it.` : 'There is no approved claim for it. Remove it.'}`);
@@ -75,7 +75,12 @@ export function lintDraft(input) {
 
   // Links, addresses, attachments.
   if (pageIds.length > 1) err('TOO_MANY_LINKS', 'At most one link.');
-  for (const p of pageIds) if (!(config.linkTargets?.[audience] ?? []).includes(p) || !pages.has(p)) err('LINK_NOT_ALLOWED', `"${p}" is not an allowed page for a ${audience}.`);
+  // A nurture follow-up (PRD E10-S2) shares one published page, chosen from config.nurture.linkTargets; it makes no claim about the firm.
+  const linkOk = nurture ? config.nurture?.linkTargets ?? [] : config.linkTargets?.[audience] ?? [];
+  for (const p of pageIds) if (!linkOk.includes(p) || !pages.has(p)) err('LINK_NOT_ALLOWED', `"${p}" is not an allowed page for a ${nurture ? 'nurture follow-up' : audience}.`);
+  if (nurture && !pageIds.length) err('NURTURE_NO_LINK', 'A nurture follow-up shares one published page: add {{page:/path/}} from the pages list.');
+  if (nurture && /quarter[- ]?end|year[- ]?end|end of (?:the |this )?(?:quarter|year)/i.test(looseText)) err('NURTURE_QUARTER_END', 'A nurture follow-up never mentions quarter-end or year-end. It is sent then; it never says so.');
+  if (nurture && claimIds.length) err('NURTURE_CLAIM', 'A nurture follow-up makes no claim about the firm. It only shares the page.');
   if (/https?:\/\/|www\.|[\w.+-]+@[\w-]+\.\w+/i.test(looseText)) err('RAW_URL', 'No raw URLs or email addresses. Links go in as {{page:/path/}}; the signature is added by the system.');
   if (channel === 'email' && /\battach\w*/i.test(checked)) err('ATTACHMENT', 'No attachments on a first email.');
   if (channel === 'linkedin_note' && (claimIds.length || pageIds.length)) err('LINKEDIN_CLAIM', 'A LinkedIn note carries no claims and no link.');

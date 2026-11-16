@@ -57,6 +57,22 @@ export function loadContext({ dir, config, env = process.env }) {
 
 // touch: { accountId, institution, aliases?, audience, sector, person: {name,email,phone,phoneType,timezone,mailingAddress},
 //          contact: {emailStatus, roleConfirmed, provenance}, channel, sender, step, date, text? }
+// Nurture (PRD E10): the quarterly follow-up after the sequence is complete. A nurture touch's step is "nurture-<year>Q<n>".
+export const isNurtureStep = (step) => /^nurture/.test(String(step ?? ''));
+export const quarterOf = (day) => `${String(day).slice(0, 4)}Q${Math.ceil(Number(String(day).slice(5, 7)) / 3)}`;
+// The window `day` falls in, or null: a window opens on each configured month-day and closes on the last day of that quarter.
+export function nurtureWindow(day, nurture = {}) {
+  const year = Number(String(day).slice(0, 4));
+  for (const md of nurture.windows ?? []) {
+    const m = Number(String(md).slice(0, 2));
+    if (!(m >= 1 && m <= 12) || !/^\d\d-\d\d$/.test(md)) continue;
+    const opens = `${year}-${md}`;
+    const closes = new Date(Date.UTC(year, Math.ceil(m / 3) * 3, 0)).toISOString().slice(0, 10);
+    if (day >= opens && day <= closes) return { quarter: quarterOf(day), opens, closes };
+  }
+  return null;
+}
+
 export function checkTouch(touch, ctx) {
   const { config } = ctx;
   const errors = [];
@@ -160,13 +176,26 @@ export function checkTouch(touch, ctx) {
   if (recent >= caps.touchesPerAccountPer90Days) err('CAP_ACCOUNT_90D', `${recent} touches to this institution in the last 90 days (cap ${caps.touchesPerAccountPer90Days}).`);
   const lastAny = instSent[instSent.length - 1];
   if (lastAny && daysBetween(day, lastAny.date) < caps.minGapDays) err('TOO_SOON', `The last touch to this institution was ${ymd(lastAny.date)}. Wait at least ${caps.minGapDays} days between touches.`);
-  const last = sent[sent.length - 1];
-
-  // 8. Sequence: the next step, on the right channel, once it is due.
+  // 8. Sequence: the next step, on the right channel, once it is due. Nurture touches (PRD E10) are not sequence steps.
   const seq = config.sequence;
-  const expected = seq[sent.length];
+  const seqSent = sent.filter((t) => !isNurtureStep(t.step));
+  const last = seqSent[seqSent.length - 1];
+  const expected = seq[seqSent.length];
   let next = null;
-  if (!expected) err('SEQUENCE_COMPLETE', 'The sequence is complete. Move this account to quarterly nurture; do not send another touch.');
+  if (isNurtureStep(touch.step)) {
+    const nu = config.nurture ?? {};
+    if (!nu.enabled) err('NURTURE_OFF', 'Quarterly nurture is not turned on (config.nurture.enabled).');
+    else {
+      if (expected) err('NURTURE_TOO_EARLY', `Nurture starts only after the sequence is complete; step ${expected.step} is still ahead.`);
+      if (!(nu.channels ?? ['email']).includes(touch.channel)) err('NURTURE_CHANNEL', `Nurture goes by ${(nu.channels ?? ['email']).join(', ')} only, not ${touch.channel}.`);
+      const w = nurtureWindow(day, nu);
+      if (!w) err('NURTURE_NO_WINDOW', `${day} is not inside a nurture window (they open ${(nu.windows ?? []).join(', ')} and close at quarter end).`);
+      else {
+        const n = sent.filter((t) => isNurtureStep(t.step) && quarterOf(ymd(t.date)) === w.quarter).length;
+        if (n >= (nu.maxPerQuarter ?? 1)) err('NURTURE_QUARTER_CAP', `${n} nurture touch(es) already this quarter (${w.quarter}); the most is ${nu.maxPerQuarter ?? 1}.`);
+      }
+    }
+  } else if (!expected) err('SEQUENCE_COMPLETE', 'The sequence is complete. Move this account to quarterly nurture; do not send another touch.');
   else {
     const due = last ? addDays(last.date, expected.afterDays) : null;
     next = { step: expected.step, channel: expected.channel, due };
@@ -282,10 +311,18 @@ export function touchFromAccount(account, { channel, step, date, sender, text })
 
 // What is due for each account: the next step, or why it is blocked. Uses the same checks as a real touch.
 export function dueList(accounts, ctx, { date, sender }) {
+  const nu = ctx.config.nurture ?? {};
   return accounts.map((a) => {
-    const sent = ctx.touches.filter((t) => t.accountId === a.id && t.type === 'touch').length;
+    const sent = ctx.touches.filter((t) => t.accountId === a.id && t.type === 'touch' && !isNurtureStep(t.step)).length;
     const expected = ctx.config.sequence[sent];
-    if (!expected) return { accountId: a.id, state: 'sequence_complete' };
+    if (!expected) {
+      // The sequence is complete: inside a nurture window the account is due for one quarterly follow-up, for a person to approve (PRD E10-S1).
+      const w = nu.enabled ? nurtureWindow(ymd(date), nu) : null;
+      if (!w) return { accountId: a.id, state: 'sequence_complete' };
+      const step = `nurture-${w.quarter}`;
+      const probe = checkTouch(touchFromAccount(a, { channel: 'email', step, date, sender }), ctx);
+      return { accountId: a.id, step, channel: 'email', state: probe.allowed ? 'nurture_due' : 'sequence_complete', window: w, blockedBy: probe.errors.map((e) => e.code) };
+    }
     const probe = checkTouch(touchFromAccount(a, { channel: expected.channel, step: expected.step, date, sender }), ctx);
     return { accountId: a.id, step: expected.step, channel: expected.channel, state: probe.allowed ? 'due' : 'blocked', due: probe.next?.due ?? null, blockedBy: probe.errors.map((e) => e.code) };
   });

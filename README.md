@@ -216,6 +216,12 @@ outbound mailbox review
 - **`sync`** notices a draft that was sent and records the touch with its real date (an edit is checked for banned words and flagged), then reads the inbox: any reply stops outreach at that bank, found by thread first and then by a confirmed domain; a bounce is a bounce; an opt-out suppresses the address at once. `--sort` asks a model (Haiku) to sort replies into interested, not now, wrong person and out of office. Only a category and a date are kept, never message text.
 - **`review`** lists mail that matched no account (shared, personal or unknown domain): the message id, the date, the reason and the sender's domain.
 
+### Quarterly follow-up (PRD E10)
+```bash
+outbound nurture due [--date YYYY-MM-DD]
+```
+After the five-step sequence, a bank that has not replied can get one follow-up a quarter, inside a window that opens March 10, June 10, September 10 or December 10 and closes at quarter end (`config.json` `nurture`). It is never sent after a reply, opt-out, meeting or handoff. The command lists the accounts due; a person drafts, approves and sends. The draft shares one published page (`/blog/` or `/library/`), makes no claim about the firm, asks for nothing, and never mentions quarter-end.
+
 ### Working without Gmail (PRD E8-S5)
 
 Gmail drafts and reply detection (E9) are not built. Until they are, a principal sends by hand and the web app keeps the guard's touch log current. The log drives the caps, the follow-up timing and the opt-out stops, so record each event the day it happens.

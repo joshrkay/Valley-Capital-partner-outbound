@@ -104,7 +104,8 @@ export async function syncSends({ dir, accounts, ctx, client, rules, now = new D
   const out = { checked: 0, sent: [], edited: [], violations: [] };
   for (const a of accounts) {
     for (const f of listFiles(join(dir, 'drafts', a.id), '-email.json')) {
-      const step = Number(f.split('-')[0]);
+      const label = f.replace(/-email\.json$/, '');
+      const step = /^\d+$/.test(label) ? Number(label) : label;
       const file = draftFile(dir, a.id, step);
       const rec = readJson(file, null);
       if (!rec?.gmail?.draftId || rec.gmail.sentAt || !rec.gmail.threadId) continue;
@@ -119,7 +120,7 @@ export async function syncSends({ dir, accounts, ctx, client, rules, now = new D
       const sentBody = plainBody(full);
       if (sentBody && norm(sentBody) !== norm(split(rec.text).body)) {
         const subject = hdr(full, 'Subject') || split(rec.text).subject;
-        const lint = lintOutput({ channel: 'email', account: a, out: { subject, body: sentBody, personalization: [] }, facts: [], allFacts: [], rules, sender: ctx.senders.find((s) => s.id === rec.sender) });
+        const lint = lintOutput({ channel: 'email', account: a, out: { subject, body: sentBody, personalization: [] }, facts: [], allFacts: [], rules, sender: ctx.senders.find((s) => s.id === rec.sender), step });
         const bad = lint.errors.filter((e) => LANGUAGE.includes(e.code)).map((e) => e.code);
         rec.gmail.editedBeforeSend = true; rec.gmail.editLint = bad;
         audit(dir, { type: 'sent_text_edited', accountId: a.id, step, flagged: bad.length > 0, codes: bad });

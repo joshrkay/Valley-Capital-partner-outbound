@@ -749,15 +749,23 @@ Rules across the epic:
 
 ### E10. Quarterly follow-up and nurture
 
+**Built November 17, 2026** (`src/guard.mjs` nurture rules, `src/draft.mjs` and `src/lint.mjs` for the follow-up draft, `outbound nurture due`, `config.json` `nurture`, `test/nurture.test.mjs`). All values are placeholders for a principal to set.
+- **A nurture touch is a step named `nurture-<year>Q<n>`**, not a sequence step. The five-step sequence is unchanged, and a regular sixth step is still refused with `SEQUENCE_COMPLETE`.
+- **The guard refuses a nurture touch unless:** nurture is on; the sequence is complete; the channel is email; the date is inside a window; and the quarter's allowance (`maxPerQuarter`, 1) is unused. A reply, opt-out, meeting or handoff at the bank stops it for good, like any touch.
+- **A window opens on each of `windows`** (`03-10`, `06-10`, `09-10`, `12-10`) **and closes on the last day of that quarter.**
+- **`outbound nurture due`** and the due list show an account as `nurture_due` only inside a window. They list; nothing is drafted or sent without a person.
+- **The follow-up draft** asks for nothing: one page from `nurture.linkTargets` (`/blog/`, `/library/`, both live on the site), no claim, no required bank claim. The linter refuses a missing link, a page outside the list, a claim marker, and any mention of quarter-end or year-end, besides the existing rule against pressing with a deadline. The prompt forbids deal flow, assets, named institutions, and naming or recommending anyone else.
+- **Not built:** the news desk's monthly Hotel loan watch is not in `site-snapshot/pages.json` as its own page, so the list holds the blog and library pages. A principal adds a page to `nurture.linkTargets` once it is live.
+
 **E10-S1. Quarter-end windows.** *As a principal, I want non-responders brought back for my review in the weeks before each quarter-end so that follow-up lands when banks decide what to clear.* P1, R3.
-- [ ] The guard gains a nurture state after `SEQUENCE_COMPLETE`, with at most one touch a quarter (configurable). Never after a reply, opt-out, meeting or handoff.
-- [ ] Windows open on configurable dates: by default March 10, June 10, September 10 and December 10.
-- [ ] Accounts in a window appear in the approval queue. Nothing is drafted or sent without a person.
-- [ ] The **message** never mentions quarter-end. The existing linter rule stays, and a test confirms a nurture draft that mentions it fails.
+- [x] The guard gains a nurture state after `SEQUENCE_COMPLETE`, with at most one touch a quarter (configurable). Never after a reply, opt-out, meeting or handoff.
+- [x] Windows open on configurable dates: by default March 10, June 10, September 10 and December 10.
+- [x] Accounts in a window appear in the approval queue. Nothing is drafted or sent without a person.
+- [x] The **message** never mentions quarter-end. The existing linter rule stays, and a test confirms a nurture draft that mentions it fails.
 
 **E10-S2. Zero-ask nurture content.** *As a principal, I want follow-ups to share something useful the firm has published so that a follow-up is worth reading.* P1, R3.
-- [ ] Nurture drafts may link only to firm-published pages present in `site-snapshot/pages.json`, such as the news desk and the monthly Hotel loan watch.
-- [ ] No deal flow, no named assets, no recommendations of third parties.
+- [x] Nurture drafts may link only to firm-published pages present in `site-snapshot/pages.json`, such as the news desk and the monthly Hotel loan watch.
+- [x] No deal flow, no named assets, no recommendations of third parties.
 
 ---
 

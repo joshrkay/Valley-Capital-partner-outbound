@@ -93,6 +93,8 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
 
   outbound guard check  --account ID --channel C [--step N] [--sender ID] [--date D]
   outbound guard due    [--sender ID] [--date D]
+  outbound nurture due [--date D] [--sender ID]    accounts due a quarterly follow-up (PRD E10): inside a window (opens Mar 10, Jun 10, Sep 10, Dec 10; closes at quarter end),
+                                                   sequence complete, no reply, one a quarter. A list only; step is "nurture-<year>Q<n>"; a person approves
   outbound mailbox draft --account ID --step N --by NAME   an approved email into the sender's own Gmail as a DRAFT (PRD E9-S1). It never delivers mail:
                                                    a person presses the button. Needs GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN
   outbound mailbox sync [--days N] [--sort]       notices drafts that were sent (records the touch with its real date) and reads the inbox: any reply
@@ -307,6 +309,8 @@ function parse(argv) {
   return { pos, flags };
 }
 
+// A step is a number, or "nurture-<year>Q<n>" for a quarterly follow-up (PRD E10).
+const stepArg = (v) => (/^\d+$/.test(String(v)) ? Number(v) : String(v));
 const loadAccount = (dir, id) => { safeId(id); const a = readJson(join(dir, 'accounts', `${id}.json`), null); if (!a) throw new Error(`No account file: ${join(dir, 'accounts', `${id}.json`)}`); return a; };
 const today = () => new Date().toISOString().slice(0, 10);
 const out = (x) => console.log(typeof x === 'string' ? x : JSON.stringify(x, null, 2));
@@ -364,7 +368,7 @@ async function main() {
     }
     if (cmd === 'enqueue') {
       if (!JOB_KINDS.includes(sub)) throw new Error(`Usage: outbound enqueue ${JOB_KINDS.join('|')}`);
-      const params = { ...(flags.account ? { account: flags.account } : {}), ...(flags.channel ? { channel: flags.channel } : {}), ...(flags.step ? { step: Number(flags.step) } : {}), ...(flags.date && flags.date !== true ? { date: needDate(flags.date) } : {}), ...(flags.by && flags.by !== true ? { by: flags.by } : {}), ...(flags['draft-buybox'] ? { draftBuybox: true } : {}), ...(flags['include-hq'] ? { includeHq: true } : {}), ...(flags.since && flags.since !== true ? { since: flags.since } : {}) };
+      const params = { ...(flags.account ? { account: flags.account } : {}), ...(flags.channel ? { channel: flags.channel } : {}), ...(flags.step ? { step: stepArg(flags.step) } : {}), ...(flags.date && flags.date !== true ? { date: needDate(flags.date) } : {}), ...(flags.by && flags.by !== true ? { by: flags.by } : {}), ...(flags['draft-buybox'] ? { draftBuybox: true } : {}), ...(flags['include-hq'] ? { includeHq: true } : {}), ...(flags.since && flags.since !== true ? { since: flags.since } : {}) };
       if (sub === 'call.extract' && (!params.account || !params.date || !params.by)) throw new Error('call.extract needs --account, --date and --by. The notes must already be saved in the platform.');
       return out(`Queued job ${await client.enqueue(sub, params)} (${sub}).`);
     }
@@ -489,7 +493,7 @@ async function main() {
     const account = loadAccount(dir, id);
     const c = ctx();
     const sentCount = c.touches.filter((t) => t.accountId === id && t.type === 'touch').length;
-    const step = Number(flags.step ?? sentCount + 1);
+    const step = stepArg(flags.step ?? sentCount + 1);
     if (sub === 'show') { const p = join(dir, 'drafts', id, `${step}-${channel}.md`); return out(readText(p) ?? 'No such draft.'); }
     if (sub === 'approve') { const r = approveDraft({ dir, account, channel, step, by: need(flags, 'by'), ctx: c, rules }); return out(r.ok ? `Approved. A person may now send it.\n\n${r.text}` : { refused: r.errors }); }
     if (sub === 'run') {
@@ -500,11 +504,20 @@ async function main() {
     }
   }
 
+  if (cmd === 'nurture') {   // PRD E10: who is due a quarterly follow-up. Lists only; nothing is drafted or sent without a person
+    const c = ctx();
+    if (sub === 'due') {
+      const accts = listFiles(join(dir, 'accounts'), '.json').map((f) => readJson(join(dir, 'accounts', f)));
+      const rows = dueList(accts, c, { date: flags.date ?? today(), sender: flags.sender ?? c.senders[0]?.id }).filter((r) => r.state === 'nurture_due');
+      return out(rows.length ? { window: rows[0].window, due: rows.map((r) => ({ accountId: r.accountId, step: r.step })), next: 'outbound draft run --account ID --channel email --step <step>, then a person approves it' } : { due: [], note: 'No account is due a nurture follow-up on this date (outside a window, or none have finished the sequence).' });
+    }
+    throw new Error('Usage: outbound nurture due [--date D] [--sender ID] (outbound help)');
+  }
   if (cmd === 'mailbox') {   // PRD E9: Gmail drafts, noticed sends, replies. Principal's own mailbox; drafts only
     if (sub === 'review') return out(readReview(dir));
     const c = ctx();
     const gmail = gmailClient();
-    if (sub === 'draft') return out(await createGmailDraft({ dir, account: loadAccount(dir, need(flags, 'account')), step: Number(need(flags, 'step')), ctx: c, client: gmail, by: need(flags, 'by') }));
+    if (sub === 'draft') return out(await createGmailDraft({ dir, account: loadAccount(dir, need(flags, 'account')), step: stepArg(need(flags, 'step')), ctx: c, client: gmail, by: need(flags, 'by') }));
     if (sub === 'sync') {
       const accts = listFiles(join(dir, 'accounts'), '.json').map((f) => readJson(join(dir, 'accounts', f)));
       const sends = await syncSends({ dir, accounts: accts, ctx: c, client: gmail, rules });
@@ -523,7 +536,7 @@ async function main() {
     if (sub === 'event') { return out(recordEvent(dir, { accountId: need(flags, 'account'), institution: loadAccount(dir, flags.account).name, type: need(flags, 'type'), date: flags.date, note: flags.note === true ? undefined : flags.note, person: loadAccount(dir, flags.account).person, by: opt(flags, 'by') }, c)); }
     const account = loadAccount(dir, need(flags, 'account'));
     const sentCount = c.touches.filter((t) => t.accountId === account.id && t.type === 'touch').length;
-    const t = touchFromAccount(account, { channel: need(flags, 'channel'), step: Number(flags.step ?? sentCount + 1), date: flags.date ?? today(), sender: flags.sender ?? c.senders[0]?.id });
+    const t = touchFromAccount(account, { channel: need(flags, 'channel'), step: stepArg(flags.step ?? sentCount + 1), date: flags.date ?? today(), sender: flags.sender ?? c.senders[0]?.id });
     if (sub === 'check') return out(checkTouch(t, c));
     if (sub === 'record') {   // the send already happened, so it is always logged; a rule it broke is shown, not used to drop the record
       const r = recordObservedSend(dir, t, c, { by: opt(flags, 'by') });
