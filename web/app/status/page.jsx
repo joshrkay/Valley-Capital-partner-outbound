@@ -24,6 +24,7 @@ export default async function Status() {
   return (
     <>
       <h1>Status</h1>
+      <p className="sub">Whether the score ranks banks under pressure well: the latest backtest is on the <a href="/calibration">Calibration</a> page.</p>
       <div className={`banner ${killed ? 'error' : 'ok'}`}>{killed ? `Kill switch ON (${[s.kill.config ? 'config.json' : null, s.kill.document ? 'KILL document' : null].filter(Boolean).join(' and ')}): no draft is created and no mailbox is touched.` : 'Kill switch off.'}</div>
       <div className="panel row">
         <form action={queueSourcesAction} className="inline"><button type="submit">Queue FDIC pull</button></form>

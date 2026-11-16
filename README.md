@@ -13,7 +13,7 @@ The agents in `docs/outbound-plan.md` that exist so far:
 
 **The goal** (PRD section 0): purposeful outreach to the right person at the right time, backed by research into what paper the institution holds, what those loans look like, and where the firm has an advantage. **Nothing in this folder can send a message.** A principal sends; the guard then records it.
 
-Start with `docs/prd-signal-pipeline.md` for the pipeline, and `docs/research-agenda.md` for the briefer. The next epics (E17 to E21: a backtest of the score, enforcement orders and merger applications, intermediaries, a market note, and credit unions and non-bank lenders) are in `docs/prd-next-five.md`. Of those, the backtest (E17-S1 to S4, from the command line) and the coverage report (E18-S1, `outbound coverage` and the Status page) are built; the backtest's web page (E17-S5) and the rest are not. The briefer's questions (`playbooks.json`) are that agenda turned into data.
+Start with `docs/prd-signal-pipeline.md` for the pipeline, and `docs/research-agenda.md` for the briefer. The next epics (E17 to E21: a backtest of the score, enforcement orders and merger applications, intermediaries, a market note, and credit unions and non-bank lenders) are in `docs/prd-next-five.md`. Of those, the backtest (E17-S1 to S4, from the command line) and the coverage report (E18-S1, `outbound coverage` and the Status page) are built, and so is the backtest's read-only web page (E17-S5, `/calibration`); the rest are not. The briefer's questions (`playbooks.json`) are that agenda turned into data.
 
 ## Status: read this first
 
@@ -416,6 +416,7 @@ npm run outbound -- backtest report                      # the latest report's s
   - Every report states its known limits.
 - **It never writes `scoring.json`.** A PR that changes weights adds a `_calibration` note, `{ report, evaluation, by, on }`, naming a holdout report's 16-character hash. A test checks its form.
 - It runs from the command line only, with no worker job kind. The full panel is about 45 to 50 MB; the PRD (E17) has the estimate and the platform follow-up.
+- **The Calibration page** (`/calibration` in the web app, E17-S5) shows the stored reports, read-only. It loads the run log and the one report it shows, never the panel. A report reaches it through `outbound platform push`.
 
 ### Checking the scrapers
 

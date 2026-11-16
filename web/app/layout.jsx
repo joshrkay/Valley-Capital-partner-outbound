@@ -25,6 +25,7 @@ export default function RootLayout({ children }) {
               <a href="/drafts">Approvals</a>
               <a href="/senders">Senders</a>
               <a href="/pilot">Pilot</a>
+              <a href="/calibration">Calibration</a>
               <a href="/status">Status</a>
             </nav>
             <form method="post" action="/auth/signout"><button className="secondary" type="submit">Sign out</button></form>
