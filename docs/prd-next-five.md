@@ -333,9 +333,23 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 
 | # | Decision | Default |
 |---|---|---|
-| D-I1 | Which intermediary kinds are in scope first | Loan-sale advisors and special servicers |
-| D-I2 | Who owns buyer-list registrations and proof of funds | A named principal; nothing until D9 is approved |
-| D-I3 | The ranking's weights and recency half-life | Placeholders |
+**Decided by a principal on November 16, 2026** (the E19 interview).
+
+| # | Decision | Decided |
+|---|---|---|
+| D-I1 | Which intermediary kinds first | **Loan-sale advisors and CMBS special servicers** (`config.intermediaries.kinds`). Receivers and counsel wait for county records (E5). |
+| — | Where firms come from, for now | **The FDIC sale pages and the CMBS data, plus mandates principals enter.** Separately, a spike reads the terms of the four listing sites (DebtX, First Financial Network, Mission Capital, JLL) and builds a feeder for each site whose terms allow it. |
+| D-I2 | Who owns buyer-list registrations and proof of funds | **Josh.** The tracker is built now; proof of funds stays refused until the credibility package (D9) is recorded as approved, which it is not yet. |
+| — | Scope of this pass | **S1 to S4**, command line and web. S5 (intermediaries as accounts) waits for approved message wording for intermediaries. |
+| D-I3 | The ranking's weights and recency half-life | **Placeholders** (`config.intermediaries.weights`); a principal tunes them after reading the first ranked list. |
+
+**As built (S1 to S4, November 16, 2026).** `src/intermediaries.mjs`; `outbound intermediaries build|list|show|mandate|referral|direct|alias|register|credibility-approved|nda|route|reminders`; the web app's Intermediaries pages (the nav's Servicers link now opens them; `/servicers` still works), the route on the candidate page, and re-certification reminders on the Status page.
+- **S1.** The registry (`intermediaries/registry.json`, a data folder, never tracked) is rebuilt with the sale ledger: by `sales build`, by the CMBS and FDIC loan-sale runs, and by their worker jobs (`LOADS.sales` holds `intermediaries/`). Feeders: an FDIC sale's advisor (the seller is the FDIC as receiver, so it ranks the advisor but routes no bank); a CMBS liquidation's special servicer; CMBS loans now in special servicing or coded for a note sale, one mandate per servicer and trust; a listing's advisor, once a listing feeder exists; and a principal's mandate (`intermediaries mandate`, with the date and how they know, audited). A firm's key comes from its name with legal suffixes dropped, or from an alias a principal adds. An "Unknown" servicer is never a firm. A referral (`intermediaries referral`) is kept apart, shown on the firm, and never ranked. No person, phone or email is stored.
+- **S2.** `rankFirms`: each component earns weight × min(value ÷ full, 1). An unknown seller never counts toward named sellers, and two sellerless listings never merge into one.
+- **S3.** States as specified, for loan-sale advisors only, each audited. `proof_of_funds_sent` is refused until `intermediaries credibility-approved` is recorded. Only the state, who and when are kept. `intermediaries nda` puts an asset or institution on the existing suppression (NDA) list, and only once an agreement is signed. A re-certification due within `reminderDays` (placeholder 30) shows on the Status page.
+- **S4.** `routeFor`: `unknown` by default; `advisor` only from an advisor mandate that names the seller; `direct` only from `intermediaries direct` (a principal's evidence); `both` when both exist. The candidate page shows it, with each advisor and whether we are on its buyer list.
+- **Not built:** the route in the paper estimate's Q6, since the scoring run does not load `intermediaries/` (the candidate page shows it instead); entering mandates, referrals and direct sales in the web app (command line only, for now); the listing feeders, which wait for the terms spike.
+- **Principals only.** No model-facing action (`LOADS.draft`, `research`, `callPrep`) loads `intermediaries/`, and a test proves it.
 
 ---
 

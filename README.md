@@ -297,6 +297,23 @@ npm run outbound -- coverage                            # on the first run: the 
 - **No people.** Rows against individuals (prohibitions, Section 19, a respondent with no organization word) are skipped as the table is read. Deposit-insurance terminations and waiver orders are skipped too.
 - FDIC orders carry no phrase flags yet: their PDFs are on a host Node cannot verify.
 
+### Intermediaries (PRD next-five E19)
+
+The firms that act for sellers in our market: loan-sale advisors and CMBS special servicers. Built from stored data, and rebuilt whenever the sale ledger is. For the principals only; nothing here reaches a message.
+
+```bash
+npm run outbound -- intermediaries list [--kind loan_sale_advisor]    # ranked (placeholder weights), with each firm's buyer-list state
+npm run outbound -- intermediaries show --key intermediary:example-advisors
+npm run outbound -- intermediaries mandate --firm "Example Advisors" --kind loan_sale_advisor --seller fdic:12345 --date 2026-09-01 --how "their sale notice" --by Josh
+npm run outbound -- intermediaries register --key intermediary:example-advisors --state agreement_signed --by Josh [--recertify-by 2027-09-01]
+npm run outbound -- intermediaries credibility-approved --by Josh      # only then may proof of funds be sent
+npm run outbound -- intermediaries route --seller fdic:12345           # unknown, advisor, direct or both
+```
+
+- **Mandates** come from FDIC sale advisors, CMBS special servicers (liquidations and loans in special servicing), listings once their feeders exist, and principals. A seller no source names never counts toward sellers served. A call's referral is kept apart and never ranked.
+- **Buyer-list registration** is for loan-sale advisors, owned by Josh. Only the state is stored, never the agreement. `intermediaries nda` puts anything learned under an agreement on the NDA list.
+- **The route** on a candidate is `unknown` unless a source shows an advisor acting for that bank or a principal records a direct sale (`intermediaries direct`).
+
 ### Merger applications (PRD next-five E18-S3)
 
 A merger heard of when it is applied for, not when it closes, puts a principal in front of the acquirer while it decides what to do with the target's CRE book.

@@ -362,3 +362,49 @@ export async function salesOverview(client, { recent = 50 } = {}) {
     pricing: sales.pricing(ledger),
   };
 }
+
+// ---- Intermediaries (PRD next-five E19) -------------------------------------------------------------------------------------------
+// The engine's own functions (src/intermediaries.mjs), on the stored registry. For the principals only; never in a message.
+const INTERMEDIARY_DOCS = ['intermediaries/registry.json', 'intermediaries/manual.json', 'intermediaries/registrations.json'];
+export async function listIntermediaries(client, { kind = null } = {}) {
+  const [I, rules] = await Promise.all([engine('src/intermediaries.mjs'), loadRules()]);
+  const snap = await client.load(INTERMEDIARY_DOCS);
+  const registry = snap.docs['intermediaries/registry.json'] ?? null;
+  const regs = snap.docs['intermediaries/registrations.json'] ?? { firms: {} };
+  const today = new Date().toISOString().slice(0, 10);
+  const rows = registry ? I.rankFirms({ registry, config: rules.config, buybox: rules.buybox, asOf: today }).filter((r) => !kind || r.kinds.includes(kind)) : [];
+  return { builtAt: registry?.builtAt ?? null, kinds: I.KINDS, rows: rows.map((r) => ({ ...r, registration: regs.firms?.[r.key]?.state ?? null })) };
+}
+
+export async function intermediaryDetail(client, key) {
+  const [I, rules] = await Promise.all([engine('src/intermediaries.mjs'), loadRules()]);
+  const snap = await client.load(INTERMEDIARY_DOCS);
+  const registry = snap.docs['intermediaries/registry.json'] ?? null;
+  const firm = registry?.firms?.[need(key, 'A firm key')];
+  if (!firm) return null;
+  const regs = snap.docs['intermediaries/registrations.json'] ?? { firms: {}, credibilityPackage: null };
+  const row = I.rankFirms({ registry, config: rules.config, buybox: rules.buybox, asOf: new Date().toISOString().slice(0, 10) }).find((r) => r.key === key);
+  return { firm, row, kinds: I.KINDS, states: I.REG_STATES, mandates: firm.mandates.map((id) => registry.mandates[id]).filter(Boolean).sort((a, b) => String(b.date).localeCompare(String(a.date))),
+    registration: regs.firms?.[key] ?? null, credibilityPackage: regs.credibilityPackage ?? null };
+}
+
+export async function setRegistration(client, { key, state, by, recertifyBy }) {
+  const [{ LOADS }, I] = await Promise.all([engine('src/uow.mjs'), engine('src/intermediaries.mjs')]);
+  const { result } = await client.unitOfWork(LOADS.intermediaries, (dir) => I.setRegistration({ dir, key: need(key, 'A firm key'), state, by, recertifyBy: recertifyBy || null }));
+  return result;
+}
+
+// The route to a seller (E19-S4), for the candidate page.
+export async function routeOf(client, sellerKey) {
+  const I = await engine('src/intermediaries.mjs');
+  const snap = await client.load(INTERMEDIARY_DOCS);
+  if (!snap.docs['intermediaries/registry.json']) return null;
+  return I.routeFor({ registry: snap.docs['intermediaries/registry.json'], manual: snap.docs['intermediaries/manual.json'] ?? {}, registrations: snap.docs['intermediaries/registrations.json'] ?? {}, sellerKey });
+}
+
+// Buyer-list re-certifications due soon (E19-S3), for the Status page.
+export async function registrationReminders(client) {
+  const [I, rules] = await Promise.all([engine('src/intermediaries.mjs'), loadRules()]);
+  const snap = await client.load(['intermediaries/registrations.json']);
+  return I.registrationReminders({ registrations: snap.docs['intermediaries/registrations.json'] ?? {}, asOf: new Date().toISOString().slice(0, 10), withinDays: rules.config.intermediaries?.reminderDays ?? 30 });
+}
