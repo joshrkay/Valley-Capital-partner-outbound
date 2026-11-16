@@ -233,6 +233,92 @@ The Fed is closing its own data download tool by July 1, 2027, and points users 
 | Workday careers endpoints | Undocumented: "not documented as a public contract", and they can change without notice. The official REST API needs per-tenant OAuth. Unconfirmed: secondary pages. |
 | Indeed and Google job search | No read API. Indeed's Publisher job-search API is deprecated (Unconfirmed: secondary pages). Its Job Sync API is for ATS partners to post jobs. Seen. Google's old Jobs API shut down in 2021, and Cloud Talent Solution searches only your own jobs (Unconfirmed: secondary pages). Special-assets postings come from LinkUp or the Greenhouse and Lever boards instead (2.2). |
 
+### 2.7 New sellers: the E21 spikes (November 16, 2026)
+
+PRD next-five E21-S1 and S3. Measurements only: no adapter was built, and the spike data stayed in the data folder. Every figure below is from the files named, read on November 16, 2026.
+
+**Credit unions (E21-S1): NCUA 5300 Call Report, quarter ended June 30, 2026.**
+
+- **The data.** The quarterly ZIP, `ncua.gov/files/publications/analysis/call-report-data-<YYYY>-<MM>.zip` (8.1 MB), is linked from the quarterly-data page. robots.txt allows it.
+  - Its files are dated August 24, 2026, about 55 days after the quarter (the 70–76 days noted earlier was an older observation). The page was updated again on September 14, 2026 under "Updated Call Reports", so figures can be amended **[verify how often]**.
+  - Comma-delimited text files: `FOICU.txt` (one row per credit union: name, city, state, county, the low-income flag `LIMITED_INC`), `FS220*.txt` (the schedules), `AcctDesc.txt` (every account, its schedule, and `STATUS`), and **`Credit Union Branch Information.txt`** (every branch, with a main-office flag, its address and county).
+  - Metro presence works by branch county and state, matched to `metros.json`.
+- **The accounts.** Only accounts with `STATUS` True are filled. The older member-business-loan accounts (400J, 143B1, 400G, the 041G and 550G series) are retired and report zero. In use, amounts in dollars:
+
+  | What | Accounts |
+  |---|---|
+  | Construction and development | 143B3 (member) + 143B4 (purchased or participation interests to nonmembers) |
+  | Multifamily | 400M + 400M1 |
+  | Non-owner-occupied nonfarm nonresidential | 400J2 + 400J3 |
+  | Owner-occupied nonfarm nonresidential | 400H2 + 400H3 |
+  | All real-estate-secured commercial | 718A5 (= 718A3 + 718A4) |
+  | Reportable delinquency by bucket, per category | DL0078–0083 (C&D), DL0092–0097 (multifamily), DL0099–0104 (owner-occupied), DL0106–0110 (non-owner-occupied): 30–59, 60–89, 90–179, 180–359 and 360+ days |
+  | Year-to-date charge-offs | CH0023 (C&D), CH0027 (multifamily), CH0029 (owner-occupied), CH0031 (non-owner-occupied) |
+  | Commercial nonaccrual (all commercial) | DL0146 |
+  | Participations sold and purchased, outstanding | 691N8/N9 and 691L8/L9 |
+  | Assets, net worth, net member business loans | 010, 997, 400A |
+
+  The delinquency buckets are not the FDIC's: a credit union reports 90+ days delinquent by category, with nonaccrual only for all commercial loans, while a bank reports "noncurrent" (90+ and nonaccrual) per category. The comparison below is close, not exact.
+- **What the six metros hold.**
+  - **Coverage:** 243 of 4,299 credit unions have a branch in the six metros:
+
+    | Metro | Credit unions |
+    |---|---|
+    | Los Angeles | 117 |
+    | Phoenix | 42 |
+    | Denver | 41 |
+    | San Diego | 31 |
+    | Austin | 29 |
+    | Las Vegas | 16 |
+
+    178 of them have their main office there.
+  - **Size:** 233 of the 243 are under $10 billion in assets. Those 233 hold **$23.1 billion of CRE**:
+
+    | Category | Balance |
+    |---|---|
+    | Non-owner-occupied | $11.9 bn |
+    | Multifamily | $6.5 bn |
+    | Owner-occupied | $4.1 bn |
+    | Construction and development | $0.6 bn |
+
+    40 hold over $250 million each; 8 metro credit unions of any size hold over $1 billion. The 10 largest hold 49% of the metros' credit-union CRE.
+  - **Distress:** 90+ days delinquent is $311 million, **1.35%** of CRE:
+
+    | Category | 90+ days delinquent |
+    |---|---|
+    | Non-owner-occupied | **2.23%** |
+    | Owner-occupied | 0.80% |
+    | Multifamily | 0.19% |
+    | Construction and development | 0.12% |
+
+    30–89 days delinquent is 0.52%. Year-to-date charge-offs are $20 million.
+  - **Beside the banks in our list under $10 billion** (202 banks, the June 30, 2026 Call Report): $154.9 billion of CRE, noncurrent **1.06%**, 30–89 days 0.45%. So the credit unions add about **15% more CRE** to the universe, with somewhat more distress, concentrated in non-owner-occupied loans.
+- **They already sell.** 64 of the 233 have sold participations outstanding: $2.3 billion in all, against $2.7 billion purchased. A credit union selling CRE is a known pattern, usually to other credit unions.
+- **The business-lending cap** (the lesser of 1.75 times net worth or 12.25% of assets, on the net member business loan balance, account 400A) **[verify the statute and its exemptions]**.
+  - **Over the cap:** 27 metro credit unions are at or over it, and 20 of them carry the low-income designation (`LIMITED_INC` = 1), which exempts them.
+  - **Not designated low-income:** 7 are over the cap and 11 are between 80% and 100% of it.
+
+  A credit union near the cap has a reason to sell or participate out. That is a usable fit signal, once exempt credit unions are left out.
+- **Recommendation on D2: yes, credit unions are sellers worth adding, after the bank pipeline is in use.**
+  - The data is free, quarterly, clean, branch-level and close to the FDIC's in shape.
+  - The CRE is real ($23 billion in the metros under the cap), its non-owner-occupied distress runs above the banks', and the sector already sells participations.
+  - **Two things to settle first:** approved claims for a `credit_union` audience (the site speaks to banks today), and how a credit union decides on a sale (its business-lending staff, often with a credit union service organization), which the briefer's playbook does not cover yet.
+
+**Non-bank lenders (E21-S3).**
+
+- **Commercial mortgage REITs: watch, then build a light profile.** Their 10-K and 10-Q XBRL does tag the loan book:
+  - **What is tagged** (Blackstone Mortgage Trust's 10-Q for September 30, 2026, accession 0001061630-26-000097):
+    - loans by property type (`srt:MortgageLoansOnRealEstateDescriptionTypeOfPropertyAxis`: office, multifamily, hotel, industrial, retail, self-storage, other);
+    - loans by region (`srt:StatementGeographicalAxis`, with company-defined regions such as "United States Sunbelt" and "West");
+    - internal risk ratings (`us-gaap:InternalCreditAssessmentAxis`).
+  - **What is missing:** metros are not tagged, except a handful of cities for particular loans. The SEC's company-facts API leaves dimensions out, and shows only totals (loan count, carrying amount, delinquent principal). The monthly Financial Statement and Notes data sets carry the dimensional rows (num.tsv), 50 to 300 MB a month.
+  - **Verdict:** a paper profile by property type and broad region is possible for a few dozen filers; one by metro is not.
+- **CRE CLOs: drop.** They are offered privately under Rule 144A **[verify]**, and the SEC's asset-level filings (ABS-EE) cover registered deals only: EDGAR full-text search for "CRE CLO" in ABS-EE returned none. Loan-level data reaches investors through trustees and paid vendors (Trepp, CRED iQ), not public data. A CLO's collateral shows up in public only in aggregate, in the 10-K of a sponsor that consolidates it, which is the mortgage REIT case above.
+- **Debt funds: drop as a data source.**
+  - Form ADV gives an adviser's private funds with fund type and gross asset value (Schedule D 7.B.1), and Form D gives offering size (quarterly data sets).
+  - Both show that a fund exists and how big it is, never its book **[verify the ADV fields]**.
+  - Funds stay a relationship target (E19), not a data one.
+
 ## 3. What we listen for
 
 | Signal | Source | Pulled | Attaches to | Lead time |
@@ -350,7 +436,7 @@ Each step is a story with acceptance criteria in the PRD's format, and each ship
 | # | Decision | Default meanwhile |
 |---|---|---|
 | D1 | Budget for county data: a CA/NV vendor at about $119–599 a month, and a quote from SKLD for Colorado (Q8) | Free sources only |
-| D2 | Are credit unions sellers we want? | Not in scope |
+| D2 | Are credit unions sellers we want? | Not in scope. **E21-S1 recommends yes, after the bank pipeline is in use** (section 2.7) |
 | D3 | Which free accounts to open in the firm's name: FRED key, OCC API key, PACER account, Maricopa assessor token | None opened |
 | D4 | Counsel's view on FRED's commercial-use terms, and on news-wire and headline feeds | FRED waits; feeds not used |
 | D5 | The SEC User-Agent contact (Q11). It blocks the EDGAR full-text listener and live CMBS runs. | Waits |

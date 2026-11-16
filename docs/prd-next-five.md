@@ -357,14 +357,18 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 
 **Why.** Credit unions hold commercial real estate in our metros, report it quarterly to the NCUA, and are not covered. The plan also says much of the multifamily stress sits with bridge lenders, their CLOs and debt funds, which the pipeline does not see. Both are cheap to **measure** before anyone decides whether to build. Decision D2 in `docs/data-sources.md` (credit unions in or out) defaults to "not in scope". This epic's spikes give the principals the numbers to decide it.
 
-**E21-S1. NCUA spike.** *As a principal, I want to know how much CRE the credit unions in our metros hold, and how distressed it is, so that I can decide whether they are sellers we want.* P1, Now.
-- [ ] Download one quarter of NCUA 5300 data (ncua.gov quarterly ZIP of CSVs) and record, with dates:
-  - the files and the account codes for non-owner-occupied CRE, construction and development, member business loans, delinquency buckets and charge-offs **[verify each code against NCUA's account definitions]**;
-  - whether branch locations are published, and in which file **[verify]**, since metro presence depends on it;
-  - the publication lag (70–76 days was seen) and whether figures are amended.
-- [ ] Count the credit unions with a branch or headquarters in the six metros, their total CRE, and their noncurrent CRE. Put these beside the same totals for banks under the asset cap.
-- [ ] Check the member business lending cap **[verify: 12.25% of assets under the Federal Credit Union Act, with exceptions]**. A credit union near its cap has a reason to shed loans, which could be a fit signal of its own.
-- [ ] Findings go in `docs/data-sources.md`, with a recommendation on D2. No adapter is built in the spike. Spike data stays in the data folder.
+**E21-S1. NCUA spike.** *As a principal, I want to know how much CRE the credit unions in our metros hold, and how distressed it is, so that I can decide whether they are sellers we want.* P1, Now. **Done November 16, 2026** (findings in `docs/data-sources.md` 2.7).
+- [x] One quarter of NCUA 5300 data (June 30, 2026) recorded, with dates:
+  - **Files and codes:** the account codes for construction and development, multifamily, non-owner-occupied and owner-occupied commercial real estate, the delinquency buckets (DL series) and charge-offs (CH series). The older member-business-loan codes are retired (`STATUS` False, all zero).
+  - **Branch locations:** published, in `Credit Union Branch Information.txt`, with county and a main-office flag.
+  - **Lag:** about 55 days (files dated August 24). The page was updated on September 14, so amendments happen.
+- [x] **Counted, beside the banks:** 243 credit unions have a branch in the six metros. The 233 under $10 billion hold $23.1 billion of CRE, with 1.35% 90+ days delinquent and 2.23% for non-owner-occupied. The 202 banks in our list under $10 billion hold $154.9 billion, with 1.06% noncurrent. The two definitions differ slightly (section 2.7).
+- [x] **The business-lending cap:**
+  - 27 metro credit unions are at or over the cap, and 20 of them are low-income designated, so exempt.
+  - Among those not designated low-income, 7 are over the cap and 11 are within 20% of it: a usable fit signal once exemptions are excluded.
+- [x] **Recommendation on D2: yes, after the bank pipeline is in use.**
+  - Before building S2: approved claims for a `credit_union` audience, and a briefer playbook for how a credit union decides on a sale.
+  - Also, 64 of the 233 already sell participations ($2.3 billion outstanding).
 
 **E21-S2. The NCUA adapter and scoring.** *As a principal, I want credit unions scored and listed beside banks so that I can work them the same way.* P2, after D2 says yes.
 - [ ] `outbound sources run ncua`, keyed `ncua:<charter>`, with the full E2 contract.
@@ -372,12 +376,15 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 - [ ] A paper estimate (E14) for credit unions, tiered as reported, observed or inferred.
 - [ ] The drafter refuses a `credit_union` audience until `claims.json` has approved claims for it. The site speaks to banks today.
 
-**E21-S3. Non-bank lenders spike.** *As a principal, I want to know which non-bank lenders' CRE books can be seen in public data so that we know whether a paper profile is even possible for them.* P1, Now.
-- [ ] For each class, record what public data shows, with dates and links:
-  - **commercial mortgage REITs**: 10-K and 10-Q loan tables (property type, location, risk rating, maturity), and whether the SEC Financial Statement and Notes data sets carry them (`docs/data-sources.md` 2.1);
-  - **CRE CLOs**: whether any loan-level reporting is public, or only offered privately under Rule 144A **[verify]**;
-  - **debt funds**: what Form ADV and Form D show (existence and size, not the book) **[verify]**.
-- [ ] A recommendation per class: build, watch, or drop. No adapter is built in the spike.
+**E21-S3. Non-bank lenders spike.** *As a principal, I want to know which non-bank lenders' CRE books can be seen in public data so that we know whether a paper profile is even possible for them.* P1, Now. **Done November 16, 2026** (findings in `docs/data-sources.md` 2.7).
+- [x] For each class, what public data shows:
+  - **Commercial mortgage REITs:** 10-K and 10-Q XBRL tags loans by property type, by company-defined region and by internal risk rating; metros are not tagged. Checked on Blackstone Mortgage Trust's 10-Q for September 30, 2026. The SEC company-facts API drops the dimensions. The monthly Financial Statement and Notes data sets keep them.
+  - **CRE CLOs:** offered privately under Rule 144A **[verify]**. No asset-level ABS-EE filings were found; loan-level data is sold by vendors, not published.
+  - **Debt funds:** Form ADV (private funds, fund type, gross asset value) and Form D (offering size) show existence and size, not the book **[verify the ADV fields]**.
+- [x] **Recommendation per class:**
+  - **Mortgage REITs: watch.** A property-type and region profile from the Financial Statement and Notes data is possible if a principal wants REITs as sellers.
+  - **CRE CLOs: drop.**
+  - **Debt funds: drop as data,** keep as relationships (E19).
 
 **E21-S4. Non-bank adapters.** P2. Stories written after S3, for the classes it recommends.
 
@@ -385,8 +392,8 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 
 | # | Decision | Default |
 |---|---|---|
-| D2 | (From `docs/data-sources.md`.) Are credit unions sellers we want? | Not in scope until E21-S1 reports |
-| D-N1 | Which non-bank classes, if any, after E21-S3 | None |
+| D2 | (From `docs/data-sources.md`.) Are credit unions sellers we want? | Not in scope. E21-S1 has reported, and recommends yes after the bank pipeline is in use |
+| D-N1 | Which non-bank classes, if any, after E21-S3 | None. E21-S3 recommends watching mortgage REITs and dropping CRE CLOs and debt funds |
 
 ---
 
