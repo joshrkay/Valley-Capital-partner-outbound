@@ -9,7 +9,11 @@
 //                    (Q11) and confirmed filers, and a hit counts only once a principal has read the filing and recorded that the bank
 //                    sold. An 8-K Item 2.01 hit is never a label on its own: the bank may have bought (E16-S3);
 //   merger           an ordinary merger: off unless a principal lists it, since counting every merger would reward size;
-//   enforcement_order  waits for E18-S2.
+//   enforcement_order  a formal order against the bank (consent order, cease and desist, written agreement, PCA directive) from the Federal
+//                    Reserve's, the FDIC's or the OCC's published lists (E18-S2). Off by default (D-B2 lists the default kinds); a principal adds it
+//                    to config.backtest.labelKinds. Scoring gives enforcement signals but no points (D-E1), so the label does not grade the score
+//                    on its own inputs. An order matches a bank only by name, in today's institution list, so a bank that failed or closed
+//                    is usually not matched: this kind under-counts the banks that went under.
 // A bank with no label is unlabelled, not safe. Nothing here calls it a negative.
 import { readJson, writeJson, appendJsonl } from '../store.mjs';
 import { startRun, finishRun, CHANGES, scrub } from '../sources/runlog.mjs';
@@ -18,6 +22,7 @@ import { fdicSalesPaths } from '../sources/fdicsales.mjs';
 import { loadFilers, confirmedCiks } from '../sources/filers.mjs';
 import { METRICS, CATEGORIES } from '../metrics.mjs';
 import { backtestPaths } from './panel.mjs';
+import { ordersByBank, ACTIVE_TYPES } from '../sources/enforcement.mjs';
 
 // What each kind is read from: the stored files and the source fields its date and bank come from. The leakage test checks these
 // against every field a scoring.json component reads (componentFields).
@@ -27,7 +32,7 @@ export const LABEL_KINDS = Object.freeze({
   fdic_loan_sale: { title: 'FDIC loan sale', reads: ['sources/fdic/sales.json'], fields: ['saleId', 'announcedOn', 'eventDates', 'keyDates', 'receiverships'], built: true },
   disclosed_sale: { title: 'Disclosed sale', reads: ['sources/edgar/filings.json'], fields: ['fileDate', 'form', 'items', 'searches'], built: false },
   merger: { title: 'Ordinary merger', reads: ['sources/fdic/events.json', 'backtest/panel/events.json'], fields: ['CHANGECODE', 'EFFDATE', 'OUT_CERT', 'ACQ_CERT', 'TRANSNUM'], built: true },
-  enforcement_order: { title: 'Enforcement order', reads: [], fields: [], built: false },
+  enforcement_order: { title: 'Enforcement order', reads: ['sources/enforcement/orders.json', 'sources/enforcement/fdic-orders.json', 'sources/enforcement/occ-orders.json'], fields: ['date', 'type', 'regulator', 'sourceId', 'link', 'parties'], built: true },
 });
 export const DEFAULT_KINDS = Object.freeze(['failure', 'assisted_merger', 'disclosed_sale', 'fdic_loan_sale']);
 export const UNLABELLED = 'A bank with no label is unlabelled, not safe: public sources miss many real sales and much real pressure, so an unlabelled bank may have sold, or been under pressure, without a public record.';
@@ -39,6 +44,8 @@ const FAILURE_LINKS = {
   csv: (cert) => ({ source: 'fdic:failed-bank-csv', ids: [cert], link: 'https://www.fdic.gov/bank-failures/download-data.csv' }),
 };
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
+// Where an order with no document of its own is listed, so every label's source has a link.
+const ORDER_LISTS = { frb: 'https://www.federalreserve.gov/supervisionreg/enforcementactions.htm', fdic: 'https://orders.fdic.gov/s/', occ: 'https://apps.occ.gov/EASearch' };
 
 // Every Call Report or Summary of Deposits field a scoring.json component reads: a label kind may derive from none of them.
 export function componentFields(scoring) {
@@ -120,6 +127,17 @@ export function buildLabels({ dir, config, filings = false, now = new Date(), cl
         }
       }
     }
+    if (on.has('enforcement_order')) {
+      for (const [bank, list] of [...ordersByBank({ dir })].sort(([x], [y]) => x.localeCompare(y))) {
+        if (!/^fdic:\d+$/.test(bank)) continue;
+        for (const r of list) {
+          if (r.kind !== 'order' || !ACTIVE_TYPES.includes(r.type) || !ISO.test(String(r.date ?? ''))) continue;
+          rowsRead++;
+          labels.push({ id: `enforcement_order:${bank}:${r.key}`, key: bank, kind: 'enforcement_order', date: r.date,
+            sources: [{ source: `enforcement:${r.regulator}`, ids: [String(r.sourceId ?? r.key)], link: r.link ?? ORDER_LISTS[r.regulator] ?? ORDER_LISTS.frb, date: r.date }] });
+        }
+      }
+    }
     const invalid = labels.map((l) => [l.id, validate(l)]).filter(([, e]) => e.length);
     if (invalid.length) {
       const errors = [`${invalid.length} label(s) failed the field check; nothing was written: ${invalid.slice(0, 10).map(([id, e]) => `${id}: ${e.join('; ')}`).join(' | ')}`];
@@ -148,8 +166,8 @@ export function buildLabels({ dir, config, filings = false, now = new Date(), cl
     const count = (k) => labels.filter((l) => l.kind === k).length;
     const kinds = Object.fromEntries(Object.entries(LABEL_KINDS).map(([k, def]) => {
       if (k === 'disclosed_sale') return [k, { status: 'unavailable', listed: wanted.includes(k), labels: 0, reasons: ds.reasons }];
-      if (!def.built) return [k, { status: 'unavailable', listed: wanted.includes(k), labels: 0, reasons: ['Waits for E18-S2 (enforcement orders).'] }];
-      return [k, on.has(k) ? { status: 'on', labels: count(k) } : { status: 'off', labels: 0, reasons: [k === 'merger' ? 'Ordinary mergers are not labels by default: a merger may follow pressure or may not, and counting every one would reward size (D-B2).' : 'Not listed in config.backtest.labelKinds.'] }];
+      if (!def.built) return [k, { status: 'unavailable', listed: wanted.includes(k), labels: 0, reasons: ['Not built.'] }];
+      return [k, on.has(k) ? { status: 'on', labels: count(k) } : { status: 'off', labels: 0, reasons: [k === 'merger' ? 'Ordinary mergers are not labels by default: a merger may follow pressure or may not, and counting every one would reward size (D-B2).' : k === 'enforcement_order' ? 'Built, and off until a principal adds enforcement_order to config.backtest.labelKinds: the default kinds were decided on 2026-11-14 without it. It matches orders to banks in today\'s list by name, so it under-counts banks that failed.' : 'Not listed in config.backtest.labelKinds.'] }];
     }));
     const secFilers = secFilerKeys(dir);
     writeJson(bp.labels, {
