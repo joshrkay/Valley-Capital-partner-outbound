@@ -154,6 +154,16 @@ export function buildCard(item, { scoring = {} } = {}) {
     add(`It has sold before: ${s.label}.`, [s.id, ...(s.evidence ?? [])]);
   }
 
+  // Enforcement (next-five E18-S2): an order, its termination, or an order still in force. The label is a fixed template from
+  // src/sources/enforcement.mjs over a type code, the regulator and dates; it names no person and quotes no order.
+  // An order still in force is stated once, as in force: its event signal adds nothing beside it.
+  const enf = (item.signals ?? []).filter((x) => x.rule === 'enforcement');
+  const inForce = new Set(enf.filter((x) => x.type === 'enforcement_active').map((x) => x.evidence?.[0]));
+  for (const s of enf.filter((x) => !(x.type === 'enforcement' && inForce.has(x.evidence?.[0]))).slice(0, lim.maxEnforcement ?? 2)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(s.date)) || !s.label) continue;
+    add(s.type === 'enforcement_active' ? `${s.label}.` : `An enforcement action: ${s.label}.`, [s.id, ...(s.evidence ?? [])]);
+  }
+
   // Timing: the metric signals that fired at this quarter, each from its rule type's template. A threshold signal for a level already stated adds nothing.
   for (const s of (item.signals ?? []).filter((x) => SIGNAL_TYPES.includes(x.rule) && !(x.rule === 'above' && statedLevels.has(x.metric))).slice(0, lim.maxSignals)) {
     const label = METRICS[s.metric]?.label;

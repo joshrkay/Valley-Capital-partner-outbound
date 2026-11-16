@@ -1,6 +1,7 @@
 // Signal coverage (PRD next-five E18-S1). For Tier A, Tier B and all candidates: how many each signal source can see, so the principals
 // build the sources that close the biggest gap. The SEC filings listener sees only banks with a confirmed filer; CMBS data sees
-// servicers, not banks; the sale ledger sees banks that have sold. Enforcement orders (E18-S2) are not built yet, and say so.
+// servicers, not banks; the sale ledger sees banks that have sold; enforcement orders (E18-S2, the Federal Reserve's for now) see banks
+// an order names, by exact name and state or a principal's alias.
 //
 // Code only, no model and no network: every count comes from stored files, and every sentence is a fixed template. The same stored data
 // always gives the same report. The report holds counts only and names no bank, so it can be shown on the Status page and carried in a
@@ -12,6 +13,7 @@ import { matchInstitution } from './candidates.mjs';
 import { periodLabel } from './metrics.mjs';
 import { groupBySeller } from './sales.mjs';
 import { mappingStatus } from './sources/filers.mjs';
+import { orderBanks } from './sources/enforcement.mjs';
 
 // The stored files the report reads, and nothing else (LOADS.coverage in src/uow.mjs lists the same paths).
 export const COVERAGE_PATHS = Object.freeze({
@@ -20,6 +22,9 @@ export const COVERAGE_PATHS = Object.freeze({
   filers: 'sources/edgar/filers.json',
   servicers: 'sources/edgar/servicers.json',
   ledger: 'sales/ledger.json',
+  enforcement: 'sources/enforcement/orders.json',
+  fdicOrders: 'sources/enforcement/fdic-orders.json',
+  institutions: 'sources/fdic/institutions.json',
 });
 
 export const INTRO = 'Which candidates each signal source can see, from stored data only: no network, no model. Counts only; no bank is named.';
@@ -30,6 +35,7 @@ const STORES = Object.freeze([
   { id: 'filers', path: COVERAGE_PATHS.filers, label: 'the bank-to-filer map', how: 'outbound filers suggest, then confirm or reject' },
   { id: 'servicers', path: COVERAGE_PATHS.servicers, label: 'the CMBS pull', how: 'outbound sources run edgar' },
   { id: 'ledger', path: COVERAGE_PATHS.ledger, label: 'the sale ledger', how: 'outbound sales build' },
+  { id: 'enforcement', path: COVERAGE_PATHS.enforcement, label: 'the enforcement orders', how: 'outbound sources run enforcement' },
 ]);
 
 // One line per source, in a fixed order. `test` reads the facts worked out for one candidate below. A source that is not built has no
@@ -47,8 +53,8 @@ const ROWS = Object.freeze([
     basis: 'The bank is named as the special servicer of a CMBS loan in our metros and sectors, or of a CMBS liquidation in the sale ledger, by its exact name or an alias a principal added (candidates/aliases.json). CMBS data describes servicers\' loans, not banks\' own.' },
   { id: 'sale', label: 'Sale-ledger event (as the seller)', store: 'ledger', test: (f) => f.sale,
     basis: 'The sale ledger holds a supported event with the bank as the seller that acted, as outbound sales sellers shows; a special servicer is matched by its name as above. An acquirer is not counted.' },
-  { id: 'enforcement', label: 'Enforcement record', built: false,
-    basis: 'Not built yet (PRD next-five E18-S2). Shown as not built, never as zero.' },
+  { id: 'enforcement', label: 'Enforcement record', store: 'enforcement', test: (f) => f.enforcement,
+    basis: 'An enforcement order (not only a termination) names the bank, matched by its exact name and state, or by an alias a principal added (outbound enforcement alias). Federal Reserve orders, and FDIC orders once a principal has run outbound sources run fdicorders; OCC and state orders are not built (PRD next-five E18-S2). An order against a holding company counts only through an alias.' },
 ]);
 export const COVERAGE_ROWS = Object.freeze(ROWS.map((r) => r.id));
 
@@ -61,8 +67,10 @@ const notBuilt = (of) => ({ count: null, of, share: null, text: 'not built' });
 
 // The report, from the stored documents themselves (each one null when it is not in the data folder). Pure: no clock, no I/O.
 // latest: candidates/latest.json; aliases: candidates/aliases.json; filers: sources/edgar/filers.json; servicers:
-// sources/edgar/servicers.json; ledger: sales/ledger.json.
-export function buildCoverage({ latest = null, aliases = null, filers = null, servicers = null, ledger = null } = {}) {
+// sources/edgar/servicers.json; ledger: sales/ledger.json; enforcement: sources/enforcement/orders.json; fdicOrders:
+// sources/enforcement/fdic-orders.json; institutions:
+// sources/fdic/institutions.json.
+export function buildCoverage({ latest = null, aliases = null, filers = null, servicers = null, ledger = null, enforcement = null, fdicOrders = null, institutions: bankList = null } = {}) {
   const items = (Array.isArray(latest?.items) ? latest.items : []).filter((i) => i && typeof i.key === 'string');
   const keys = new Set(items.map((i) => i.key));
 
@@ -88,9 +96,16 @@ export function buildCoverage({ latest = null, aliases = null, filers = null, se
   let matched = 0;
   for (const n of names.values()) { const k = candidateFor(n); if (k) { linked.add(k); matched++; } }
 
-  const facts = new Map(items.map((i) => [i.key, { filer: mappingStatus(filers?.[i.key]), cmbs: linked.has(i.key), sale: sold.has(i.key) }]));
+  // Enforcement: the same matching the signals use (src/sources/enforcement.mjs resolveParty), against the same bank list
+  // (sources/fdic/institutions.json, with its cities and states), so a count here is a bank that has an enforcement signal. Without
+  // that file, the candidates' names alone.
+  const banks = bankList ?? institutions;
+  const ordered = new Set();
+  for (const o of [...Object.values(enforcement ?? {}), ...Object.values(fdicOrders ?? {})]) if (o?.kind === 'order') for (const k of orderBanks(o, { institutions: banks, aliases: aliases ?? {} })) if (keys.has(k)) ordered.add(k);
+
+  const facts = new Map(items.map((i) => [i.key, { filer: mappingStatus(filers?.[i.key]), cmbs: linked.has(i.key), sale: sold.has(i.key), enforcement: ordered.has(i.key) }]));
   const groups = GROUPS.map(([id, label]) => ({ id, label, members: items.filter((i) => id === 'all' || i.tier === id) }));
-  const present = { filers: filers !== null, servicers: servicers !== null, ledger: ledger !== null };
+  const present = { filers: filers !== null, servicers: servicers !== null, ledger: ledger !== null, enforcement: enforcement !== null || fdicOrders !== null };
 
   const rows = ROWS.map((r) => {
     const built = r.built !== false;
