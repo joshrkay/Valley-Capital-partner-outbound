@@ -689,6 +689,25 @@ Rules across the epic:
 **E8-S4. Market view.** *As a principal, I want a map of distress across the six metros so that I can see where pressure is building.* P2.
 - [ ] Metros shaded by the median CRE noncurrent ratio of their banks, weighted by metro deposits, with drill-down to the list.
 
+**E8-S5. Working without Gmail.** *As a principal, I want to record in the web app each send I make from my own mailbox, and each reply, opt-out, bounce, meeting or handoff, so that the guard's touch log stays current before the Gmail integration (E9) exists.* P0, R2. **Built** (`web/app/accounts/[id]/touches.jsx`, `web/app/senders/`, `src/senders.mjs`). It changes no E9 story: E9 would record the same events automatically.
+- [x] The account page shows the touch history, newest first, and what `guard due` says for the account.
+- [x] **Record a send:**
+  - the channel, the date and the sender; the date defaults to today, and a date after today is refused;
+  - the step is counted as `guard record` counts it;
+  - before recording, the form shows the guard's verdict (`checkTouch`) for that exact send;
+  - it uses `recordObservedSend`, so the send is always recorded, and any rule it broke is kept on the record and shown.
+- [x] **Record a reply, bounce, meeting or handoff,** with its date (not in the future), through `recordEvent`.
+- [x] **An opt-out** has its own form and a confirmation. It suppresses the person and the address at once.
+- [x] No message text is stored. The optional note is a short internal one; a note that looks like an address or a phone number is refused.
+- [x] Every recording carries who made it, on the touch-log line and the guard's audit line. It loads only the guard's files and the one account (`recordLoads`).
+- [x] **A Senders page,** linked from the nav, lists, adds and edits senders. It shares one rule with the command line (`src/senders.mjs`, `outbound senders list|set|remove`):
+  - every field the guard requires, with no `[CONFIRM]`;
+  - a business mailbox for a person;
+  - a street address (CAN-SPAM).
+- [x] The page shows whether sending is ready, by the rule `outbound status` uses, kill switch included. Each change is audited with the sender's id and the changed field names, never a value.
+- [x] A sender that a recorded touch names cannot be removed.
+- [x] Recording a send leaves the draft as it is, as `guard record` does.
+
 ---
 
 ### E9. Mailbox: Gmail drafts, sends and replies

@@ -30,7 +30,7 @@ Start with `docs/prd-signal-pipeline.md` for the pipeline, and `docs/research-ag
   - servicers as scored candidates (E4-S3);
   - a contact-data vendor's API (E7-S2 tests a vendor's exported results; no vendor is wired in);
   - deploying the platform (E12-S7);
-  - Gmail drafts and reply detection (E9);
+  - Gmail drafts and reply detection (E9). Until then, sends and replies are recorded by hand: see "Working without Gmail" below;
   - state enforcement orders (next-five E18-S2 has the Federal Reserve, the OCC, and the FDIC on a principal's machine; state orders were checked and not built, see the PRD), and merger applications the OCC or the FDIC decide alone (E18-S3 reads the Federal Reserve's H.2);
   - quarterly nurture (E10);
   - the referral mapper's drafted ask to a connector (E22 finds the routes and gives a checklist; it drafts nothing, PRD D-R7), and county records that name a lender's counsel (E22-S3 has the event shape and the seam, no adapter);
@@ -54,7 +54,7 @@ npm run outbound -- status                          # shows what is missing befo
 npm run outbound:test                               # no network, no key
 ```
 
-Fill `senders.json` (a sender with a `[CONFIRM]` placeholder blocks all sending), then add `accounts/<id>.json` for accounts a principal chose. The account shape is in the example `init` creates. Then, for each account:
+Fill `senders.json` with `outbound senders set` or the web app's Senders page (a sender with a `[CONFIRM]` placeholder blocks all sending), then add `accounts/<id>.json` for accounts a principal chose. The account shape is in the example `init` creates. Then, for each account:
 
 ```bash
 npm run outbound -- research run --account acme-bank --dry-run   # see exactly what would be sent, free
@@ -203,6 +203,22 @@ npm run outbound -- account contact --account acme-bank     # each field and its
 - **Vendors** are tested before anyone pays (E7-S2). Write `contacts/known.json` in the data folder (people we know: name, institution, email, title, asOf). Then run `contacts vendor-test --vendor NAME --results export.csv`, and `contacts vendor-pass --vendor NAME --by NAME`, which records a pass only if the latest test meets the thresholds in `contacts.json` (placeholders). Without a pass, a vendor cannot be a source.
 
 On the platform, the account page's contact section does the same. The deletion needs the account's name typed, and migration `20261114200000_log_redaction.sql` lets it reach the touch log.
+
+### Working without Gmail (PRD E8-S5)
+
+Gmail drafts and reply detection (E9) are not built. Until they are, a principal sends by hand and the web app keeps the guard's touch log current. The log drives the caps, the follow-up timing and the opt-out stops, so record each event the day it happens.
+
+1. **Approve the draft** on the Approvals page (or `draft approve`). Approving re-runs the linter and the guard, and never sends.
+2. **Send it from your own mailbox**, as approved.
+3. **Record the send** on the account page, under "Outreach: what happened". Give the channel, the date and the sender. The date is today by default and never later; a call can carry its time, so calling hours are checked. The step is the next one, counted as `guard record` counts it. "Check with the guard" first shows the guard's verdict for exactly that send. The send is then recorded whatever the verdict, because it happened. Any rule it broke is kept on the record and shown to you, and the guard still checks every later touch in full.
+4. **Record what comes back**: a reply, a bounce, a meeting or a handoff, with its date. A reply, meeting or handoff ends the sequence for everyone at the bank. An opt-out has its own form and a confirmation: it suppresses the person and the address at once. Store no message text. The optional note is a short internal one, and one that looks like an address or a phone number is refused.
+
+Senders come first. The **Senders** page, or `outbound senders list|set|remove`, checks each sender the way the guard does:
+- every required field is filled, with no `[CONFIRM]` left;
+- the mailbox is a business address for a person;
+- the street address is complete, as CAN-SPAM requires.
+
+It also shows whether sending is ready, by the same rule as `outbound status`, kill switch included. A sender that a recorded touch names cannot be removed. Every change is audited with the sender's id and the fields that changed, never their values. On the command line, `guard record` and `guard event` take `--by NAME`. Recording a send leaves its draft as it is, as `guard record` does.
 
 ### The weekly triage (PRD E6-S5)
 

@@ -23,6 +23,7 @@ export default function RootLayout({ children }) {
               <a href="/accounts">Accounts</a>
               <a href="/network">Network</a>
               <a href="/drafts">Approvals</a>
+              <a href="/senders">Senders</a>
               <a href="/pilot">Pilot</a>
               <a href="/status">Status</a>
             </nav>

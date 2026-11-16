@@ -83,7 +83,21 @@ export const LOADS = Object.freeze({
   backtestPanel: ['backtest/panel/', 'sources/runs.jsonl'],
   backtestLabels: ['backtest/', 'sources/fdic/failed.json', 'sources/fdic/events.json', 'sources/fdic/sales.json', 'sources/fdic/state.json', 'sources/edgar/filers.json', 'sources/runs.jsonl'],
   backtestRun: ['backtest/'],
+  // Recording what happened, by hand, from the web app (working without Gmail): a send a principal already made from their own mailbox
+  // (recordObservedSend), or a reply, opt-out, bounce, meeting or handoff (recordEvent). The guard's files and the one account, narrowed
+  // by recordLoads(). An opt-out writes suppression.json, which the guard's list holds; the touch log is only appended to.
+  record: [...GUARD, 'accounts/'],
+  // The sender settings (src/senders.mjs): senders.json, and the KILL document for the readiness rule. Removing a sender also reads the
+  // touch log, because a sender a recorded touch names is never removed.
+  senders: ['senders.json', 'KILL'],
+  senderRemove: ['senders.json', 'touches.jsonl', 'KILL'],
 });
+
+// The recording actions' load list, narrowed to the one account they record against.
+export function recordLoads(id) {
+  safeId(id);
+  return LOADS.record.map((p) => (p === 'accounts/' ? `accounts/${id}.json` : p));
+}
 
 // The contact actions' load lists, narrowed to one account where the action touches only that account.
 export function contactLoads(kind, id) {

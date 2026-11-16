@@ -42,13 +42,16 @@ export function suppressedPerson(entries, name, institutions = []) {
   return entries.find((x) => x?.type === 'person' && ((x.value && norm(x.value) === norm(name)) || hit(x, hs))) ?? null;
 }
 
+// The kill switch outside config.json: a KILL file (on the platform, a KILL document) or OUTBOUND_KILL=1. checkTouch adds config.killSwitch.
+export const killFileOn = (dir, env = process.env) => exists(join(dir, 'KILL')) || env.OUTBOUND_KILL === '1';
+
 export function loadContext({ dir, config, env = process.env }) {
   return {
     config,
     suppression: readJson(join(dir, 'suppression.json'), { entries: [] }).entries ?? [],
     touches: readJsonl(join(dir, 'touches.jsonl')),
     senders: readJson(join(dir, 'senders.json'), { senders: [] }).senders ?? [],
-    kill: exists(join(dir, 'KILL')) || env.OUTBOUND_KILL === '1',
+    kill: killFileOn(dir, env),
   };
 }
 
@@ -216,32 +219,39 @@ export function recordTouch(dir, touch, ctx) {
   return rec;
 }
 
+// Who recorded it (a principal's name, from --by or the web app's session), on the log line and its audit line. Absent when not given.
+const byOf = (by) => { const b = String(by ?? '').trim(); return b && b !== 'true' ? { by: b } : {}; };
+
 // A send that has already happened: a person sent it, or a mailbox sync saw it leave (PRD E9-S2). It is ALWAYS recorded, because the log
 // must match reality: refusing to log a real send would leave the caps, the cadence and the one-at-a-time rule counting from a false
 // history. Any rule the send broke (a cap filled, a suppression added after the draft was approved) is kept on the record and audited.
-export function recordObservedSend(dir, touch, ctx) {
+export function recordObservedSend(dir, touch, ctx, { by } = {}) {
   const r = checkTouch(touch, ctx);
   const codes = r.errors.map((e) => e.code);
-  const rec = { type: 'touch', accountId: touch.accountId, institution: touch.institution, step: touch.step, channel: touch.channel, sender: touch.sender, date: ymd(touch.date ?? new Date()), recordedAt: new Date().toISOString(), observed: true, ...(codes.length ? { violations: codes } : {}) };
+  const who = byOf(by);
+  const rec = { type: 'touch', accountId: touch.accountId, institution: touch.institution, step: touch.step, channel: touch.channel, sender: touch.sender, date: ymd(touch.date ?? new Date()), recordedAt: new Date().toISOString(), observed: true, ...who, ...(codes.length ? { violations: codes } : {}) };
   appendJsonl(join(dir, 'touches.jsonl'), rec);
   ctx.touches.push(rec);
-  audit(dir, { type: codes.length ? 'send_recorded_with_violations' : 'send_recorded', accountId: touch.accountId, channel: touch.channel, step: touch.step, codes });
+  audit(dir, { type: codes.length ? 'send_recorded_with_violations' : 'send_recorded', accountId: touch.accountId, channel: touch.channel, step: touch.step, codes, ...who });
   return { rec, violations: r.errors };
 }
 
+// The events a principal records (stopEvents in config.json says which of them end the sequence).
+export const EVENT_TYPES = Object.freeze(['reply', 'opt_out', 'bounce', 'meeting', 'handoff']);
+
 // A reply, opt-out, bounce, meeting or handoff. An opt-out suppresses the person and address at once. `ref` names the record that caused
 // the event (a confirmed call's meeting carries "call:<proposal id>"), so a retried action can see that its event is already logged.
-export function recordEvent(dir, { accountId, institution, type, date, note, person, ref }, ctx) {
-  const allowed = ['reply', 'opt_out', 'bounce', 'meeting', 'handoff'];
-  if (!allowed.includes(type)) throw new Error(`Unknown event "${type}". Use ${allowed.join(', ')}.`);
-  const rec = { type, accountId, institution, date: ymd(date ?? new Date()), note: note ? String(note).slice(0, 200) : undefined, ...(ref ? { ref: String(ref) } : {}), recordedAt: new Date().toISOString() };
+export function recordEvent(dir, { accountId, institution, type, date, note, person, ref, by }, ctx) {
+  if (!EVENT_TYPES.includes(type)) throw new Error(`Unknown event "${type}". Use ${EVENT_TYPES.join(', ')}.`);
+  const who = byOf(by);
+  const rec = { type, accountId, institution, date: ymd(date ?? new Date()), note: note ? String(note).slice(0, 200) : undefined, ...(ref ? { ref: String(ref) } : {}), ...who, recordedAt: new Date().toISOString() };
   appendJsonl(join(dir, 'touches.jsonl'), rec);
   ctx.touches.push(rec);
   if (type === 'opt_out' && person) {
-    if (person.email) addSuppression(dir, { type: 'email', value: String(person.email).toLowerCase(), reason: 'opt_out' }, ctx);
-    if (person.name) addSuppression(dir, { type: 'person', value: person.name, reason: 'opt_out' }, ctx);
+    if (person.email) addSuppression(dir, { type: 'email', value: String(person.email).toLowerCase(), reason: 'opt_out', ...who }, ctx);
+    if (person.name) addSuppression(dir, { type: 'person', value: person.name, reason: 'opt_out', ...who }, ctx);
   }
-  audit(dir, { type: 'event', accountId, event: type });
+  audit(dir, { type: 'event', accountId, event: type, ...who });
   return rec;
 }
 
@@ -255,7 +265,7 @@ export function addSuppression(dir, entry, ctx) {
   all.entries.push(e);
   writeJson(file, all);
   ctx?.suppression.push(e);
-  audit(dir, { type: 'suppress', entryType: e.type, reason: e.reason });
+  audit(dir, { type: 'suppress', entryType: e.type, reason: e.reason, ...(e.by ? { by: e.by } : {}) });
   return e;
 }
 
