@@ -7,5 +7,6 @@ node_modules/
 data/
 /backtest/
 /intermediaries/
+/market/
 KILL
 .DS_Store

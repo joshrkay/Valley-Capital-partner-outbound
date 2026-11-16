@@ -86,6 +86,14 @@
   "stopEvents": ["reply", "opt_out", "meeting", "handoff"],
   "calls": { "callablePhoneTypes": ["landline"], "hours": [9, 17] },
   "outcomes": { "_note": "PRD E15-S4, the outcomes report. PLACEHOLDERS. Below minToTune confirmed call outcomes, the report says the counts are too few to tune scoring weights on. leadTimeBucketsDays are the edges of the lead-time groups, from an account's first signal to its first meeting. The report never changes weights; a principal does.", "minToTune": 30, "leadTimeBucketsDays": [30, 90, 180, 365] },
+  "market": {
+    "_note": "PRD next-five E20, the market data pack (outbound market pack). The disclosure guard (D-M3, decided 2026-11-16: these strict defaults). minInstitutions: a bank figure needs at least this many banks; maxShare: no one bank (or one CMBS loan) may be more than this share of a figure; minLoans, minTrusts, minServicers: a CMBS figure needs at least this many loans, distinct trusts and distinct special servicers. Complementary suppression follows. Left out (D-M2, decided): failures, FDIC loan sales, implied recoveries. Publishing waits for counsel (Q25); when it publishes, it is a data section in the news desk's monthly Hotel loan watch, widened to multifamily and retail, under the firm's name (D-M1, decided).",
+    "minInstitutions": 5,
+    "maxShare": 0.5,
+    "minLoans": 10,
+    "minTrusts": 3,
+    "minServicers": 2
+  },
   "intermediaries": {
     "_note": "PRD next-five E19 (outbound intermediaries ...). kinds: the intermediary kinds in scope (D-I1, decided 2026-11-16: loan-sale advisors and CMBS special servicers; receivers and counsel wait for county records). weights: the ranking (D-I3, decided 2026-11-16: PLACEHOLDERS, a principal tunes them after reading the first ranked list); each component earns weight x min(value / full, 1): metroMandates (mandates in our metros), sectorMandates (in buy-box sectors), namedSellers (distinct sellers a source names; an unknown seller never counts), recentMandates (each mandate worth 0.5^(age in months / halfLifeMonths)), balance (dollars where a source gives one). reminderDays: a buyer-list re-certification due within this many days shows on the Status page. Registrations and proof of funds are owned by Josh (D-I2, decided); proof of funds waits for the credibility package (research agenda D9).",
     "kinds": ["loan_sale_advisor", "special_servicer"],

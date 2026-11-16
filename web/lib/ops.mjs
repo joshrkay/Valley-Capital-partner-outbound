@@ -408,3 +408,11 @@ export async function registrationReminders(client) {
   const snap = await client.load(['intermediaries/registrations.json']);
   return I.registrationReminders({ registrations: snap.docs['intermediaries/registrations.json'] ?? {}, asOf: new Date().toISOString().slice(0, 10), withinDays: rules.config.intermediaries?.reminderDays ?? 30 });
 }
+
+// ---- The market data pack (PRD next-five E20) -----------------------------------------------------------------------------------
+// The latest stored pack (market/<quarter>.json), aggregates only. For the principals; publishing waits for counsel (Q25).
+export async function latestMarketPack(client) {
+  const snap = await client.load(['market/']);
+  const keys = Object.keys(snap.docs).filter((k) => /^market\/\d{4}-\d{2}-\d{2}\.json$/.test(k)).sort();
+  return keys.length ? snap.docs[keys.at(-1)] : null;
+}

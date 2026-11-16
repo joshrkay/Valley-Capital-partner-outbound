@@ -384,13 +384,21 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 - [ ] A nurture draft links to the note and quotes no figure from it. The linter already rejects a figure that is not in a cleared fact (`src/lint.mjs`); a test confirms it does so for a nurture draft that quotes the note.
 - [ ] The same note can go to Group B intermediaries (E19-S5) under the same rules.
 
-**Decisions for a principal.**
+**Decided by a principal on November 16, 2026** (the E20 interview).
 
-| # | Decision | Default |
+| # | Decision | Decided |
 |---|---|---|
-| D-M1 | Publish a market note at all, and under whose name | Not published; the pack can still be built for principals |
-| D-M2 | Which sections the note may carry beyond the defaults (failures, FDIC sales, recoveries) | Defaults only |
-| D-M3 | The disclosure thresholds | 5 institutions; no one over half |
+| D-M1 | Publish at all, and under whose name | **Build the pack now, for principals. Publishing waits for counsel (Q25), then goes out under the firm's name.** |
+| — | A new note, or the existing watch | **A data section in the news desk's monthly Hotel loan watch, widened to multifamily and retail.** The bank figures change quarterly; the CMBS figures, monthly. |
+| D-M2 | Sections beyond the defaults | **Defaults only:** no failures, FDIC loan sales or implied recoveries. |
+| D-M3 | The disclosure thresholds | **The strict defaults:** 5 banks and no one over half; 10 loans, 3 trusts, 2 servicers and no one loan over half. |
+| — | Scope of this pass | **S1 and S2**, command line and a principals' page. S3 (the handoff) waits for publishing and a look at the desk's input format in the website repository; S4 (nurture links) waits for the published page. |
+
+**As built (S1, S2, November 16, 2026).** `src/market.mjs`; `outbound market pack --quarter YYYY-MM-DD` and `market show`; the web app's Market page (principals only). The pack is written to `market/<quarter>.json` and `.md` (a data folder, never tracked).
+- **Bank figures:** the CRE noncurrent and nonaccrual ratios by metro and Call Report category (construction, multifamily, nonfarm nonresidential, and all CRE), with the bank count and the change on the quarter and the year. Each bank's balances are split by its deposit share in each metro (`sources/fdic/footprint.json`), so each dollar counts once. Call Reports cannot split hotel or retail out of nonfarm nonresidential, so bank figures are by category, not by buy-box sector.
+- **CMBS figures,** by metro and buy-box sector: loans in special servicing now (count and balance), new transfers in the quarter (`specialServicingSince`), and dispositions in the quarter (count only). A loan counts in its first metro.
+- **The guard:** the thresholds above, with the reasons for each hidden figure. Complementary suppression runs along each metro's row, whose all-CRE figure is its total. No total across metros is published, so columns are not lines; the pack says so, and that totals must not be made by summing it. A change is shown only when the figure is published in both quarters.
+- **Names nothing:** no bank, servicer, trust, property or person is in the pack; a test proves it. No model-facing action loads `market/`.
 
 ---
 

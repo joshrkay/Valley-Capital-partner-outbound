@@ -297,6 +297,15 @@ npm run outbound -- coverage                            # on the first run: the 
 - **No people.** Rows against individuals (prohibitions, Section 19, a respondent with no organization word) are skipped as the table is read. Deposit-insurance terminations and waiver orders are skipped too.
 - FDIC orders carry no phrase flags yet: their PDFs are on a host Node cannot verify.
 
+### The market data pack (PRD next-five E20)
+
+Aggregate figures by metro, naming no bank, loan or person: bank CRE noncurrent ratios by Call Report category (each bank's balances split by its deposit share in each metro), and CMBS loans in special servicing, new transfers and dispositions by buy-box sector. A disclosure guard hides any figure with too few sources or one dominant source. For the principals now (the Market page); it becomes a data section in the Hotel loan watch only after counsel answers.
+
+```bash
+npm run outbound -- market pack --quarter 2026-06-30      # writes market/2026-06-30.json and .md
+npm run outbound -- market show                           # the latest pack
+```
+
 ### Intermediaries (PRD next-five E19)
 
 The firms that act for sellers in our market: loan-sale advisors and CMBS special servicers. Built from stored data, and rebuilt whenever the sale ledger is. For the principals only; nothing here reaches a message.

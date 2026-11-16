@@ -19,6 +19,7 @@ export default function RootLayout({ children }) {
               <a href="/candidates">Candidates</a>
               <a href="/intermediaries">Intermediaries</a>
               <a href="/sales">Sales</a>
+              <a href="/market">Market</a>
               <a href="/accounts">Accounts</a>
               <a href="/network">Network</a>
               <a href="/drafts">Approvals</a>

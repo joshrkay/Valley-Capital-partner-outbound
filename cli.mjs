@@ -138,6 +138,9 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
 
   Merger applications (PRD next-five E18-S3): signals only, no points. Never in a message.
   outbound mergers list [--all]                   open applications naming a bank in the list (--all: every stored one), newest first
+  outbound market pack --quarter YYYY-MM-DD       the market data pack (next-five E20): aggregates by metro, no institution named,
+                                                  with the disclosure guard; writes market/<quarter>.json and .md (principals only)
+  outbound market show [--quarter YYYY-MM-DD]     print a stored pack (the latest by default)
   outbound intermediaries build                   the registry (next-five E19): firms acting for sellers, from stored data only; also
                                                   rebuilt whenever the sale ledger is
   outbound intermediaries list [--kind K]         ranked, with each firm's score, mandates and registration state
@@ -546,6 +549,13 @@ async function main() {
       const pr = pricing(ledger);
       return out(`${head}\n${pr.label}\n\n${pr.groups.map((g) => `${g.propertyType} · ${label.get(g.metro) ?? g.metro ?? 'metro not stated'}: ${g.events} liquidation(s), ${g.withRecovery} with balance and loss; implied recovery ${pctOf(g.impliedRecovery)}${g.withRecovery > 1 ? `, range ${(g.min * 100).toFixed(1)}–${(g.max * 100).toFixed(1)}%` : ''}`).join('\n')}${pr.rows.length ? `\n\n${pr.rows.map((r) => `${r.date}  ${r.kind.padEnd(20)} ${r.propertyType} · ${label.get(r.metro) ?? r.metro ?? ''}  balance ${money(r.balance)}  loss ${money(r.loss)}  ${pctOf(r.impliedRecovery)}  (${r.seller ?? ''}; ${r.id})`).join('\n')}` : '\nNo CMBS liquidation recorded yet.'}`);
     }
+  }
+
+  if (cmd === 'market') {   // next-five E20: aggregates only; publishing waits for counsel (Q25)
+    const M = await import('./src/market.mjs');
+    if (sub === 'pack') { const r = M.writePack({ dir, quarter: need(flags, 'quarter'), metros: rules.metros, buybox: rules.buybox, config: rules.config }); return out(`Market pack for ${r.pack.quarter}: ${r.counts.fdicSuppressed} of ${r.counts.fdicCells} bank figures suppressed by the disclosure guard.\nWritten: ${r.paths.md}`); }
+    if (sub === 'show') { const p = flags.quarter ? readJson(M.marketPaths(dir).pack(flags.quarter, 'json'), null) : M.latestPack(dir); if (!p) throw new Error('No market pack yet. Run: outbound market pack --quarter YYYY-MM-DD'); return out(M.renderPack(p)); }
+    throw new Error('Usage: outbound market pack --quarter YYYY-MM-DD | outbound market show [--quarter YYYY-MM-DD]');
   }
 
   if (cmd === 'intermediaries') {   // next-five E19: firms that act for sellers. For the principals; never in a message
