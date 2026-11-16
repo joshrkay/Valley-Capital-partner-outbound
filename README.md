@@ -204,6 +204,17 @@ npm run outbound -- account contact --account acme-bank     # each field and its
 
 On the platform, the account page's contact section does the same. The deletion needs the account's name typed, and migration `20261114200000_log_redaction.sql` lets it reach the touch log.
 
+### The mailbox: Gmail drafts, noticed sends, replies (PRD E9)
+With `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` and `GMAIL_REFRESH_TOKEN` set (an OAuth client and a refresh token for the sender's own Gmail; never kept in a data file):
+```bash
+outbound mailbox draft --account ID --step N --by "Pat Example"
+outbound mailbox sync [--days 14] [--sort]
+outbound mailbox review
+```
+- **`draft`** puts an approved email in the sender's own Gmail as a plain-text draft, with the guard run again first. **Nothing here delivers mail**: the Gmail client has six calls and none of them sends, and a test fails if the source names a delivery endpoint. A person presses the button.
+- **`sync`** notices a draft that was sent and records the touch with its real date (an edit is checked for banned words and flagged), then reads the inbox: any reply stops outreach at that bank, found by thread first and then by a confirmed domain; a bounce is a bounce; an opt-out suppresses the address at once. `--sort` asks a model (Haiku) to sort replies into interested, not now, wrong person and out of office. Only a category and a date are kept, never message text.
+- **`review`** lists mail that matched no account (shared, personal or unknown domain): the message id, the date, the reason and the sender's domain.
+
 ### Working without Gmail (PRD E8-S5)
 
 Gmail drafts and reply detection (E9) are not built. Until they are, a principal sends by hand and the web app keeps the guard's touch log current. The log drives the caps, the follow-up timing and the opt-out stops, so record each event the day it happens.

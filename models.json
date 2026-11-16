@@ -6,6 +6,7 @@
   "draft": { "model": "claude-sonnet-5-5", "effort": "high", "maxTokens": 8000, "fallbacks": "default" },
   "callPrep": { "model": "claude-sonnet-5-5", "effort": "high", "maxTokens": 8000, "fallbacks": "default" },
   "callExtract": { "model": "claude-sonnet-5-5", "effort": "medium", "maxTokens": 4000, "fallbacks": "default" },
+  "replySort": { "model": "claude-haiku-5-5", "effort": "low", "maxTokens": 200, "fallbacks": "default" },
   "maxRepairs": 1,
   "prices": {
     "claude-haiku-5-5": { "in": 0.1, "out": 0.5 },

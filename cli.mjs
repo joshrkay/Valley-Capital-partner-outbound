@@ -26,6 +26,7 @@ import { loadContext, checkTouch, recordObservedSend, recordEvent, addSuppressio
 import { runBriefer } from './src/research.mjs';
 import { runDrafter, approveDraft } from './src/draft.mjs';
 import { makeClient } from './src/model.mjs';
+import { gmailClient, createGmailDraft, syncSends, syncInbox, readReview } from './src/mailbox.mjs';
 import { writeTruthTemplate, reviewList, markFinding, scorecard, passPilot, researchGate } from './src/pilot.mjs';
 import { platformClient } from './src/platform/client.mjs';
 import { setPerson, confirmRole, confirmOrder, setEmail, setPhone, setAddress, addDomain, verifyEmail, contactStatus, sourceLabel, FIELDS, ATTEST_METHODS } from './src/accounts.mjs';
@@ -91,6 +92,11 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
 
   outbound guard check  --account ID --channel C [--step N] [--sender ID] [--date D]
   outbound guard due    [--sender ID] [--date D]
+  outbound mailbox draft --account ID --step N --by NAME   an approved email into the sender's own Gmail as a DRAFT (PRD E9-S1). It never delivers mail:
+                                                   a person presses the button. Needs GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN
+  outbound mailbox sync [--days N] [--sort]       notices drafts that were sent (records the touch with its real date) and reads the inbox: any reply
+                                                   stops outreach at the bank; bounces and opt-outs are handled; --sort asks a model to sort replies
+  outbound mailbox review                          mail that matched no account (message id, date, reason, sender domain only)
   outbound guard record --account ID --channel C --step N --sender ID [--date D] [--by NAME]   after a person has actually sent it (always logged; broken rules are shown)
   outbound guard event  --account ID --type reply|opt_out|bounce|meeting|handoff [--date D] [--note TEXT] [--by NAME]
                                                   --note is a short internal note, never the reply's text. An opt-out suppresses the person and the address
@@ -485,6 +491,20 @@ async function main() {
     }
   }
 
+  if (cmd === 'mailbox') {   // PRD E9: Gmail drafts, noticed sends, replies. Principal's own mailbox; drafts only
+    if (sub === 'review') return out(readReview(dir));
+    const c = ctx();
+    const gmail = gmailClient();
+    if (sub === 'draft') return out(await createGmailDraft({ dir, account: loadAccount(dir, need(flags, 'account')), step: Number(need(flags, 'step')), ctx: c, client: gmail, by: need(flags, 'by') }));
+    if (sub === 'sync') {
+      const accts = listFiles(join(dir, 'accounts'), '.json').map((f) => readJson(join(dir, 'accounts', f)));
+      const sends = await syncSends({ dir, accounts: accts, ctx: c, client: gmail, rules });
+      const modelClient = flags.sort ? await makeClient() : null;
+      const inbox = await syncInbox({ dir, accounts: accts, ctx: c, client: gmail, config: rules.config, models: rules.models, modelClient, windowDays: Number(flags.days ?? 14) });
+      return out({ sends, inbox });
+    }
+    throw new Error('Usage: outbound mailbox draft|sync|review (outbound help)');
+  }
   if (cmd === 'guard') {
     const c = ctx();
     if (sub === 'due') {
