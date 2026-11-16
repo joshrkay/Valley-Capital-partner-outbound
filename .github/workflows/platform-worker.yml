@@ -16,7 +16,7 @@ on:
                                  # ledger. Only once a principal sets the repository variable FDICSALES_ENABLED to "true" (after filling
                                  # config.fdic.userAgent), so an unconfigured pull does not turn the run red.
     - cron: '29 16 3 * *'        # the 3rd, 16:29 UTC: queue the monthly enforcement-orders pull (PRD next-five E18-S2; the Federal Reserve's
-                                 # action files, no key needed), then verify it. Scoring the next Monday shows the new orders.
+                                 # action files and the OCC's monthly releases, no key needed), then verify both. Scoring the next Monday shows the new orders.
     - cron: '19 15 * * 6'        # Saturdays 15:19 UTC: queue the weekly merger-applications pull (PRD next-five E18-S3; the Federal Reserve's
                                  # H.2 for the week ended that day is usually out by Thursday), then verify it. Monday's scoring shows them.
     - cron: '37 23 * * 1-5'      # weekdays 23:37 UTC, after EDGAR's filing day: queue the SEC filings listener, then verify it.
@@ -88,7 +88,9 @@ jobs:
         run: node cli.mjs platform verify edgar
       - name: Verify the enforcement orders
         if: ${{ github.event.schedule == '29 16 3 * *' }}
-        run: node cli.mjs platform verify enforcement
+        run: |
+          node cli.mjs platform verify enforcement
+          node cli.mjs platform verify occorders
       - name: Verify the merger applications
         if: ${{ github.event.schedule == '19 15 * * 6' }}
         run: node cli.mjs platform verify mergerapps

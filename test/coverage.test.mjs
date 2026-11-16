@@ -125,7 +125,7 @@ test('enforcement (E18-S2): an order naming the bank by exact name or a principa
   assert.deepEqual(texts(r, 'enforcement'), ['1 of 4 (25.0%)', '1 of 3 (33.3%)', '3 of 9 (33.3%)']);
   assert.ok(r.rows.every((x) => x.built === true), 'every source is built now');
   assert.match(renderCoverage(r), /Enforcement record\s+1 of 4 \(25\.0%\)\s+1 of 3 \(33\.3%\)\s+3 of 9 \(33\.3%\)/);
-  assert.match(e.basis, /Federal Reserve orders, and FDIC orders once a principal has run outbound sources run fdicorders/);
+  assert.match(e.basis, /Federal Reserve and OCC orders, and FDIC orders once a principal has run outbound sources run fdicorders/);
   // Without the store, the line is said not to have run.
   const none = coverageReport({ dir: world({ enforcement: null }) });
   assert.equal(row(none, 'enforcement').notRun, true);

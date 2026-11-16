@@ -97,8 +97,8 @@ export const ORG_WORDS = Object.freeze(['bank', 'banc', 'bancorp', 'bancorporati
   'association', 'company', 'co', 'corp', 'corporation', 'incorporated', 'inc', 'llc', 'ltd', 'lp', 'plc', 'fsb', 'ssb', 'sb', 'na', 'credit', 'federal', 'holding', 'holdings',
   'group', 'capital', 'industrial', 'thrift', 'cooperative', 'mutual', 'mhc']);
 const ORG = new Set(ORG_WORDS);
-// "N.A." and "Co." count: dots are dropped before the words are compared.
-export const isOrganization = (name) => String(name ?? '').toLowerCase().replace(/\.(?=[a-z]\.)/g, '').replace(/[^a-z0-9]+/g, ' ').split(' ').some((w) => ORG.has(w));
+// "N.A." and "Co." count: dots are dropped before the words are compared. "S&L" and "S&LA" (savings and loan) count as "savings".
+export const isOrganization = (name) => String(name ?? '').toLowerCase().replace(/\bs\s*&\s*la?\b/g, ' savings ').replace(/\.(?=[a-z]\.)/g, '').replace(/[^a-z0-9]+/g, ' ').split(' ').some((w) => ORG.has(w));
 const INDIVIDUAL = /prohibition|removal|suspension|section\s*19|institution[- ]affiliated|\biap\b|individual/i;
 // Orders that say nothing about a bank's condition: deposit-insurance terminations (usually a bank merged away), waiver orders on
 // brokered deposits, and Section 19 consents. Counted, not stored.

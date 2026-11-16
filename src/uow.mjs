@@ -33,10 +33,10 @@ export const LOADS = Object.freeze({
   triage: ['candidates/', 'accounts/', 'suppression.json', 'touches.jsonl', 'sources/runs.jsonl', 'sources/fdic/state.json', 'sources/fdic/failed.json',
     'sources/edgar/loans.json', 'sources/edgar/filings.json', 'sources/edgar/filers.json', 'triage/state.json'],
   sales: ['sources/', 'sales/'],   // the CMBS and FDIC loan-sale pulls rebuild the sale ledger (sales/ledger.json) when they finish
-  // Signal coverage (PRD next-five E18-S1, src/coverage.mjs): read-only, nine exact files and no folder. The candidate list and its
-  // aliases, the bank-to-filer map, the CMBS servicer summary, the sale ledger, and the enforcement orders (E18-S2: the Federal Reserve's and the FDIC's) and the merger applications (E18-S3), with the bank list
+  // Signal coverage (PRD next-five E18-S1, src/coverage.mjs): read-only, ten exact files and no folder. The candidate list and its
+  // aliases, the bank-to-filer map, the CMBS servicer summary, the sale ledger, and the enforcement orders (E18-S2: the Federal Reserve's, the FDIC's and the OCC's) and the merger applications (E18-S3), with the bank list
   // they are matched against. It writes nothing.
-  coverage: ['candidates/latest.json', 'candidates/aliases.json', 'sources/edgar/filers.json', 'sources/edgar/servicers.json', 'sales/ledger.json', 'sources/enforcement/orders.json', 'sources/enforcement/fdic-orders.json', 'sources/mergers/applications.json', 'sources/fdic/institutions.json'],
+  coverage: ['candidates/latest.json', 'candidates/aliases.json', 'sources/edgar/filers.json', 'sources/edgar/servicers.json', 'sales/ledger.json', 'sources/enforcement/orders.json', 'sources/enforcement/fdic-orders.json', 'sources/enforcement/occ-orders.json', 'sources/mergers/applications.json', 'sources/fdic/institutions.json'],
   // Enforcement orders (PRD next-five E18-S2, src/sources/enforcement.mjs): its own store, the bank list and the aliases it matches
   // against (to choose which order documents to read), and the run log. Matching is redone whenever the orders are read, so it writes
   // no candidate file. No research, drafting or call action loads sources/enforcement/ (E18-S4 decides what the briefer may read).

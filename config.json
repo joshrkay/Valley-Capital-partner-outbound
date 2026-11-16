@@ -45,6 +45,13 @@
       "maxReleasesPerRun": 12,
       "maxPages": 20,
       "timeoutMs": 60000
+    },
+    "occ": {
+      "_note": "OCC orders (outbound sources run occorders, and the monthly sources.enforcement job): the OCC's monthly news release 'OCC Announces Enforcement Actions for <Month>', found by walking the year's release numbers. PLACEHOLDERS. backfillYears: how many past years the first run reads (each about 100 releases). maxMisses: release numbers answering 404 in a row before a year is taken as read to its end (gaps of 2 were seen). maxRequestsPerRun: a cap; the next run continues. minIntervalMs: at least this long between requests.",
+      "minIntervalMs": 1000,
+      "backfillYears": 2,
+      "maxMisses": 8,
+      "maxRequestsPerRun": 400
     }
   },
   "mergers": {

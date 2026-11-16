@@ -23,7 +23,7 @@ Start with `docs/prd-signal-pipeline.md` for the pipeline, and `docs/research-ag
 - **Counsel has not reviewed any of it,** including the claims and the channel rules.
 - **The FDIC adapter has run live** (2026-11-13): 268 banks, 8 quarters to June 30, 2026, about 7 seconds, public data with no key. The scoring weights, thresholds and tier cuts in `scoring.json` are **placeholders**. The buy box (`buybox.json`) has `[CONFIRM]` fields a principal must fill. Until then `score run` refuses, or with `--draft-buybox` it labels its list PROVISIONAL.
 - **The CMBS adapter has run live** on 40 trusts (2026-11-13) with a generic User-Agent. `config.sec.userAgent` stays a `[CONFIRM]` placeholder, and the adapter refuses to run until a principal fills it with the firm's name and contact (PRD Q11).
-- **Enforcement orders have run live, from the Federal Reserve only** (2026-11-16): 1,563 orders against organizations, 20 naming a bank in the list. **FDIC orders are built blind and run on a principal's machine** (see below); their first run there is the test. OCC and state orders are not built (PRD next-five E18-S2). Orders add no points (D-E1).
+- **Enforcement orders have run live from the Federal Reserve and the OCC** (2026-11-16). **FDIC orders are built blind and run on a principal's machine** (see below); their first run there is the test. State orders were checked and not built (PRD next-five E18-S2). Orders add no points (D-E1).
 - **The platform is built but not deployed.** The migrations and their access rules pass 16 tests on Postgres 16 (`npm run test:db`). The client, worker and web app are tested against a fake of Supabase's REST API; the first run against a real project is E12-S7, which needs a Supabase project and a Vercel team (PRD Q17, Q18).
 - **Not built yet:**
   - county records (PRD E5; the spike first);
@@ -31,7 +31,7 @@ Start with `docs/prd-signal-pipeline.md` for the pipeline, and `docs/research-ag
   - a contact-data vendor's API (E7-S2 tests a vendor's exported results; no vendor is wired in);
   - deploying the platform (E12-S7);
   - Gmail drafts and reply detection (E9);
-  - enforcement orders from the OCC (next-five E18-S2 has the Federal Reserve, and the FDIC on a principal's machine; state orders were checked and not built, see the PRD), and merger applications the OCC or the FDIC decide alone (E18-S3 reads the Federal Reserve's H.2);
+  - state enforcement orders (next-five E18-S2 has the Federal Reserve, the OCC, and the FDIC on a principal's machine; state orders were checked and not built, see the PRD), and merger applications the OCC or the FDIC decide alone (E18-S3 reads the Federal Reserve's H.2);
   - quarterly nurture (E10);
   - the referral mapper's drafted ask to a connector (E22 finds the routes and gives a checklist; it drafts nothing, PRD D-R7), and county records that name a lender's counsel (E22-S3 has the event shape and the seam, no adapter);
   - meeting prep beyond the call brief (event lists, who to meet, and a drafted follow-up email: PRD E15-S3 gives a checklist today);
@@ -255,11 +255,11 @@ Property names and addresses are kept in the ledger for a principal. They never 
 
 ### Enforcement orders (PRD next-five E18-S2)
 
-An enforcement order is a dated sign that an examiner has told a bank to clean up its problem assets, and it reaches banks the SEC never sees. Two regulators are built:
-- the Federal Reserve's orders, read by the worker;
+An enforcement order is a dated sign that an examiner has told a bank to clean up its problem assets, and it reaches banks the SEC never sees. Three regulators are built:
+- the Federal Reserve's orders and the OCC's, read by the worker each month. The OCC's come from its monthly enforcement news release, with no key (`npm run outbound -- sources run occorders`);
 - the FDIC's, which cover most banks in our list, read on a principal's machine (below).
 
-The OCC's waits for its free API key. State orders were checked and not built: Texas publishes none against banks, and California's site could not be read from here (PRD next-five E18-S2).
+State orders were checked and not built: Texas publishes none against banks, and California's site could not be read from here (PRD next-five E18-S2).
 
 ```bash
 npm run outbound -- sources run enforcement             # the Fed's action files (no key), then each new matched order's document, for fixed phrases only
@@ -483,7 +483,7 @@ It stores no message text, and writes an audit line for every decision.
 | `supabase/migrations/` | The platform's tables, access rules and functions. Structure only, no data |
 | `web/` | The principals' web app (Next.js) |
 | `.github/workflows/` | The platform worker's schedule (off until enabled) |
-| `src/` | `guard`, `research`, `draft`, `lint`, `model` (the only file that calls the Anthropic API), `rules`, `store`, `paths`, plus the pipeline: `sources/` (`http`, `runlog`, `fdic`, `edgar`, `fdicsales`, `filings`, `enforcement`, `fdicorders`, `mergerapps`), `metrics`, `score`, `paper` (the paper estimate), `candidates`, `triage`, `sales`, `pilot`, call prep and outcomes: `calls`, `outcomes`, routes to the decision-maker: `network`, `routes`, the backtest: `backtest/` (`panel`, `labels`, `run`), and the platform: `uow`, `platform/` (`client`, `worker`, `move`) |
+| `src/` | `guard`, `research`, `draft`, `lint`, `model` (the only file that calls the Anthropic API), `rules`, `store`, `paths`, plus the pipeline: `sources/` (`http`, `runlog`, `fdic`, `edgar`, `fdicsales`, `filings`, `enforcement`, `fdicorders`, `occorders`, `mergerapps`), `metrics`, `score`, `paper` (the paper estimate), `candidates`, `triage`, `sales`, `pilot`, call prep and outcomes: `calls`, `outcomes`, routes to the decision-maker: `network`, `routes`, the backtest: `backtest/` (`panel`, `labels`, `run`), and the platform: `uow`, `platform/` (`client`, `worker`, `move`) |
 | `scripts/sync-site.mjs` | Refreshes `site-snapshot/` from the website repository (see below) |
 | `site-snapshot/` | A copy of the 7 website files the rules depend on, a list of the site's pages, and a record of the commit it came from. Committed. Refresh it; do not edit it. |
 | `docs/` | The plan, the research agenda, and the PRD for the signal pipeline |

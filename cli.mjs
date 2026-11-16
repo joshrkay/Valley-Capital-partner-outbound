@@ -10,6 +10,7 @@ import { verifyFdic, verifyEdgar } from './src/sources/verify.mjs';
 import { runFilings, verifyFilings, loadFilingRules, discoveredFilers } from './src/sources/filings.mjs';
 import { runFdicSales, verifyFdicSales } from './src/sources/fdicsales.mjs';
 import { runFdicOrders, verifyFdicOrders } from './src/sources/fdicorders.mjs';
+import { runOccOrders, verifyOccOrders } from './src/sources/occorders.mjs';
 import { runMergerApps, verifyMergerApps, mergerPaths, KINDS as MERGER_KINDS } from './src/sources/mergerapps.mjs';
 import { runEnforcement, verifyEnforcement, unmatchedOrders, aliasParty, ordersFor, ordersByBank, TYPES as ORDER_TYPES } from './src/sources/enforcement.mjs';
 import { buildLedger, readLedger, listSales, groupBySeller, groupBuyers, pricing, verifyLedger } from './src/sales.mjs';
@@ -109,12 +110,14 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
                                                   the order document of orders naming a bank in the list, for fixed phrases only
   outbound sources run mergerapps                 merger applications (PRD next-five E18-S3): the Federal Reserve's weekly H.2, every district;
                                                   merger and acquisition filings kept, approvals and withdrawals applied, closes linked to FDIC
+  outbound sources run occorders                  OCC orders (E18-S2): the OCC's monthly enforcement news releases on www.occ.gov, no key;
+                                                  actions against banks and terminations kept, actions against individuals skipped
   outbound sources run fdicorders [--since YYYY-MM-DD] [--debug-capture FILE]   FDIC orders (E18-S2), ON A PRINCIPAL'S MACHINE: the monthly
                                                   releases on www.fdic.gov, then each one's order list on orders.fdic.gov in a headless
                                                   browser (first: npm run fdic-orders:setup). Individuals skipped. --debug-capture writes
                                                   the table's shape with every name masked, if the columns cannot be mapped
   outbound sources status                         the last run of each source, and the latest FDIC quarter seen
-  outbound sources verify [fdic|edgar|filings|fdicsales|enforcement|fdicorders|mergerapps] [--sample N]   check the stored data against the live sources (read-only): fresh, complete,
+  outbound sources verify [fdic|edgar|filings|fdicsales|enforcement|fdicorders|occorders|mergerapps] [--sample N]   check the stored data against the live sources (read-only): fresh, complete,
                                                   values and ratios equal FDIC's own, every failure and deal stored, the CMBS parser equal
                                                   to a plain count, stored filings found again; plus a short list of records with their
                                                   public URL to compare by eye. Exits 1 on any failure. WARN flags a gap in FDIC's own data
@@ -235,7 +238,7 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound enqueue sources.fdic|sources.edgar|sources.filings|sources.fdicsales|sources.enforcement|sources.mergerapps|score.run|triage.run|research.run|draft.run|call.prep|call.extract [--account ID] [--channel C] [--step N] [--date D] [--by NAME] [--draft-buybox] [--include-hq] [--since YYYY-MM-DD]
   outbound platform push [--from DIR]             copy a data folder into the platform (default: OUTBOUND_DATA_DIR); safe to re-run
   outbound platform pull --to DIR                 write everything back to a new or empty folder outside this repository
-  outbound platform verify [fdic|edgar|filings|fdicsales|enforcement|mergerapps|sales] [--sample N]   the same checks on the platform's data (read-only); no spot-check list unless asked
+  outbound platform verify [fdic|edgar|filings|fdicsales|enforcement|occorders|mergerapps|sales] [--sample N]   the same checks on the platform's data (read-only); no spot-check list unless asked
 `;
 
 function parse(argv) {
@@ -261,6 +264,7 @@ async function runVerify(dir, which, rules, flags) {
   if (!which || which === 'edgar') reports.push(await verifyEdgar({ dir, sec: rules.config.sec, sample }));
   if (which === 'filings') reports.push(await verifyFilings({ dir, sec: rules.config.sec, rules: loadFilingRules(), sample }));
   if (which === 'fdicsales') reports.push(await verifyFdicSales({ dir, fdic: rules.config.fdic, personalDomains: rules.config.personalDomains, sample }));
+  if (which === 'occorders') reports.push(await verifyOccOrders({ dir, enforcement: rules.config.enforcement, sample }));
   if (which === 'mergerapps') reports.push(await verifyMergerApps({ dir, mergers: rules.config.mergers, sample }));
   if (which === 'fdicorders') reports.push(await verifyFdicOrders({ dir, enforcement: rules.config.enforcement, sample }));
   if (which === 'enforcement') reports.push(await verifyEnforcement({ dir, enforcement: rules.config.enforcement, hqStates: rules.metros.hqStates, sample }));
@@ -314,7 +318,7 @@ async function main() {
     if (cmd === 'platform' && sub === 'pull') return out(await pull({ client, to: need(flags, 'to') }));
     if (cmd === 'platform' && sub === 'verify') {   // read-only: the unit of work changes nothing, so nothing is written back
       // No spot-check list unless asked: this command runs in scheduled-job logs, which carry check results only, never bank names.
-      const { result } = await client.unitOfWork(pos[2] === 'enforcement' ? LOADS.enforcement : pos[2] === 'mergerapps' ? LOADS.mergers : LOADS.sales, (dir) => runVerify(dir, pos[2], rules, { ...flags, sample: flags.sample ?? 0 }), { retries: 0 });
+      const { result } = await client.unitOfWork(pos[2] === 'enforcement' || pos[2] === 'occorders' ? LOADS.enforcement : pos[2] === 'mergerapps' ? LOADS.mergers : LOADS.sales, (dir) => runVerify(dir, pos[2], rules, { ...flags, sample: flags.sample ?? 0 }), { retries: 0 });
       if (!result) process.exitCode = 1;
       return;
     }
@@ -444,6 +448,11 @@ async function main() {
       if (r.outcome === 'failed') process.exitCode = 1;
       return out(r);
     }
+    if (sub === 'run' && pos[2] === 'occorders') {   // OCC orders (PRD next-five E18-S2, source 4)
+      const r = await runOccOrders({ dir, enforcement: rules.config.enforcement });
+      if (r.outcome === 'failed') process.exitCode = 1;
+      return out(r);
+    }
     if (sub === 'run' && pos[2] === 'mergerapps') {   // merger applications (PRD next-five E18-S3)
       const r = await runMergerApps({ dir, mergers: rules.config.mergers });
       if (r.outcome === 'failed') process.exitCode = 1;
@@ -460,7 +469,7 @@ async function main() {
       return out(r);
     }
     if (sub === 'run') {
-      if (!['fdic', 'edgar', 'fdicsales'].includes(pos[2])) throw new Error('Usage: outbound sources run fdic [--include-hq] | outbound sources run edgar | outbound sources run fdicsales | outbound sources run enforcement | outbound sources run fdicorders | outbound sources run mergerapps | outbound sources run filings [--since YYYY-MM-DD]');
+      if (!['fdic', 'edgar', 'fdicsales'].includes(pos[2])) throw new Error('Usage: outbound sources run fdic [--include-hq] | outbound sources run edgar | outbound sources run fdicsales | outbound sources run enforcement | outbound sources run fdicorders | outbound sources run mergerapps | outbound sources run occorders | outbound sources run filings [--since YYYY-MM-DD]');
       const r = pos[2] === 'fdic' ? await runFdic({ dir, metros: rules.metros, includeHq: !!flags['include-hq'] })
         : pos[2] === 'fdicsales' ? await runFdicSales({ dir, fdic: rules.config.fdic, personalDomains: rules.config.personalDomains })
         : await runEdgar({ dir, metros: rules.metros, buybox: rules.buybox, scoring: rules.scoring, sec: rules.config.sec });
