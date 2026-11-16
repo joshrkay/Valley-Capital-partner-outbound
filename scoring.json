@@ -104,7 +104,8 @@
     "maxSignals": 3,
     "maxEvents": 2,
     "maxFilings": 2,
-    "maxSales": 2
+    "maxSales": 2,
+    "maxEnforcement": 2
   },
   "signals": [
     {
@@ -209,6 +210,11 @@
   "filings": {
     "_note": "SEC filing signals (PRD E13-S1): each filing by a confirmed bank filer that matched a saved search in filings.json is an event signal, dated by its file date, kept in sources/edgar/filings.json. windowDays, how long it shows on the candidate and its card, is a PLACEHOLDER. Filing signals add no points: whether they should, and on which axis, is a principal's decision, as for the concentration screen and acquisitions.",
     "windowDays": 180
+  },
+  "enforcement": {
+    "_note": "Enforcement signals (PRD next-five E18-S2), from sources/enforcement/orders.json. Each order against a bank is an event signal, dated by its effective date, shown for windowDays; a termination is an event signal the same way. An order that stays in force until terminated (a consent order, a cease-and-desist order, a formal written agreement, a prompt corrective action directive) with no termination recorded is also a state signal, 'under an active order', while its effective date is within activeWithinDays: the Federal Reserve's file shows no termination for some old orders, so an order older than that is not called active. Both windows are PLACEHOLDERS. Enforcement signals add no points until a principal decides (PRD next-five D-E1).",
+    "windowDays": 365,
+    "activeWithinDays": 3650
   },
   "cmbs": {
     "_note": "CMBS loan signals (PRD E4-S3). A loan is 'maturing' when its maturity (or post-modification maturity) falls within maturityMonths. A placeholder, like every number here.",

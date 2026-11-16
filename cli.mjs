@@ -9,6 +9,7 @@ import { runEdgar } from './src/sources/edgar.mjs';
 import { verifyFdic, verifyEdgar } from './src/sources/verify.mjs';
 import { runFilings, verifyFilings, loadFilingRules, discoveredFilers } from './src/sources/filings.mjs';
 import { runFdicSales, verifyFdicSales } from './src/sources/fdicsales.mjs';
+import { runEnforcement, verifyEnforcement, unmatchedOrders, aliasParty, ordersFor, ordersByBank, TYPES as ORDER_TYPES } from './src/sources/enforcement.mjs';
 import { buildLedger, readLedger, listSales, groupBySeller, groupBuyers, pricing, verifyLedger } from './src/sales.mjs';
 import { suggestFilers, confirmFiler, rejectFiler, filerStatus } from './src/sources/filers.mjs';
 import { LOADS } from './src/uow.mjs';
@@ -101,8 +102,11 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
                                                   pools, the FDIC's own loan-sale advisor (a route into FDIC sales, never into a bank);
                                                   the buyer is unknown. Gentle: robots.txt and a few requests a minute
                                                   (needs config.fdic.userAgent filled in). Then rebuilds the sale ledger, as the edgar run does
+  outbound sources run enforcement                enforcement orders (PRD next-five E18-S2): the Federal Reserve's actions against organizations,
+                                                  with their type, dates and terminations; actions against individuals are skipped. Reads
+                                                  the order document of orders naming a bank in the list, for fixed phrases only
   outbound sources status                         the last run of each source, and the latest FDIC quarter seen
-  outbound sources verify [fdic|edgar|filings|fdicsales] [--sample N]   check the stored data against the live sources (read-only): fresh, complete,
+  outbound sources verify [fdic|edgar|filings|fdicsales|enforcement] [--sample N]   check the stored data against the live sources (read-only): fresh, complete,
                                                   values and ratios equal FDIC's own, every failure and deal stored, the CMBS parser equal
                                                   to a plain count, stored filings found again; plus a short list of records with their
                                                   public URL to compare by eye. Exits 1 on any failure. WARN flags a gap in FDIC's own data
@@ -116,6 +120,12 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound sales buyers                           the known buyers, by kind, property type, metro and quarter
   outbound sales pricing                          CMBS liquidations by property type and metro, with an APPROXIMATE implied recovery
   outbound sales verify                           check the ledger itself (no network): every event valid, no buyer or price invented
+
+  Enforcement orders (PRD next-five E18-S2): signals only, no points. Never in a message.
+  outbound enforcement list [--key fdic:CERT]      orders matched to a bank in the list (or one bank's), newest first, with terminations
+  outbound enforcement unmatched                  the review list: recent orders naming a party in the universe's states that match no
+                                                  bank, or more than one, with suggestions. Nothing is guessed
+  outbound enforcement alias --key fdic:CERT --name "ORG NAME" --by NAME   a principal resolves one: the order's name becomes the bank's alias
 
   Bank filers (PRD E13-S1): which SEC filer (CIK) files for each bank, usually its holding company. Only confirmed ones are searched.
   outbound filers list                            every bank in the list: confirmed, rejected or not mapped yet
@@ -147,7 +157,7 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   Signal coverage (PRD next-five E18-S1): how many candidates each signal source can see. Stored data only: no network, no model.
   outbound coverage [--json]                      for Tier A, Tier B and all candidates, the count and share (of the group) with a
                                                   confirmed SEC filer, a rejected or unmapped one, a CMBS link (as a special servicer),
-                                                  a sale-ledger event, and an enforcement record (not built yet). Counts only; it names
+                                                  a sale-ledger event, and an enforcement order (Federal Reserve). Counts only; it names
                                                   no bank and writes nothing. --json prints the record
 
   Pilot (PRD E1): check the briefer on accounts you already know before it researches any account the pipeline found.
@@ -211,10 +221,10 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound platform smoke                         check a new project with SUPABASE_URL and SUPABASE_ANON_KEY (the PUBLIC key only):
                                                   sign-ups off, every table and function present and refusing the public key
   outbound worker [--max N]                       run queued jobs until the queue is empty (or N have run); prints ids and outcomes only
-  outbound enqueue sources.fdic|sources.edgar|sources.filings|sources.fdicsales|score.run|triage.run|research.run|draft.run|call.prep|call.extract [--account ID] [--channel C] [--step N] [--date D] [--by NAME] [--draft-buybox] [--include-hq] [--since YYYY-MM-DD]
+  outbound enqueue sources.fdic|sources.edgar|sources.filings|sources.fdicsales|sources.enforcement|score.run|triage.run|research.run|draft.run|call.prep|call.extract [--account ID] [--channel C] [--step N] [--date D] [--by NAME] [--draft-buybox] [--include-hq] [--since YYYY-MM-DD]
   outbound platform push [--from DIR]             copy a data folder into the platform (default: OUTBOUND_DATA_DIR); safe to re-run
   outbound platform pull --to DIR                 write everything back to a new or empty folder outside this repository
-  outbound platform verify [fdic|edgar|filings|fdicsales|sales] [--sample N]   the same checks on the platform's data (read-only); no spot-check list unless asked
+  outbound platform verify [fdic|edgar|filings|fdicsales|enforcement|sales] [--sample N]   the same checks on the platform's data (read-only); no spot-check list unless asked
 `;
 
 function parse(argv) {
@@ -240,6 +250,7 @@ async function runVerify(dir, which, rules, flags) {
   if (!which || which === 'edgar') reports.push(await verifyEdgar({ dir, sec: rules.config.sec, sample }));
   if (which === 'filings') reports.push(await verifyFilings({ dir, sec: rules.config.sec, rules: loadFilingRules(), sample }));
   if (which === 'fdicsales') reports.push(await verifyFdicSales({ dir, fdic: rules.config.fdic, personalDomains: rules.config.personalDomains, sample }));
+  if (which === 'enforcement') reports.push(await verifyEnforcement({ dir, enforcement: rules.config.enforcement, hqStates: rules.metros.hqStates, sample }));
   if (which === 'sales') reports.push(verifyLedger({ dir, sample }));
   if (which === 'backtest') reports.push(verifyPanel({ dir, config: rules.config.backtest }));
   const lines = [];
@@ -290,7 +301,7 @@ async function main() {
     if (cmd === 'platform' && sub === 'pull') return out(await pull({ client, to: need(flags, 'to') }));
     if (cmd === 'platform' && sub === 'verify') {   // read-only: the unit of work changes nothing, so nothing is written back
       // No spot-check list unless asked: this command runs in scheduled-job logs, which carry check results only, never bank names.
-      const { result } = await client.unitOfWork(LOADS.sales, (dir) => runVerify(dir, pos[2], rules, { ...flags, sample: flags.sample ?? 0 }), { retries: 0 });
+      const { result } = await client.unitOfWork(pos[2] === 'enforcement' ? LOADS.enforcement : LOADS.sales, (dir) => runVerify(dir, pos[2], rules, { ...flags, sample: flags.sample ?? 0 }), { retries: 0 });
       if (!result) process.exitCode = 1;
       return;
     }
@@ -420,8 +431,13 @@ async function main() {
       if (r.outcome === 'failed') process.exitCode = 1;
       return out(r);
     }
+    if (sub === 'run' && pos[2] === 'enforcement') {   // enforcement orders (PRD next-five E18-S2)
+      const r = await runEnforcement({ dir, enforcement: rules.config.enforcement });
+      if (r.outcome === 'failed') process.exitCode = 1;
+      return out(r);
+    }
     if (sub === 'run') {
-      if (!['fdic', 'edgar', 'fdicsales'].includes(pos[2])) throw new Error('Usage: outbound sources run fdic [--include-hq] | outbound sources run edgar | outbound sources run fdicsales | outbound sources run filings [--since YYYY-MM-DD]');
+      if (!['fdic', 'edgar', 'fdicsales'].includes(pos[2])) throw new Error('Usage: outbound sources run fdic [--include-hq] | outbound sources run edgar | outbound sources run fdicsales | outbound sources run enforcement | outbound sources run filings [--since YYYY-MM-DD]');
       const r = pos[2] === 'fdic' ? await runFdic({ dir, metros: rules.metros, includeHq: !!flags['include-hq'] })
         : pos[2] === 'fdicsales' ? await runFdicSales({ dir, fdic: rules.config.fdic, personalDomains: rules.config.personalDomains })
         : await runEdgar({ dir, metros: rules.metros, buybox: rules.buybox, scoring: rules.scoring, sec: rules.config.sec });
@@ -465,6 +481,26 @@ async function main() {
     if (sub === 'pricing') {
       const pr = pricing(ledger);
       return out(`${head}\n${pr.label}\n\n${pr.groups.map((g) => `${g.propertyType} · ${label.get(g.metro) ?? g.metro ?? 'metro not stated'}: ${g.events} liquidation(s), ${g.withRecovery} with balance and loss; implied recovery ${pctOf(g.impliedRecovery)}${g.withRecovery > 1 ? `, range ${(g.min * 100).toFixed(1)}–${(g.max * 100).toFixed(1)}%` : ''}`).join('\n')}${pr.rows.length ? `\n\n${pr.rows.map((r) => `${r.date}  ${r.kind.padEnd(20)} ${r.propertyType} · ${label.get(r.metro) ?? r.metro ?? ''}  balance ${money(r.balance)}  loss ${money(r.loss)}  ${pctOf(r.impliedRecovery)}  (${r.seller ?? ''}; ${r.id})`).join('\n')}` : '\nNo CMBS liquidation recorded yet.'}`);
+    }
+  }
+
+  if (cmd === 'enforcement') {   // enforcement orders (PRD next-five E18-S2): for the principals; never in a message
+    const line = (o) => `${o.date}  ${o.kind === 'termination' ? `termination of ${o.terminates} (${ORDER_TYPES[o.terminatesType] ?? ''})` : `${ORDER_TYPES[o.type] ?? o.type}${o.terminatedOn ? `, terminated ${o.terminatedOn}` : ', no termination recorded'}`}  [${o.key}]${o.flags?.found?.length ? `  phrases: ${o.flags.found.join(', ')}` : ''}\n    ${o.link ?? '(no document link)'}`;
+    if (sub === 'list') {
+      if (flags.key) { const key = need(flags, 'key'); const l = ordersFor({ dir, key }); return out(`${key}: ${l.length} order record(s).\n\n${l.map(line).join('\n')}`); }
+      const latest = readJson(join(dir, 'candidates', 'latest.json'), null);
+      const by = ordersByBank({ dir });
+      const rows = (latest?.items ?? []).map((i) => [i.key, by.get(i.key) ?? []]).filter(([, l]) => l.length);
+      return out(`${rows.length} bank(s) in the latest candidate list with an enforcement order on record.\n\n${rows.map(([k, l]) => `${k}  ${latest.items.find((i) => i.key === k)?.name ?? ''}\n${l.map((o) => `  ${line(o).replace(/\n/g, '\n  ')}`).join('\n')}`).join('\n\n')}`);
+    }
+    if (sub === 'unmatched') {
+      const l = unmatchedOrders({ dir, enforcement: rules.config.enforcement, hqStates: rules.metros.hqStates });
+      const party = (p) => `  ${p.name}${p.city ? `, ${p.city}` : ''}${p.state ? `, ${p.state}` : ''}: ${p.how === 'ambiguous' ? `more than one bank has this name: ${p.candidates.join(', ')}` : p.suggestions.length ? `similar: ${p.suggestions.map((x) => `${x.key} ${x.name} (${x.similarity})`).join('; ')}` : 'no bank in the list has this name'}`;
+      return out(`${l.length} order(s) on the review list. Each matches no bank, or more than one, and names a party in the metros' states or one like a bank in the list. If the party is a bank in the list (or its holding company), add its alias:\n  outbound enforcement alias --key fdic:CERT --name "NAME AS THE ORDER GIVES IT" --by NAME\n\n${l.map((o) => `${o.date}  ${ORDER_TYPES[o.type] ?? o.type}${o.terminatedOn ? `, terminated ${o.terminatedOn}` : ''}  [${o.key}]  ${o.link ?? '(no document link)'}\n${o.parties.map(party).join('\n')}`).join('\n\n')}`);
+    }
+    if (sub === 'alias') {
+      const r = aliasParty({ dir, key: need(flags, 'key'), name: need(flags, 'name'), by: need(flags, 'by') });
+      return out(`${r.key} (${r.bank ?? ''}) now also matches: ${r.aliases.join('; ')}. The next score run shows its orders: outbound score run`);
     }
   }
 

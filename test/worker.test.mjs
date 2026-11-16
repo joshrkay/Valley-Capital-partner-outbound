@@ -173,6 +173,21 @@ test('the FDIC loan-sale pull runs as a job: refused while the FDIC contact is a
   assert.doesNotMatch(JSON.stringify(fake.jobs[1].result), /Example Prairie|Example Loan Advisors|Pat Person/, 'the job result holds counts, not names');
 });
 
+test('the enforcement-orders pull runs as a job (PRD next-five E18-S2): orders stored through a unit of work, a result of counts with no names', async () => {
+  const { fakeFed, INSTITUTIONS, PEOPLE } = await import('./enforcement-fake.mjs');
+  const fake = fakePostgrest();
+  fake.docs.set('sources/fdic/institutions.json', { path: 'sources/fdic/institutions.json', kind: 'json', body: INSTITUTIONS, text: null, version: 1 });
+  await pat(fake).enqueue('sources.enforcement');
+  const fast = { ...rules, config: { ...rules.config, enforcement: { ...rules.config.enforcement, minIntervalMs: 0 } } };
+  await work({ client: worker(fake), rules: fast, deps: deps({ fetchImpl: fakeFed().fetchImpl, now: () => new Date('2026-11-16T12:00:00Z'), sleep: async () => {} }) });
+  assert.equal(fake.jobs[0].status, 'done', JSON.stringify(fake.jobs[0].result));
+  assert.deepEqual([fake.jobs[0].result.outcome, fake.jobs[0].result.orders, fake.jobs[0].result.skippedIndividual, fake.jobs[0].result.inUniverse], ['ok', 7, 3, 4]);
+  assert.ok(fake.docs.has('sources/enforcement/orders.json') && fake.docs.has('sources/enforcement/state.json'));
+  const stored = JSON.stringify([...fake.docs.values()].map((d) => d.body)) + JSON.stringify(fake.jobs);
+  for (const name of PEOPLE) assert.ok(!stored.includes(name), `${name} must not reach the platform`);
+  assert.doesNotMatch(JSON.stringify(fake.jobs[0].result), /Example/, 'the job result holds counts, not names');
+});
+
 test('the CMBS job rebuilds the sale ledger too', async () => {
   const { fakeSec } = await import('./edgar-fake.mjs');
   const fake = fakePostgrest();

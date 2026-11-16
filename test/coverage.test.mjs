@@ -36,7 +36,7 @@ const FILERS = {
 };
 const svc = (name) => ({ name, loans: 1, balance: 1000000, specialServicing: 1, noteSale: 0, delinquent: 0, maturing: 0, metros: ['31080'], sectors: ['multifamily'] });
 const SERVICERS = Object.fromEntries(['CEDAR EXAMPLE BANK', 'Elm Special Servicing LLC', 'Juniper Example Servicing', 'Cedar Example Bancorp', 'Unknown'].map((n) => [n, svc(n)]));
-const ALIASES = { 'fdic:201': ['Elm Special Servicing LLC'] };
+const ALIASES = { 'fdic:201': ['Elm Special Servicing LLC', 'Elm Example Bancorp, Inc.'] };
 const unknown = { kind: 'unknown', name: 'unknown' };
 const src = (source, id, date) => [{ source, ids: [id], link: null, date }];
 const EVENTS = [
@@ -51,14 +51,26 @@ const EVENTS = [
   { id: 'fdic-sale:EX-1', kind: 'fdic_sale_announced', date: '2026-09-01', seller: { kind: 'fdic', key: 'fdic-receiver', name: 'FDIC as receiver' }, buyer: unknown,
     asset: { kind: 'pool', propertyType: null, metro: null, balance: null }, tier: 'reported', sources: src('fdicsales', 'EX-1', null), contextOnly: true },
 ];
+// Enforcement orders (E18-S2), as src/sources/enforcement.mjs stores them: org names, cities and states only.
+const order = (id, parties, over = {}) => ({ key: `frb:${id}`, regulator: 'frb', sourceId: String(id), type: 'cease_and_desist', types: ['cease_and_desist'], date: '2026-06-01', terminatedOn: null,
+  parties: parties.map(([name, city, state]) => ({ name, city, state })), link: `https://www.federalreserve.gov/newsevents/pressreleases/enforcement2026060${id}a.htm`, linkKind: 'press release', kind: 'order', ...over });
+const ENFORCEMENT = Object.fromEntries([
+  order(1, [['Alder Example Bank', 'Sampleton', 'TX']]),                                       // exact name: counts (Tier A)
+  order(2, [['Elm Example Bancorp, Inc.', 'Sampleton', 'TX']]),                                // a holding company, through a principal's alias (Tier B)
+  order(3, [['Cedar Example Bancorp', 'Sampleton', 'TX']]),                                    // a near name: never counted
+  order(5, [['Hazel Example Bank', 'Sampleton', 'TX'], ['Hazel Example Holdings', 'Sampleton', 'TX']], { type: 'written_agreement', types: ['written_agreement'] }),   // untiered
+  order(9, [['Birch Example Bank', 'Sampleton', 'TX']], { key: 'frb:9:termination', kind: 'termination', type: 'termination', terminates: 'frb:9' }),   // a termination alone: not counted
+].map((o) => [o.key, o]));
+
 const LEDGER = { builtAt: '2026-11-16T12:00:00.000Z', runId: 'sales-1', events: Object.fromEntries(EVENTS.map((e) => [e.id, e])) };
 
-function world({ latest = latestDoc(), filers = FILERS, servicers = SERVICERS, aliases = ALIASES, ledger = LEDGER } = {}, dir = makeDir()) {
+function world({ latest = latestDoc(), filers = FILERS, servicers = SERVICERS, aliases = ALIASES, ledger = LEDGER, enforcement = ENFORCEMENT } = {}, dir = makeDir()) {
   if (latest) put(dir, COVERAGE_PATHS.latest, latest);
   if (aliases) put(dir, COVERAGE_PATHS.aliases, aliases);
   if (filers) put(dir, COVERAGE_PATHS.filers, filers);
   if (servicers) put(dir, COVERAGE_PATHS.servicers, servicers);
   if (ledger) put(dir, COVERAGE_PATHS.ledger, ledger);
+  if (enforcement) put(dir, COVERAGE_PATHS.enforcement, enforcement);
   return dir;
 }
 const row = (r, id) => r.rows.find((x) => x.id === id);
@@ -93,17 +105,21 @@ test('each share states its denominator', () => {
   assert.deepEqual([c.count, c.of, c.share], [4, 9, 0.4444]);
 });
 
-test('enforcement is not built yet: shown as not built, never as zero', () => {
+test('enforcement (E18-S2): an order naming the bank by exact name or a principal\'s alias counts; a near name or a termination alone does not', () => {
   const r = coverageReport({ dir: world() });
   const e = row(r, 'enforcement');
-  assert.equal(e.built, false);
-  for (const g of ['A', 'B', 'all']) {
-    assert.equal(e.cells[g].count, null);
-    assert.equal(e.cells[g].share, null);
-    assert.equal(e.cells[g].text, 'not built');
-  }
-  assert.ok(r.rows.filter((x) => x.id !== 'enforcement').every((x) => x.built === true));
-  assert.match(renderCoverage(r), /Enforcement record\s+not built\s+not built\s+not built/);
+  assert.equal(e.built, true);
+  assert.equal(e.notRun, false);
+  assert.deepEqual(counts(r, 'enforcement'), { A: 1, B: 1, all: 3 });
+  assert.deepEqual(texts(r, 'enforcement'), ['1 of 4 (25.0%)', '1 of 3 (33.3%)', '3 of 9 (33.3%)']);
+  assert.ok(r.rows.every((x) => x.built === true), 'every source is built now');
+  assert.match(renderCoverage(r), /Enforcement record\s+1 of 4 \(25\.0%\)\s+1 of 3 \(33\.3%\)\s+3 of 9 \(33\.3%\)/);
+  assert.match(e.basis, /Federal Reserve orders only for now/);
+  // Without the store, the line is said not to have run.
+  const none = coverageReport({ dir: world({ enforcement: null }) });
+  assert.equal(row(none, 'enforcement').notRun, true);
+  assert.deepEqual(counts(none, 'enforcement'), { A: 0, B: 0, all: 0 });
+  assert.match(none.notRunNote, /the enforcement orders \(sources\/enforcement\/orders\.json; outbound sources run enforcement\)/);
 });
 
 test('the empty case: no candidate list, or one with no bank, gives counts of 0 and says so, with no division by zero', () => {
@@ -134,13 +150,13 @@ test('a tier with no bank shows 0 of 0 beside tiers that have some', () => {
 });
 
 test('a source that has not run is said to be not run, so its zero is not read as a measurement', () => {
-  const r = coverageReport({ dir: world({ filers: null, servicers: null, aliases: null, ledger: null }) });
-  assert.deepEqual(r.stores.map((s) => [s.id, s.present]), [['filers', false], ['servicers', false], ['ledger', false]]);
+  const r = coverageReport({ dir: world({ filers: null, servicers: null, aliases: null, ledger: null, enforcement: null }) });
+  assert.deepEqual(r.stores.map((s) => [s.id, s.present]), [['filers', false], ['servicers', false], ['ledger', false], ['enforcement', false]]);
   assert.deepEqual(counts(r, 'sec-unmapped'), { A: 4, B: 3, all: 9 }, 'with no map, every bank is unmapped');
   assert.deepEqual(counts(r, 'cmbs'), { A: 0, B: 0, all: 0 });
   assert.deepEqual(counts(r, 'sale'), { A: 0, B: 0, all: 0 });
   assert.equal(row(r, 'cmbs').notRun, true);
-  assert.match(renderCoverage(r), /Not run yet: the bank-to-filer map .*the CMBS pull .*the sale ledger/s);
+  assert.match(renderCoverage(r), /Not run yet: the bank-to-filer map .*the CMBS pull .*the sale ledger .*the enforcement orders/s);
   const full = coverageReport({ dir: world() });
   assert.match(r.notRunNote, /^Not run yet: .*\. A 0 on their lines means the source has not run, not that it sees nothing\.$/);
   assert.ok(full.stores.every((s) => s.present) && full.rows.every((x) => !x.notRun));
@@ -156,7 +172,7 @@ test('deterministic and counts only: the same data gives the same report, which 
   assert.deepEqual(a.candidates, { runId: 'score-1', scoredAt: '2026-11-16T13:00:00.000Z', latestRepdte: '20260630', provisional: false });
   assert.doesNotMatch(JSON.stringify(a) + renderCoverage(a), /Example Bank|Servicing|fdic:\d|servicer:|0009900/);
   // Pure: the same stores handed straight in give the same report.
-  assert.deepEqual(buildCoverage({ latest: latestDoc(), aliases: ALIASES, filers: FILERS, servicers: SERVICERS, ledger: LEDGER }), a);
+  assert.deepEqual(buildCoverage({ latest: latestDoc(), aliases: ALIASES, filers: FILERS, servicers: SERVICERS, ledger: LEDGER, enforcement: ENFORCEMENT }), a);
 });
 
 test('the written report: fixed templates, the denominators, and what each line counts', () => {

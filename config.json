@@ -29,6 +29,16 @@
     "maxEvents": 12,
     "maxPdfBytes": 5000000
   },
+  "enforcement": {
+    "_note": "Enforcement orders (PRD next-five E18-S2, outbound sources run enforcement). The Federal Reserve's action files only, for now. Every value is a PLACEHOLDER for a principal to review. minIntervalMs: at least this long between requests (www.federalreserve.gov sets no Crawl-delay; robots.txt answered 404 on 2026-11-16). maxDocsPerRun: order documents read per run, for orders that name a bank in the universe; each is read once. maxPdfBytes: the most of one order PDF read. minShare: a file holding fewer actions than this share of the last run's count fails the run, so a truncated file never stands in for the record. reviewWindowDays: how far back an unmatched order is put on the review list (outbound enforcement unmatched). flags: the fixed phrases looked for in an order's text; only which appear is stored, never the text. userAgent: optional; while it is a placeholder, requests send no custom User-Agent. If a principal fills it, the firm's name and a monitored business contact.",
+    "userAgent": "[CONFIRM: optional; firm name and a monitored business contact for Federal Reserve requests]",
+    "minIntervalMs": 2000,
+    "maxDocsPerRun": 25,
+    "maxPdfBytes": 5000000,
+    "minShare": 0.9,
+    "reviewWindowDays": 1825,
+    "flags": ["commercial real estate", "concentration", "classified assets", "special assets", "problem assets"]
+  },
   "sales": {
     "_note": "The who-sells-to-whom ledger (PRD E16, outbound sales build). filingSearches: the saved searches in filings.json whose hit on a bank's filing counts as a disclosed sale (8-K Item 2.01, a completed acquisition or disposition of assets, may also be the bank BUYING: the event says so). acquisitionKinds: the FDIC structure-event kinds that count as a whole-bank acquisition; affiliate-reorganization (224, inside one holding company) is left out, as in scoring.json. Both lists are PLACEHOLDERS for a principal to review.",
     "filingSearches": ["8k-acquisition", "loan-sale-cre", "note-sale-cre"],
