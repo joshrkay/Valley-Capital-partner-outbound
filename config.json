@@ -55,9 +55,10 @@
     }
   },
   "mergers": {
-    "_note": "Merger applications (PRD next-five E18-S3, outbound sources run mergerapps): the Federal Reserve's weekly H.2 release, one page per district. PLACEHOLDERS. districts: the Reserve Bank districts read each week; all twelve, since a bank in our metros can be acquired by a holding company anywhere. backfillWeeks: how far back the first run reads. maxWeeksPerRun: weeks read per run (each week is 14 requests). minIntervalMs: at least this long between requests. minRowsPerWeek: a week with fewer filings across the districts is noted in the run log. userAgent: optional, as for enforcement.",
+    "_note": "Merger applications (PRD next-five E18-S3, outbound sources run mergerapps): the Federal Reserve's weekly H.2 release, one page per district. PLACEHOLDERS. districts: the Reserve Bank districts read each week; all twelve, since a bank in our metros can be acquired by a holding company anywhere. backfillWeeks: how far back the first run reads. maxWeeksPerRun: weeks read per run (each week is 14 requests). minIntervalMs: at least this long between requests. minRowsPerWeek: a week with fewer filings across the districts is noted in the run log. userAgent: optional, as for enforcement. gapLeadDays: PLACEHOLDER; outbound mergers gap counts only closes from this many days after the first H.2 week read, since an application is filed months before its close (Q5, decided 2026-11-16: accept the gap and count it).",
     "userAgent": "[CONFIRM: optional; firm name and a monitored business contact for Federal Reserve requests]",
     "districts": ["boston", "newyork", "philadelphia", "cleveland", "richmond", "atlanta", "chicago", "stlouis", "minneapolis", "kansascity", "dallas", "sanfrancisco"],
+    "gapLeadDays": 180,
     "backfillWeeks": 26,
     "maxWeeksPerRun": 30,
     "minIntervalMs": 1000,
@@ -85,14 +86,40 @@
   "stopEvents": ["reply", "opt_out", "meeting", "handoff"],
   "calls": { "callablePhoneTypes": ["landline"], "hours": [9, 17] },
   "outcomes": { "_note": "PRD E15-S4, the outcomes report. PLACEHOLDERS. Below minToTune confirmed call outcomes, the report says the counts are too few to tune scoring weights on. leadTimeBucketsDays are the edges of the lead-time groups, from an account's first signal to its first meeting. The report never changes weights; a principal does.", "minToTune": 30, "leadTimeBucketsDays": [30, 90, 180, 365] },
+  "market": {
+    "_note": "PRD next-five E20, the market data pack (outbound market pack). The disclosure guard (D-M3, decided 2026-11-16: these strict defaults). minInstitutions: a bank figure needs at least this many banks; maxShare: no one bank (or one CMBS loan) may be more than this share of a figure; minLoans, minTrusts, minServicers: a CMBS figure needs at least this many loans, distinct trusts and distinct special servicers. Complementary suppression follows. Left out (D-M2, decided): failures, FDIC loan sales, implied recoveries. Publishing waits for counsel (Q25); when it publishes, it is a data section in the news desk's monthly Hotel loan watch, widened to multifamily and retail, under the firm's name (D-M1, decided).",
+    "minInstitutions": 5,
+    "maxShare": 0.5,
+    "minLoans": 10,
+    "minTrusts": 3,
+    "minServicers": 2
+  },
+  "intermediaries": {
+    "_note": "PRD next-five E19 (outbound intermediaries ...). kinds: the intermediary kinds in scope (D-I1, decided 2026-11-16: loan-sale advisors and CMBS special servicers; receivers and counsel wait for county records). weights: the ranking (D-I3, decided 2026-11-16: PLACEHOLDERS, a principal tunes them after reading the first ranked list); each component earns weight x min(value / full, 1): metroMandates (mandates in our metros), sectorMandates (in buy-box sectors), namedSellers (distinct sellers a source names; an unknown seller never counts), recentMandates (each mandate worth 0.5^(age in months / halfLifeMonths)), balance (dollars where a source gives one). reminderDays: a buyer-list re-certification due within this many days shows on the Status page. Registrations and proof of funds are owned by Josh (D-I2, decided); proof of funds waits for the credibility package (research agenda D9).",
+    "kinds": ["loan_sale_advisor", "special_servicer"],
+    "weights": {
+      "metroMandates": { "weight": 30, "full": 10 },
+      "sectorMandates": { "weight": 20, "full": 10 },
+      "namedSellers": { "weight": 20, "full": 5 },
+      "recentMandates": { "weight": 20, "full": 5, "halfLifeMonths": 12 },
+      "balance": { "weight": 10, "full": 500000000 }
+    },
+    "reminderDays": 30
+  },
   "backtest": {
-    "_note": "PRD E17, the backtest of the score (outbound backtest panel, labels, run, report). Every value is a PLACEHOLDER for a principal to set. window: the as-of quarter-ends replayed (its own _note). callReportLagDays: a quarter's Call Report counts as known only from quarter-end plus this many days (FDIC asks banks to file within 30 days; 60 allows for its publishing). sodReleaseLagDays: the Summary of Deposits as of June 30 counts as known only from June 30 plus this many days, its release date [verify: FDIC publishes no release date in the API; the 2026 data's search index was built on 2026-09-18]. minCoverage: every as-of quarter needs Call Report rows for at least this share of its universe, or the panel run is suspect. minLabels: below this many labelled banks a figure says 'too few to tune on' (D-B4). holdoutFrom: the first as-of quarter of the holdout, declared before any comparison; the default is the last 4 as-of quarters of the window (D-B5), and their horizon runs past today, so the report flags their labels as incomplete. topK: the size of the headline group, ranked by distress and timing points only. horizonQuarters: how many quarters after the as-of date a label counts (D-B1). universe: banks headquartered in metros.json hqStates plus every bank with a Summary of Deposits branch in the six metros (D-B3; every US bank is not built). labelKinds: the label kinds that count (D-B2); disclosed_sale is listed but stays off and is reported unavailable until the SEC contact (Q11) and confirmed filers exist; merger (ordinary mergers) is off unless listed here; enforcement_order waits for E18-S2.",
-    "window": { "_note": "PLACEHOLDER. The as-of quarter-ends the backtest replays, inclusive. The panel also pulls scoring.json lookbackQuarters before the first.", "from": "2021-03-31", "to": "2026-06-30" },
+    "_note": "PRD E17, the backtest of the score (outbound backtest panel, labels, run, report). Every value is a PLACEHOLDER for a principal to set, except those marked decided (2026-11-14: the window, holdout, eras, horizons, universe and label kinds). window: the as-of quarter-ends replayed (its own _note). callReportLagDays: a quarter's Call Report counts as known only from quarter-end plus this many days (FDIC asks banks to file within 30 days; 60 allows for its publishing). sodReleaseLagDays: the Summary of Deposits as of June 30 counts as known only from June 30 plus this many days, its release date [verify: FDIC publishes no release date in the API; the 2026 data's search index was built on 2026-09-18]. minCoverage: every as-of quarter needs Call Report rows for at least this share of its universe, or the panel run is suspect. minLabels: below this many labelled banks a figure says 'too few to tune on' (D-B4). holdout: what is held out for the final test, declared before any comparison (D-B5, decided 2026-11-14: by bank, a third, fixed by its seed; see its own _note). eras: the periods every report shows apart, so a pooled figure is never read alone (Q6, decided). topK: the size of the headline group, ranked by distress and timing points only. horizonQuarters: how many quarters after the as-of date a label counts for the headline (D-B1, decided: 4). horizonsReported: the horizons shown side by side in each report (D-B1, decided: 2, 4 and 8). universe: banks headquartered in metros.json hqStates plus every bank with a Summary of Deposits branch in the six metros (D-B3; every US bank is not built). labelKinds: the label kinds that count (D-B2); disclosed_sale is listed but stays off and is reported unavailable until the SEC contact (Q11) and confirmed filers exist; merger (ordinary mergers) is off unless listed here; enforcement_order waits for E18-S2.",
+    "window": { "_note": "Decided 2026-11-14 (Q6): 2006 to 2026, so the 2009-2012 failures are in (70 in our five states, against 5 since 2019). The panel also pulls scoring.json lookbackQuarters before the first; every scored field is filled from 2001. Read the eras apart.", "from": "2006-03-31", "to": "2026-06-30" },
     "callReportLagDays": 60,
     "sodReleaseLagDays": 120,
     "minCoverage": 0.95,
     "minLabels": 20,
-    "holdoutFrom": "2025-09-30",
+    "holdout": { "_note": "Decided 2026-11-14 (Q5, D-B5): hold out banks, not quarters, so every era keeps labels on both sides. A bank is held out when the hash of seed:CERT falls below share. The seed is declared here before any comparison and must not change; changing it is shown on every later report as a moved holdout. by: quarter (with from) is still built.", "by": "bank", "share": 0.3333, "seed": "e17-holdout-2026-11-14" },
+    "eras": [
+      { "id": "crisis", "label": "The 2008 crisis", "from": "2006-03-31", "to": "2013-12-31" },
+      { "id": "between", "label": "Between", "from": "2014-03-31", "to": "2019-12-31" },
+      { "id": "recent", "label": "Recent", "from": "2020-03-31", "to": "2026-06-30" }
+    ],
+    "horizonsReported": [2, 4, 8],
     "topK": 25,
     "horizonQuarters": 4,
     "universe": "hq-states-and-metro-footprint",

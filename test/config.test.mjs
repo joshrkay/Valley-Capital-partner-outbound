@@ -51,7 +51,7 @@ test('config.json backtest: every setting present, sane, a PLACEHOLDER, and name
   assert.ok(b, 'config.backtest is missing');
   assert.match(b._note, /PLACEHOLDER/);
   for (const k of Object.keys(b).filter((x) => !x.startsWith('_'))) assert.ok(b._note.includes(k), `the _note does not explain ${k}`);
-  assert.match(b.window._note, /PLACEHOLDER/);
+  assert.match(b.window._note, /PLACEHOLDER|Decided/);
   assert.match(b.window.from, /^\d{4}-(03-31|06-30|09-30|12-31)$/);
   assert.match(b.window.to, /^\d{4}-(03-31|06-30|09-30|12-31)$/);
   assert.ok(b.window.from < b.window.to);
@@ -61,9 +61,17 @@ test('config.json backtest: every setting present, sane, a PLACEHOLDER, and name
   assert.equal(b.topK, 25);
   assert.equal(b.horizonQuarters, 4);
   assert.ok(Number.isInteger(b.sodReleaseLagDays) && b.sodReleaseLagDays > 0);
-  // The holdout is declared before any comparison: the last 4 as-of quarters of the window.
-  const q = (d) => Number(d.slice(0, 4)) * 4 + ['03-31', '06-30', '09-30', '12-31'].indexOf(d.slice(5));
-  assert.equal(q(b.window.to) - q(b.holdoutFrom), 3);
+  // The holdout is declared before any comparison (D-B5, decided): a fixed third of banks, chosen by a declared seed.
+  assert.equal(b.holdout.by, 'bank');
+  assert.ok(b.holdout.share > 0.3 && b.holdout.share < 0.34);
+  assert.match(b.holdout.seed, /\S/);
+  assert.equal(b.holdoutFrom, undefined, 'one holdout, not two');
+  // The window takes in the 2008 crisis, and the eras cover it without gaps or overlaps (Q6, decided).
+  assert.equal(b.window.from, '2006-03-31');
+  assert.equal(b.eras[0].from, b.window.from);
+  assert.equal(b.eras.at(-1).to, b.window.to);
+  for (let i = 1; i < b.eras.length; i++) assert.ok(b.eras[i].from > b.eras[i - 1].to, 'eras in order, not overlapping');
+  assert.deepEqual(b.horizonsReported, [2, 4, 8]);
   assert.deepEqual(b.labelKinds, ['failure', 'assisted_merger', 'disclosed_sale', 'fdic_loan_sale']);
   assert.ok(!b.labelKinds.includes('merger'), 'ordinary mergers are off by default (D-B2)');
   assert.equal(b.universe, 'hq-states-and-metro-footprint');

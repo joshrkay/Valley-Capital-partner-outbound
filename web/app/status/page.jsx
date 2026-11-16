@@ -1,5 +1,5 @@
 import { requirePrincipal } from '../../lib/session.mjs';
-import { statusOverview, coverageOverview } from '../../lib/ops.mjs';
+import { statusOverview, coverageOverview, registrationReminders } from '../../lib/ops.mjs';
 import { coverageCard } from '../../lib/coverage-view.mjs';
 import { when, period } from '../../lib/format.mjs';
 import { NotAuthorized, Problem } from '../ui.jsx';
@@ -15,6 +15,9 @@ export default async function Status() {
   // The coverage card reads its own documents; if it cannot, the rest of the page still shows.
   let cov = null, covError = null;
   try { cov = coverageCard(await coverageOverview(ctx.client)); } catch (e) { covError = e.message; }
+  // Buyer-list re-certifications due soon (next-five E19-S3); a failure hides only this card.
+  let reminders = [];
+  try { reminders = await registrationReminders(ctx.client); } catch { reminders = []; }
   const killed = s.kill.config || s.kill.document;
   const edgar = s.edgar;
   return (
@@ -26,6 +29,9 @@ export default async function Status() {
         <form action={queueEdgarAction} className="inline"><button type="submit">Queue CMBS pull (SEC EDGAR)</button></form>
         <form action={queueScoreAction} className="inline"><label className="row" style={{ flexDirection: 'row', alignItems: 'center' }}><input type="checkbox" name="draftBuybox" /> draft buy box (PROVISIONAL list)</label><button type="submit">Queue scoring</button></form>
       </div>
+      {reminders.length ? (
+        <div className="banner warn">Buyer-list re-certification due: {reminders.map((r, i) => <span key={r.key}>{i ? '; ' : ''}<a href={`/intermediaries/${encodeURIComponent(r.key)}`}>{r.name}</a> by {r.recertifyBy}{r.overdue ? ' (OVERDUE)' : ''}</span>)}.</div>
+      ) : null}
       <h2>Signal coverage</h2>
       <p className="sub">{cov?.intro ?? 'Which candidates each signal source can see, from stored data only.'}{cov?.asOf && !cov.note ? ` Candidates from the latest scoring run, data as of ${period(cov.asOf)}.` : ''}{cov?.provisional && !cov.note ? ' PROVISIONAL: the buy box still has placeholders, so the tiers are not final.' : ''}</p>
       {covError ? <div className="banner error">Coverage could not be computed: {covError}</div> : null}

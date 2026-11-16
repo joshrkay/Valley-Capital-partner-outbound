@@ -57,6 +57,10 @@ npm test                        # server helpers against a fake Supabase REST AP
 npm run build
 ```
 
+## Deploying: run the wizard
+
+`bash scripts/deploy-wizard.sh` (from the repository root) walks you through every step below, in order. It opens each page, says what to click, saves the public URL and key to `web/.env.local`, sets the worker's GitHub secrets (with `gh`), and runs the smoke test. Secret keys are typed hidden and never written to a file. Decided 2026-11-16: a new Supabase organization and project for Valley Capital (Q17); the existing Vercel project `web` on the cartboost team, with previews protected (Q18).
+
 ## Supabase setup (once, by an operator)
 
 1. Apply `../supabase/migrations/`.
