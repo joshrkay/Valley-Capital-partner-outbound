@@ -55,8 +55,14 @@ function sendFields({ calls, rules }, { channel, date, time }, { timezone, now }
   if (t && !TIME.test(t)) throw new Error('The time must be HH:MM.');
   let when = day;
   if (t && timezone) {
-    try { when = zonedIso(day, t, timezone); } catch { when = `${day}T${t}:00.000Z`; }   // not a real zone: the guard says so (TIMEZONE_INVALID)
-    if (Date.parse(when) > now.getTime()) throw new Error('That time is later than now. Record a call after it has taken place.');
+    // Not a real zone: the time cannot be placed, so only the date is kept, as with no zone. Reading it as UTC would move the call by
+    // hours and could refuse a call that happened. The guard reports the zone (TIMEZONE_INVALID).
+    let iso = null;
+    try { iso = zonedIso(day, t, timezone); } catch { iso = null; }
+    if (iso) {
+      when = iso;
+      if (Date.parse(when) > now.getTime()) throw new Error('That time is later than now. Record a call after it has taken place.');
+    }
   }
   return { channel: ch, date: day, time: t, when };
 }
@@ -136,6 +142,8 @@ export async function recordSend(client, { id, channel, date, time, sender, step
     if (!account) throw new Error(`There is no account ${id}.`);
     const f = sendFields({ calls: m.calls, rules }, { channel, date, time }, { timezone: account.person?.timezone ?? '', now });
     const ctx = m.guard.loadContext({ dir, config: rules.config });
+    // The form offers only known senders; one removed since the page loaded must not become a ghost id the per-sender caps count under.
+    if (!ctx.senders.some((s) => s.id === from)) throw new Error(`No sender "${from}" in senders.json. Pick one from the list, or add it on the Senders page.`);
     const next = ctx.touches.filter((t) => t.accountId === id && t.type === 'touch').length + 1;   // as `outbound guard record` counts it
     if (checked && Number(checked) !== next) throw new Error(`The touch log changed since you checked: the next step is now ${next}, not ${checked}. Check again, then record.`);
     const r = m.guard.recordObservedSend(dir, m.guard.touchFromAccount(account, { channel: f.channel, step: next, date: f.when, sender: from }), ctx, { by: who });
@@ -146,7 +154,7 @@ export async function recordSend(client, { id, channel, date, time, sender, step
 
 // A reply, opt-out, bounce, meeting or handoff, with its date. An opt-out needs confirmOptOut === true: it suppresses the person and the
 // address at once (the guard's own rule), and stops outreach to everyone at the bank.
-export async function recordEvent(client, { id, type, date, note, by, confirmOptOut, now = new Date() }) {
+export async function recordEvent(client, { id, type, date, note, by, confirmOptOut, optOutName, optOutEmail, now = new Date() }) {
   const m = await mods();
   const who = need(by, 'A name for who recorded it');
   m.store.safeId(need(id, 'An account id'));
@@ -155,13 +163,19 @@ export async function recordEvent(client, { id, type, date, note, by, confirmOpt
   if (kind === 'opt_out' && confirmOptOut !== true) throw new Error('An opt-out needs your confirmation. It suppresses the person and the address at once, and stops outreach to everyone at the bank.');
   const day = heldDate(m.calls, date, EVENT_LABEL[kind], now);
   const n = noteOf(note);
+  // Who opted out, as the principal confirms it: the form starts from the account's person, and may name someone else at the bank (the
+  // contact was replaced, or another person asked to be removed). Their name and address are suppressed, not whoever is named today.
+  const outName = kind === 'opt_out' ? str(optOutName) : '';
+  const outEmail = kind === 'opt_out' ? str(optOutEmail).toLowerCase() : '';
+  if (outEmail && !(await engine('src/accounts.mjs')).emailSyntaxOk(outEmail)) throw new Error(`"${outEmail}" is not a valid email address. Enter the address that asked to be removed, or leave it empty.`);
   const rules = await loadRules();
   const { result } = await client.unitOfWork(m.uow.recordLoads(id), (dir) => {
     const account = m.store.readJson(join(dir, 'accounts', `${id}.json`), null);
     if (!account) throw new Error(`There is no account ${id}.`);
     const ctx = m.guard.loadContext({ dir, config: rules.config });
-    const rec = m.guard.recordEvent(dir, { accountId: id, institution: account.name, type: kind, date: day, note: n || undefined, person: account.person, by: who }, ctx);
-    return { type: kind, date: rec.date, suppressed: kind === 'opt_out' ? { person: !!str(account.person?.name), email: !!str(account.person?.email) } : null };
+    const who_ = outName || outEmail ? { name: outName, email: outEmail } : { name: str(account.person?.name), email: str(account.person?.email) };
+    const rec = m.guard.recordEvent(dir, { accountId: id, institution: account.name, type: kind, date: day, note: n || undefined, person: who_, by: who }, ctx);
+    return { type: kind, date: rec.date, suppressed: kind === 'opt_out' ? { person: !!who_.name, email: !!who_.email } : null };
   });
   return result;
 }

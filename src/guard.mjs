@@ -128,7 +128,10 @@ export function checkTouch(touch, ctx) {
   if (touch.channel === 'call') {
     if (!person.phone) err('PHONE_MISSING', 'No phone number on the account.');
     else if (!(config.calls?.callablePhoneTypes ?? []).includes(person.phoneType)) err('PHONE_NOT_BUSINESS_LINE', `Phone type is "${person.phoneType ?? 'unknown'}". Only business landlines are called, never mobile or unknown numbers.`);
+    // The zone is checked before the time, so a bad zone on the account is named even when the time had to be dropped for it.
+    const zoneOk = (tz) => { try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return true; } catch { return false; } };
     if (!person.timezone) err('TIMEZONE_MISSING', 'Calls need the recipient\'s time zone.');
+    else if (!zoneOk(person.timezone)) err('TIMEZONE_INVALID', `"${person.timezone}" is not a valid time zone.`);
     else if (!/T\d\d:\d\d/.test(String(date))) err('CALL_TIME_REQUIRED', 'A call needs a date and time (for example 2026-11-17T14:30:00Z) so local calling hours can be checked.');
     else {
       try {
