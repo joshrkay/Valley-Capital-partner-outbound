@@ -90,3 +90,50 @@ test('confirming from the page records the meeting and the outcome; rejecting re
   assert.equal(second.fake.lines.some((l) => l.path === 'outcomes.jsonl'), false);
   await assert.rejects(ops.accountCalls(client, '../etc'), /Invalid id/);
 });
+
+test('a principal corrects a proposal on the page, then confirms it: the form becomes the correction, audited without its values', async () => {
+  const { fake, client, runJobs } = await seeded();
+  await ops.logCallNotes(client, { id: ID, date: DATE, notes: NOTES, by: 'Pat Example' });
+  await runJobs();
+  const c = await ops.accountCalls(client, ID);
+  const [p] = c.pending;
+  assert.deepEqual(c.codes.map((x) => x.code), ['held', 'nda_requested', 'nda_signed', 'tape_promised', 'tape_received', 'not_selling_now', 'wrong_person', 'interested_later', 'pricing_discussed', 'declined'], 'the form offers the fixed list of codes');
+  assert.deepEqual(c.who, ['us', 'them', 'both', 'unclear']);
+  assert.deepEqual(p.edits, []);
+  // The form as the page posts it: a checkbox per code, a line per objection, a row per commitment (an empty "what" drops the row).
+  const fd = new FormData();
+  for (const code of ['held', 'wrong_person']) fd.append('code', code);
+  fd.set('when', 'ignored: not_selling_now is not ticked');
+  fd.set('referral', ' the head of special assets ');
+  fd.set('objections', 'A buyer may contact borrowers.\r\n\n  They want a quick close.  \n');
+  fd.set('commitmentRows', '3');
+  fd.set('who.0', 'us'); fd.set('what.0', 'Send our confidentiality agreement'); fd.set('by.0', '2026-11-20');
+  fd.set('who.1', 'them'); fd.set('what.1', '  '); fd.set('by.1', '');
+  fd.set('who.2', 'both'); fd.set('what.2', 'Agree a date for the next call'); fd.set('by.2', 'next week');
+  fd.set('followUpDate', '');
+  const edits = ops.proposalEditsFromForm(fd);
+  assert.deepEqual(edits, {
+    outcomes: [{ code: 'held', when: '', referral: '' }, { code: 'wrong_person', when: '', referral: 'the head of special assets' }],
+    objections: ['A buyer may contact borrowers.', 'They want a quick close.'],
+    commitments: [{ who: 'us', what: 'Send our confidentiality agreement', by: '2026-11-20' }, { who: 'both', what: 'Agree a date for the next call', by: 'next week' }],
+    followUpDate: '',
+  });
+  await assert.rejects(ops.editCall(client, { id: ID, proposal: p.id, by: 'Sam Example', edits: { ...edits, outcomes: [{ code: 'sold_everything' }] } }), /"sold_everything" is not an outcome code/);
+  const e = await ops.editCall(client, { id: ID, proposal: p.id, by: 'Sam Example', edits, seenEdits: '0' });
+  assert.deepEqual(e.fields, ['outcomes', 'objections', 'commitments', 'followUpDate']);
+  await assert.rejects(ops.editCall(client, { id: ID, proposal: p.id, by: 'Pat Example', edits: { ...edits, followUpDate: '2026-12-01' }, seenEdits: '0' }), /was corrected since you loaded it \(by Sam Example\)/, 'a stale form does not overwrite another principal\'s correction');
+  const after = (await ops.accountCalls(client, ID)).pending[0];
+  assert.deepEqual([after.status, after.edits.map((x) => x.by), after.outcomes.map((o) => o.code)], ['pending', ['Sam Example'], ['held', 'wrong_person']]);
+  const doc = fake.docs.get(`calls/${ID}/proposals/${p.id}.json`);
+  assert.equal(doc.updated_by, 'pat@example.test', 'written as the signed-in principal');
+  const audited = fake.lines.filter((l) => l.path === 'audit.jsonl' && l.line.type === 'call_proposal_edited').map((l) => l.line);
+  assert.deepEqual(audited.map((a) => [a.by, a.fields]), [['Sam Example', ['outcomes', 'objections', 'commitments', 'followUpDate']]]);
+  assert.doesNotMatch(JSON.stringify(audited), /special assets|quick close|wrong_person|confidentiality/);
+  assert.equal(fake.lines.some((l) => l.path === 'outcomes.jsonl'), false, 'nothing recorded before a principal confirms');
+  // The confirm button carries how many corrections its principal saw.
+  await assert.rejects(ops.confirmCall(client, { id: ID, proposal: p.id, by: 'Pat Example', seenEdits: '0' }), /was corrected since you loaded it/);
+  const r = await ops.confirmCall(client, { id: ID, proposal: p.id, by: 'Pat Example', seenEdits: '1' });
+  assert.deepEqual([r.outcome.codes, r.outcome.edited], [['held', 'wrong_person'], { by: ['Sam Example'], fields: ['outcomes', 'objections', 'commitments', 'followUpDate'] }]);
+  assert.deepEqual((await ops.accountCalls(client, ID)).outcomes[0].edited.by, ['Sam Example']);
+  assert.equal(fake.docs.get(`accounts/${ID}.json`).body.person.name, 'Jordan Sample', 'no one named in the notes became the person');
+});

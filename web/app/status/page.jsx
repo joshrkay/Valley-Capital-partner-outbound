@@ -4,6 +4,7 @@ import { coverageCard } from '../../lib/coverage-view.mjs';
 import { when, period } from '../../lib/format.mjs';
 import { NotAuthorized, Problem } from '../ui.jsx';
 import { queueSourcesAction, queueScoreAction, queueEdgarAction } from './actions.js';
+import { Outcomes } from './outcomes.jsx';
 
 export const metadata = { title: 'Status · Valley Capital outbound' };
 
@@ -84,6 +85,7 @@ export default async function Status() {
           ))}</tbody>
         </table></div>
       )}
+      <Outcomes client={ctx.client} />
     </>
   );
 }
