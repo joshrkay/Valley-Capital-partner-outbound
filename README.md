@@ -31,7 +31,7 @@ Start with `docs/prd-signal-pipeline.md` for the pipeline, and `docs/research-ag
   - a contact-data vendor's API (E7-S2 tests a vendor's exported results; no vendor is wired in);
   - deploying the platform (E12-S7);
   - Gmail drafts and reply detection (E9);
-  - enforcement orders from the OCC and the states (next-five E18-S2 has the Federal Reserve, and the FDIC on a principal's machine), and merger applications (E18-S3);
+  - enforcement orders from the OCC (next-five E18-S2 has the Federal Reserve, and the FDIC on a principal's machine; state orders were checked and not built, see the PRD), and merger applications (E18-S3);
   - quarterly nurture (E10);
   - the referral mapper's drafted ask to a connector (E22 finds the routes and gives a checklist; it drafts nothing, PRD D-R7), and county records that name a lender's counsel (E22-S3 has the event shape and the seam, no adapter);
   - meeting prep beyond the call brief (event lists, who to meet, and a drafted follow-up email: PRD E15-S3 gives a checklist today);
@@ -259,7 +259,7 @@ An enforcement order is a dated sign that an examiner has told a bank to clean u
 - the Federal Reserve's orders, read by the worker;
 - the FDIC's, which cover most banks in our list, read on a principal's machine (below).
 
-The OCC's and the states' are not built.
+The OCC's waits for its free API key. State orders were checked and not built: Texas publishes none against banks, and California's site could not be read from here (PRD next-five E18-S2).
 
 ```bash
 npm run outbound -- sources run enforcement             # the Fed's action files (no key), then each new matched order's document, for fixed phrases only
