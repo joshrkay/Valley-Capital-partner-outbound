@@ -126,13 +126,15 @@ export async function Touches({ client, id }) {
         <div className="panel">
           <h3 style={{ marginTop: 0 }}>Record an opt-out</h3>
           <div className="banner warn small">
-            An opt-out suppresses the person and their address at once.{' '}
-            {named.length ? <>From now on they are on the suppression list and never contacted again: <strong>{named.join(', ')}</strong>.</> : 'No person or address is on the account yet, so the log alone records it.'}{' '}
+            An opt-out suppresses the person who asked and their address at once: they go on the suppression list and are never contacted again.{' '}
+            The fields below start from the account's contact{named.length ? <> (<strong>{named.join(', ')}</strong>)</> : ''}. If someone else at the bank asked to be removed, enter their name and address instead.{' '}
             Outreach to everyone at {t.account.name} stops for good. It cannot be undone here.
           </div>
           <form action={recordOptOutAction}>
             <input type="hidden" name="id" value={id} />
             <label>Date<input type="date" name="date" defaultValue={t.today} max={t.today} required /></label>
+            <label style={{ marginTop: 8 }}>Who opted out: name<input name="optOutName" defaultValue={t.optOut.name} maxLength={200} /></label>
+            <label style={{ marginTop: 8 }}>Their email address<input type="email" name="optOutEmail" defaultValue={t.optOut.email} maxLength={200} /></label>
             <label style={{ marginTop: 8 }}>Short internal note (optional: never the reply's text, no personal data)<input name="note" maxLength={200} /></label>
             <label style={{ marginTop: 8 }}><input type="checkbox" name="confirm" value="yes" required /> They asked not to be contacted. I understand this suppresses the person and the address at once.</label>
             <p style={{ marginTop: 8 }}><button className="danger" type="submit">Record the opt-out</button></p>

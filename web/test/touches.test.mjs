@@ -166,3 +166,33 @@ test('the account page shows the panel with one import and one element; the opt-
   assert.doesNotMatch(panel, /<textarea/, 'no room for message text');
   assert.match(panel, /max=\{t\.today\}/, 'the date inputs stop at today');
 });
+
+test('review fix 1: a send is never recorded under a sender that is not in senders.json', async () => {
+  const { fake, client } = setup();
+  await assert.rejects(to.recordSend(client, { id: ID, channel: 'letter', date: '2026-11-16', sender: 'ghost', by: 'Pat Example', now: NOW }), /No sender "ghost"/);
+  assert.equal(touchLines(fake).length, 0, 'nothing reaches the touch log');
+});
+
+test('review fix 2: an opt-out suppresses the address that opted out, which a principal confirms, not only the account\'s current person', async () => {
+  const { fake, client } = setup();
+  const r = await to.recordEvent(client, { id: ID, type: 'opt_out', date: '2026-11-16', by: 'Pat Example', confirmOptOut: true, optOutName: 'Riley Other', optOutEmail: 'Riley@AcmeBank.test', now: NOW });
+  assert.deepEqual(r.suppressed, { person: true, email: true });
+  const entries = fake.docs.get('suppression.json').body.entries;
+  assert.ok(entries.some((e) => e.type === 'email' && e.value === 'riley@acmebank.test'), 'the address that opted out is suppressed');
+  assert.ok(entries.some((e) => e.type === 'person' && e.value === 'Riley Other'), 'the person who opted out is suppressed');
+  assert.ok(!entries.some((e) => e.value === 'jordan@acmebank.test' || e.value === 'Jordan Sample'), 'the account\'s current person is not suppressed for someone else\'s opt-out');
+  await assert.rejects(to.recordEvent(client, { id: ID, type: 'opt_out', date: '2026-11-16', by: 'Pat Example', confirmOptOut: true, optOutEmail: 'not-an-address', now: NOW }), /not a valid email address/);
+  // With nothing entered, the account's person is suppressed, as before.
+  const { fake: f2, client: c2 } = setup();
+  await to.recordEvent(c2, { id: ID, type: 'opt_out', date: '2026-11-16', by: 'Pat Example', confirmOptOut: true, now: NOW });
+  assert.ok(f2.docs.get('suppression.json').body.entries.some((e) => e.value === 'jordan@acmebank.test'));
+});
+
+test('review fix 3: with an invalid time zone, a call keeps its date and drops the time, instead of reading the time as UTC', async () => {
+  const { fake, client } = setup();
+  seed(fake, `accounts/${ID}.json`, { ...ACCOUNT, person: { ...ACCOUNT.person, timezone: 'Mountain' } });
+  // 14:55 local, five minutes before NOW (15:00Z): read as UTC it would be fine, but 16:30 read as UTC is later than now and was refused.
+  const r = await to.recordSend(client, { id: ID, channel: 'call', date: '2026-11-16', time: '16:30', sender: 'pat', by: 'Pat Example', now: NOW });
+  assert.equal(r.date, '2026-11-16');
+  assert.ok(r.violations.some((v) => v.code === 'TIMEZONE_INVALID' || /zone/i.test(v.message)), 'the guard still reports the bad time zone');
+});
