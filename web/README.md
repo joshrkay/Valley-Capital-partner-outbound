@@ -44,7 +44,7 @@ PRD E12-S5. It is a private Next.js app where the firm's principals can:
 | `/network` | **The firm's network** (PRD E22-S1): people the principals know, firms they work with, associations they belong to. Add and remove each; see how many chosen routes use each entry. Names and relationships only, never an email address or a phone number. Viewing it is audited. No model sees it. |
 | `/drafts` | Drafts waiting for approval, with their lint result. Approve re-runs the linter and the guard. There is no send button. |
 | `/pilot`, `/pilot/[id]` | The scorecard, finding-by-finding verdicts, and recording a pass. |
-| `/status` | Jobs, source runs and the kill switch. Queue an FDIC pull, a CMBS pull (SEC EDGAR) or scoring (optionally with the draft buy box). The last EDGAR run's counts (trusts read, loans read and kept), and its error if the last pull failed. A placeholder SEC contact fails before the run log is written, so the failed job's own error is shown too. |
+| `/status` | Jobs, source runs and the kill switch. **What led to conversations** (PRD E15-S4): the engine's outcomes report, counts by signal type, tier and lead time, meetings recorded by hand included; counts only, never a name or a note. Queue an FDIC pull, a CMBS pull (SEC EDGAR) or scoring (optionally with the draft buy box). The last EDGAR run's counts (trusts read, loans read and kept), and its error if the last pull failed. A placeholder SEC contact fails before the run log is written, so the failed job's own error is shown too. |
 
 ## Run it
 

@@ -175,14 +175,15 @@ When the person who decides on loan sales agrees to talk:
 ```bash
 npm run outbound -- call prep --account acme-bank --date 2026-11-17     # a one-page call brief, checked in code
 npm run outbound -- call log --account acme-bank --date 2026-11-17 --by "Pat Example" --notes notes.txt   # or --notes - for stdin
+npm run outbound -- call edit --account acme-bank --proposal <PID> --by "Pat Example" --codes held,nda_requested --follow-up 2026-12-01   # optional: correct it first
 npm run outbound -- call confirm --account acme-bank --proposal <PID> --by "Pat Example"
 npm run outbound -- outcomes report                                     # which signals led to conversations
 ```
 
 - **The brief** (`calls/<id>/<date>-prep.md`) is written by one model call from fixed inputs, each with an id: the account, the research, the signals and card, the paper estimate if there is one, the touch history, the approved claims and the playbook. Code checks that every cited id exists, every number is in the inputs, every claim is approved and quoted word for word, and no estimate is stated as a fact. A brief that fails says **NOT USABLE** first. An unconfirmed role is a warning at the top.
-- **The notes** stay in `calls/<id>/`, for principals only. A model turns them into a proposal: outcome codes from a fixed list, objections, commitments, a follow-up date, and the people mentioned. **Nothing is recorded until a principal confirms it.** Confirming records a guard `meeting` event (which ends the sequence), a line in `outcomes.jsonl` linked to the account's origin signals, and the outcome on the account. People named in the notes are never added; a principal uses `account set-person`.
+- **The notes** stay in `calls/<id>/`, for principals only. A model turns them into a proposal: outcome codes from a fixed list, objections, commitments, a follow-up date, and the people mentioned. **Nothing is recorded until a principal confirms it.** Confirming records a guard `meeting` event (which ends the sequence), a line in `outcomes.jsonl` linked to the account's origin signals, and the outcome on the account. People named in the notes are never added; a principal uses `account set-person`. Before confirming, a principal may correct the codes, objections, commitments and follow-up date (`call edit`, or the form on the account page), with the same checks; the audit and the outcome name who corrected which fields, never the values.
 - **The follow-up** is a checklist of what was agreed (`calls/<id>/<date>-followup.md`). No email is drafted: after a meeting the guard refuses every touch, and the drafter only writes from the briefer's facts. PRD E15-S3 says why.
-- **The report** (`reports/outcomes-<date>.json`) counts confirmed outcomes by signal type, tier and lead time. It uses no model and never changes the weights.
+- **The report** (`reports/outcomes-<date>.json`, and a section of the web app's Status page) counts confirmed outcomes by signal type, tier and lead time. A meeting recorded by hand (`guard event --type meeting`) counts as a held call with no other outcome, never twice. It uses no model and never changes the weights.
 
 On the platform, the account page does the same: queue a brief, paste notes, confirm or reject.
 

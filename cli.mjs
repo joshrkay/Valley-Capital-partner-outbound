@@ -34,7 +34,7 @@ import { runVendorTest, passVendor, listVendors } from './src/vendors.mjs';
 import { work, JOB_KINDS } from './src/platform/worker.mjs';
 import { push, pull } from './src/platform/move.mjs';
 import { smoke } from './src/platform/smoke.mjs';
-import { runCallPrep, saveNotes, runCallExtract, buildExtractPrompt, confirmInFolder, rejectProposal, listCalls, renderProposal, needDate, MAX_NOTES } from './src/calls.mjs';
+import { runCallPrep, saveNotes, runCallExtract, buildExtractPrompt, confirmInFolder, rejectProposal, editProposal, listCalls, renderProposal, needDate, MAX_NOTES } from './src/calls.mjs';
 import { runOutcomesReport, renderOutcomesReport } from './src/outcomes.mjs';
 import { addPerson, addFirm, addMembership, listNetwork } from './src/network.mjs';
 import { buildRoutes, readRoutes, chooseRoute, removeNetworkEntry } from './src/routes.mjs';
@@ -228,13 +228,20 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound call log --account ID --date D --by NAME --notes FILE|- [--dry-run]   save your notes (calls/ID/DATE-notes.md, principals
                                                   only), and a model proposes the outcome. Nothing is recorded until a principal confirms it.
                                                   D may not be later than today. New notes for a date supersede its pending proposals
+  outbound call edit --account ID --proposal PID --by NAME [--codes C1,C2|none] [--when TEXT] [--referral TEXT]
+                     [--objection TEXT ...|--objections none] [--commitment "who|what|by" ...|--commitments none] [--follow-up D|none]
+                                                  correct a pending proposal before confirming it: only the fields given change, each
+                                                  replaced whole, with the same checks as the model's proposal (codes from the list, real
+                                                  dates, nothing before the call). People named in the notes are not edited here. The
+                                                  audit names who and which fields; the confirmed outcome says a principal corrected it
   outbound call confirm --account ID --proposal PID --by NAME      record it: a guard meeting event (it stops the sequence), the
                                                   outcome on the account and in outcomes.jsonl, and a follow-up checklist. If it stops
                                                   partway, run it again: it finishes what is missing and writes nothing twice
   outbound call reject  --account ID --proposal PID --by NAME [--reason TEXT]
   outbound call list --account ID                 briefs, proposals and confirmed outcomes for an account
   outbound outcomes report [--since YYYY-MM-DD]   confirmed outcomes by signal type, tier and lead time (no model; never changes
-                                                  weights), written to reports/outcomes-DATE.json
+                                                  weights), written to reports/outcomes-DATE.json. A meeting recorded by hand (guard
+                                                  event --type meeting) counts as a held call with no other outcome, never twice
 
   A backtest of the score (PRD E17): would the score, run on the data known at the time, have ranked banks under pressure? Every
   setting is a placeholder in config.json backtest. It never changes scoring.json; a principal does, citing a holdout report.
@@ -280,6 +287,7 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound platform verify [fdic|edgar|filings|fdicsales|enforcement|occorders|mergerapps|sales] [--sample N]   the same checks on the platform's data (read-only); no spot-check list unless asked
 `;
 
+const REPEATABLE = new Set(['alias', 'objection', 'commitment']);   // flags that may be given more than once, collected in a list
 function parse(argv) {
   const pos = []; const flags = {};
   for (let i = 0; i < argv.length; i++) {
@@ -287,7 +295,7 @@ function parse(argv) {
     if (!a.startsWith('--')) { pos.push(a); continue; }
     const k = a.slice(2); const v = argv[i + 1];
     if (v === undefined || v.startsWith('--')) { flags[k] = true; continue; }
-    flags[k] = k === 'alias' ? [...(flags[k] ?? []), v] : v; i++;
+    flags[k] = REPEATABLE.has(k) ? [...(flags[k] ?? []), v] : v; i++;
   }
   return { pos, flags };
 }
@@ -786,9 +794,36 @@ async function main() {
       if (!r.ok) { process.exitCode = 1; return out(`${replaced}The notes are saved, but the model call failed: ${r.reason}${r.detail ? ` (${r.detail})` : ''}. Nothing was recorded.`); }
       return out(`${replaced}${renderProposal(r.proposal, id)}`);
     }
+    if (sub === 'edit') {   // a principal corrects a pending proposal: only the fields given change, each replaced whole
+      const pid = need(flags, 'proposal');
+      const edits = {};
+      const given = (k) => flags[k] !== undefined;
+      const noneOnly = (k, one) => { if (flags[k] !== 'none') throw new Error(`--${k} takes only "none", to clear them. Give each with --${one}.`); return []; };
+      if (given('codes') || given('when') || given('referral')) {
+        if (flags.codes === true) throw new Error('--codes takes a list: --codes held,nda_requested (or none).');
+        const current = listCalls({ dir, id }).proposals.find((p) => p.id === pid);
+        if (!current) throw new Error(`No proposal "${pid}" for ${id}.`);
+        const was = new Map(current.outcomes.map((o) => [o.code, o]));
+        const codes = !given('codes') ? current.outcomes.map((o) => o.code) : flags.codes === 'none' ? [] : String(flags.codes).split(',').map((s) => s.trim()).filter(Boolean);
+        edits.outcomes = codes.map((code) => ({ code, when: code === 'not_selling_now' ? opt(flags, 'when') ?? was.get(code)?.when ?? '' : '', referral: code === 'wrong_person' ? opt(flags, 'referral') ?? was.get(code)?.referral ?? '' : '' }));
+      }
+      if (given('objections')) edits.objections = noneOnly('objections', 'objection TEXT');
+      if (given('objection')) edits.objections = [].concat(flags.objection).filter((x) => x !== true).map(String);
+      if (given('commitments')) edits.commitments = noneOnly('commitments', 'commitment "who|what|by"');
+      if (given('commitment')) {
+        edits.commitments = [].concat(flags.commitment).map((s) => {
+          const parts = String(s === true ? '' : s).split('|').map((x) => x.trim());
+          if (parts.length < 2 || parts.length > 3 || !parts[1]) throw new Error(`A commitment is "who|what|by", for example "us|Send our confidentiality agreement|2026-11-21". "by" may be left out.`);
+          return { who: parts[0], what: parts[1], by: parts[2] ?? '' };
+        });
+      }
+      if (given('follow-up')) edits.followUpDate = flags['follow-up'] === 'none' ? '' : need(flags, 'follow-up');
+      const r = editProposal({ dir, id, proposalId: pid, by: need(flags, 'by'), edits });
+      return out(`Corrected proposal ${r.proposalId}: ${r.fields.join(', ')}. Nothing is recorded until a principal confirms it.\n\n${renderProposal(r.proposal, id)}`);
+    }
     if (sub === 'confirm') {
       const r = await confirmInFolder({ dir, id, proposalId: need(flags, 'proposal'), by: need(flags, 'by'), rules });
-      return out(`${r.resumed ? 'Finished a confirmation that had stopped partway; nothing was written twice.\n' : ''}Recorded the call of ${r.outcome.date} for ${id}: ${r.outcome.codes.join(', ') || 'no outcome codes'}.\n- A meeting event is in the touch log. The automated sequence for this bank is over; any follow-up is a principal's own message.\n- The outcome is on the account and in outcomes.jsonl, linked to ${r.outcome.originSignals.length} origin signal(s).\n- People named in the notes stay unconfirmed. Add one only with: outbound account set-person, then confirm-role.\n${r.followUp.hardStops.length ? `STOP before any follow-up: ${r.followUp.hardStops.join(', ')}.\n` : ''}Follow-up checklist (no email is drafted): ${r.followUp.path}`);
+      return out(`${r.resumed ? 'Finished a confirmation that had stopped partway; nothing was written twice.\n' : ''}Recorded the call of ${r.outcome.date} for ${id}: ${r.outcome.codes.join(', ') || 'no outcome codes'}.\n${r.outcome.edited ? `- Corrected by ${r.outcome.edited.by.join(', ')} before confirming (${r.outcome.edited.fields.join(', ')}); the outcome records it.\n` : ''}- A meeting event is in the touch log. The automated sequence for this bank is over; any follow-up is a principal's own message.\n- The outcome is on the account and in outcomes.jsonl, linked to ${r.outcome.originSignals.length} origin signal(s).\n- People named in the notes stay unconfirmed. Add one only with: outbound account set-person, then confirm-role.\n${r.followUp.hardStops.length ? `STOP before any follow-up: ${r.followUp.hardStops.join(', ')}.\n` : ''}Follow-up checklist (no email is drafted): ${r.followUp.path}`);
     }
     if (sub === 'reject') return out(rejectProposal({ dir, id, proposalId: need(flags, 'proposal'), by: need(flags, 'by'), reason: flags.reason === true ? '' : flags.reason }));
     if (sub === 'list') {
@@ -796,7 +831,7 @@ async function main() {
       return out([
         `${l.account.name}: ${l.briefs.length} call brief(s), ${l.proposals.filter((p) => p.status === 'pending').length} pending proposal(s), ${l.outcomes.length} confirmed outcome(s).`,
         ...l.briefs.map((b) => `brief    ${b.date}  ${b.usable ? 'usable' : 'NOT USABLE'}${b.problems.length ? ` (${b.problems.map((e) => e.code).join(', ')})` : ''}`),
-        ...l.proposals.map((p) => `proposal ${p.id}  ${p.status}${p.unfinished ? ' (confirmation unfinished: run call confirm again)' : ''}  ${p.outcomes.map((o) => o.code).join(', ')}`),
+        ...l.proposals.map((p) => `proposal ${p.id}  ${p.status}${p.edits.length ? ` (corrected by ${[...new Set(p.edits.map((e) => e.by))].join(', ')})` : ''}${p.unfinished ? ' (confirmation unfinished: run call confirm again)' : ''}  ${p.outcomes.map((o) => o.code).join(', ')}`),
         ...l.outcomes.map((o) => `outcome  ${o.date}  ${o.codes.join(', ')}  confirmed by ${o.confirmedBy}`),
       ].join('\n'));
     }

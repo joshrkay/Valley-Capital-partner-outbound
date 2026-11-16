@@ -31,7 +31,8 @@ export const LOADS = Object.freeze({
   callNotes: ['accounts/', 'calls/'],
   callExtract: ['accounts/', 'calls/'],
   callConfirm: [...GUARD, 'accounts/', 'calls/', 'paper/', 'outcomes.jsonl'],
-  outcomes: ['outcomes.jsonl', 'reports/'],
+  // The outcomes report also counts meetings recorded by hand: the touch log, and the accounts they name (for their origin signals).
+  outcomes: ['outcomes.jsonl', 'reports/', 'touches.jsonl', 'accounts/'],
   // The weekly triage (src/triage.mjs): the candidate list and decisions, accounts, the guard's log and suppression list, the run log, the
   // few source files it reads, and its own snapshot. The day's two output files are added per run (triageLoads), so past triages are
   // never loaded. No research or drafting action loads triage/, so the triage never reaches a brief or a message.

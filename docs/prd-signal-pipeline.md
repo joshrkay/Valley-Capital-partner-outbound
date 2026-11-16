@@ -975,8 +975,14 @@ Rules across the epic:
 - [x] One confirmed outcome per call date. A confirmed or rejected proposal cannot be confirmed. A confirmed call's notes are not replaced. `outbound call reject` and `outbound call list` complete the set.
 - [x] **People named in the notes are never added automatically.** They stay on the proposal and the outcome as "unconfirmed, from call notes". A principal adds one through `account set-person`, then `account confirm-role` (E7).
 - [x] Logs carry counts only. Audit lines and job results hold codes, counts and ids, never a name or note text. The outcome line holds no name either. A test checks both.
-- [ ] A principal can correct a proposal before confirming it. Today they reject it and log the notes again.
-- [ ] A meeting recorded by hand (`guard event --type meeting`) has no outcome, so the report does not count it.
+- [x] **A principal can correct a proposal before confirming it**, instead of rejecting it and logging the notes again. `outbound call edit --account ID --proposal PID --by NAME` with `--codes`, `--when`, `--referral`, `--objection` (repeatable), `--commitment "who|what|by"` (repeatable), `--follow-up` (`none` clears a field), then `call confirm`. On the web, a correction form under each pending proposal, then the same confirm button.
+  - Only the fields given change, each replaced whole: the outcome codes (with `when` and `referral`), the objections, the commitments and the follow-up date. The call date is not editable, since the notes are filed under it.
+  - The same checks as the model's proposal, refused instead of flagged, since a principal typed it: codes from the fixed list, once each; `who` from the list; real dates; no follow-up date or dated deadline before the call; a call date later than today refused. People named in the notes are not editable and never added to the account.
+  - A code, objection or commitment kept from the model keeps its quote, still looked for in the notes. One a principal adds is marked as theirs. The model's original stays on the proposal beside the correction.
+  - **The notes digest still holds:** a corrected proposal whose notes changed can be neither corrected again nor confirmed. A superseded, rejected, confirmed or unfinished proposal cannot be corrected.
+  - **Audited:** `call_proposal_edited` names who and which fields, never a value. The confirmed outcome (on the account and in `outcomes.jsonl`) carries `edited: { by, fields }`, and `call_confirmed` says `edited: true`.
+  - The web page sends how many corrections it showed; a proposal corrected since is neither corrected over nor confirmed, so no one records what they did not read. `confirmProposal` stays idempotent: a correction is refused once a confirmation has started, and a retry finishes it as corrected.
+- [x] **A meeting recorded by hand** (`guard event --type meeting`, or the account page) is counted by the outcomes report as a held call with no other outcome code, under "by hand", linked to its account's `originSignals`. A confirmed call's own meeting (`ref: call:<id>`, or a meeting on the same account and date, which confirming finds instead of logging a second) is counted once, as the call. The same account and date recorded twice is one meeting. `--since` counts only meetings on or after it; an account's first meeting, and so its lead time, still counts every meeting. Hand meetings do not count toward `minToTune`: they carry no outcome.
 
 **E15-S3. The follow-up.** *As a principal, I want what was agreed on the call turned into a follow-up so that nothing promised is forgotten.* P1, R2. **Built as a checklist. The email is deferred.**
 - [x] On confirmation, a checklist is written to `calls/<id>/<date>-followup.md` and `.json`, and shown on the account page. Its facts are only what was agreed:
@@ -994,7 +1000,7 @@ Rules across the epic:
 - [ ] **A decision for a principal.** The guard has no record type for a principal's own message after a meeting. Recorded with `guard record`, it is logged with the violation `SEQUENCE_STOPPED`. That is right for the sequence, but it reads as a broken rule. One option: a `correspondence` record that the guard logs outside the sequence, still under the kill switch, suppression and opt-out. A post-call email could then go through the drafter with the agreed facts as its only facts. Not built.
 
 **E15-S4. What led to conversations.** *As a principal, I want to see which signals led to conversations, confidentiality agreements and tapes so that the score can be tuned on outcomes, not guesses.* P1, R2. **Built.**
-- [x] `outbound outcomes report [--since D]`. Deterministic, with no model. It reads confirmed outcomes only (`outcomes.jsonl`). `--since` chooses which calls are counted. An account's first signal and first held call still come from all its confirmed calls, so the window never moves its lead time.
+- [x] `outbound outcomes report [--since D]`. Deterministic, with no model. It reads confirmed outcomes (`outcomes.jsonl`), and the meetings recorded by hand from the touch log (E15-S2). `--since` chooses which calls are counted. An account's first signal and first held call still come from all its confirmed calls, so the window never moves its lead time.
 - [x] For each group it counts the accounts, the confirmed calls, and the accounts that reached each outcome code:
   - by the signal types in `originSignals`. An account started by several types counts once under each. An account picked by hand has its own row.
   - by tier;
@@ -1006,14 +1012,14 @@ Rules across the epic:
 
 **Plumbing.**
 - [x] Migration `20261114120000_jobs_calls.sql` adds `call.prep` and `call.extract` to `jobs_kind_check`, with every earlier kind. `test/db.test.mjs` runs it on Postgres 16, and `test/postgrest-fake.mjs` knows the kinds. A test checks that the newest migration lists exactly the worker's kinds.
-- [x] Units of work (`src/uow.mjs`, `LOADS`): `callPrep`, `callNotes`, `callExtract`, `callConfirm` and `outcomes`, each narrowed to one account's folders. `callConfirm` also reads `outcomes.jsonl`, to finish an interrupted confirmation without a second line.
+- [x] Units of work (`src/uow.mjs`, `LOADS`): `callPrep`, `callNotes`, `callExtract`, `callConfirm` and `outcomes`, each narrowed to one account's folders. `callConfirm` also reads `outcomes.jsonl`, to finish an interrupted confirmation without a second line. A correction runs under `callExtract`'s list. `outcomes` also reads `touches.jsonl` and the accounts, for the meetings recorded by hand.
 - [x] **Web**, on the account page, through `web/lib/ops.mjs` and the principal's session:
   - the latest call brief, marked NOT USABLE with its reasons when a check failed;
   - a form to paste notes, which saves them as the principal and queues `call.extract`;
-  - each pending proposal, with confirm and reject;
+  - each pending proposal, with correct, confirm and reject;
   - the confirmed outcomes, and the follow-up checklist.
 - [x] `test/calls-handoff.test.mjs` proves, end to end, that the research and the paper estimate never reach the drafter, and that the follow-up carries only what was agreed.
-- [ ] The outcomes report on the web (the Status screen). The command line has it.
+- [x] **The outcomes report on the web:** a section of the Status page, rendered on the server from the same `src/outcomes.mjs` the command line uses (`web/lib/ops.mjs` `outcomesOverview`, `web/lib/outcomes-view.mjs`). Counts by signal type, tier and lead time, with "by hand" and the "too few to tune" wording below `minToTune`. Counts only: no name, note or account. It writes nothing.
 
 ### E16. Who sells to whom
 
