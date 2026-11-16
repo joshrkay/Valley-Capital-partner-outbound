@@ -200,7 +200,33 @@ export async function accountCalls(client, id) {
   const [{ store }, calls] = await Promise.all([mods(), engine('src/calls.mjs')]);
   store.safeId(need(id, 'An account id'));
   const { result } = await client.unitOfWork([`accounts/${id}.json`, `calls/${id}/`], (dir) => calls.listCalls({ dir, id }));
-  return { ...result, latestBrief: result.briefs[0] ?? null, pending: result.proposals.filter((p) => p.status === 'pending'), latestFollowUp: result.followUps[0] ?? null };
+  return {
+    ...result, latestBrief: result.briefs[0] ?? null, pending: result.proposals.filter((p) => p.status === 'pending'), latestFollowUp: result.followUps[0] ?? null,
+    // What the correction form offers: the fixed list of outcome codes, and who a commitment can be for.
+    codes: Object.entries(calls.OUTCOME_CODES).map(([code, help]) => ({ code, help })), who: [...calls.COMMITMENT_WHO],
+  };
+}
+
+// The correction form, as the account page posts it (web/app/accounts/[id]/calls.jsx), turned into the engine's correction: a checkbox per
+// outcome code, the "when" of not_selling_now and the "referral" of wrong_person, one objection per line, and numbered commitment rows
+// (who.N, what.N, by.N; a row with no "what" is dropped). Every field is sent, so each is replaced whole. The engine checks the result.
+export function proposalEditsFromForm(fd) {
+  const get = (k) => str(fd.get(k) ?? '');
+  const rows = Math.min(Math.max(Number.parseInt(get('commitmentRows'), 10) || 0, 0), 50);
+  return {
+    outcomes: fd.getAll('code').map((c) => str(c)).filter(Boolean).map((code) => ({ code, when: code === 'not_selling_now' ? get('when') : '', referral: code === 'wrong_person' ? get('referral') : '' })),
+    objections: get('objections').split(/\r?\n/).map((s) => s.trim()).filter(Boolean),
+    commitments: Array.from({ length: rows }, (_, i) => ({ who: get(`who.${i}`), what: get(`what.${i}`), by: get(`by.${i}`) })).filter((c) => c.what),
+    followUpDate: get('followUpDate'),
+  };
+}
+
+// A principal corrects a pending proposal (src/calls.mjs editProposal) before confirming it. `seenEdits` is how many corrections the
+// form was made from, so a stale form never overwrites another principal's correction. Nothing is recorded until a principal confirms.
+export async function editCall(client, { id, proposal, by, edits, seenEdits }) {
+  const calls = await engine('src/calls.mjs');
+  const { result } = await client.unitOfWork(calls.callLoads('callExtract', need(id, 'An account id')), (dir) => calls.editProposal({ dir, id, proposalId: need(proposal, 'A proposal'), by, edits, seenEdits }));
+  return { proposalId: result.proposalId, fields: result.fields };
 }
 
 export async function queueCallPrep(client, { id, date }) {
@@ -216,10 +242,11 @@ export async function logCallNotes(client, { id, date, notes, by }) {
   return client.enqueue('call.extract', { account: id, date: day, by });
 }
 
-export async function confirmCall(client, { id, proposal, by }) {
+// `seenEdits`: how many corrections the page showed when the principal pressed confirm. A proposal corrected since is not confirmed.
+export async function confirmCall(client, { id, proposal, by, seenEdits }) {
   const calls = await engine('src/calls.mjs');
   const rules = await loadRules();
-  const { result } = await client.unitOfWork(calls.callLoads('callConfirm', need(id, 'An account id')), (dir) => calls.confirmProposal({ dir, id, proposalId: need(proposal, 'A proposal'), by, rules }));
+  const { result } = await client.unitOfWork(calls.callLoads('callConfirm', need(id, 'An account id')), (dir) => calls.confirmProposal({ dir, id, proposalId: need(proposal, 'A proposal'), by, rules, seenEdits }));
   return result;
 }
 
@@ -313,6 +340,20 @@ export async function coverageOverview(client, { pageSize = 1000 } = {}) {
     items: rows.map((r) => ({ key: r.key, tier: r.tier ?? null, name: r.name ?? '' })),
   } : null;
   return coverage.buildCoverage({ latest, aliases: doc(P.aliases), filers: doc(P.filers), servicers: doc(P.servicers), ledger: doc(P.ledger), enforcement: doc(P.enforcement), fdicOrders: doc(P.fdicOrders), occOrders: doc(P.occOrders), mergers: doc(P.mergers), institutions: doc(P.institutions) });
+}
+
+// What led to conversations (PRD E15-S4), for the Status page: the engine's own report (src/outcomes.mjs), the one `outbound outcomes
+// report` prints, built from the confirmed outcome lines, the touch log (meetings recorded by hand) and only the accounts those meetings
+// name. Read as the principal; it writes nothing (the command line's run writes reports/). The page shows its counts, never a name.
+export async function outcomesOverview(client, { now = new Date() } = {}) {
+  const [outcomes, rules] = await Promise.all([engine('src/outcomes.mjs'), loadRules()]);
+  const snap = await client.load(['outcomes.jsonl', 'touches.jsonl']);
+  const lines = snap.logs['outcomes.jsonl'] ?? [];
+  const touches = snap.logs['touches.jsonl'] ?? [];
+  const ids = outcomes.accountsNeeded({ touches, lines });
+  const docs = ids.length ? (await client.load(ids.map((id) => `accounts/${id}.json`))).docs : {};
+  const accounts = Object.fromEntries(ids.map((id) => [id, docs[`accounts/${id}.json`] ?? null]));
+  return outcomes.buildOutcomesReport({ lines, touches, accounts, ...outcomes.reportSettings(rules.config), now });
 }
 
 export const queueSources = (client) => client.enqueue('sources.fdic', {});

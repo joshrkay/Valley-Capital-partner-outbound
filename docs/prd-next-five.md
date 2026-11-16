@@ -125,7 +125,19 @@ The pipeline answers "which banks in our metros are under pressure" well. It is 
 `LOADS.backtestPanel`, `backtestLabels` and `backtestRun` in `src/uow.mjs` already name what each step reads.
 
 **E17-S5. Calibration page.** *As a principal, I want to read the latest backtest in the web app so that I don't need the command line to see whether the score works.* P2, R2.
-- [ ] A Calibration page, server-rendered from the stored report, linked from Status. It shows the headline table and the per-component table, with their counts.
+- [x] A Calibration page, server-rendered from the stored report, linked from Status. It shows the headline table and the per-component table, with their counts.
+
+**As built (S5, November 16, 2026).** `/calibration` in the web app (`web/lib/calibration-ops.mjs`, `calibration-view.mjs`). It is read-only: it runs no backtest, queues nothing and writes nothing.
+- **What it reads.** `LOADS.calibration` is the run log (`backtest/runs.jsonl`) alone, and `calibrationLoads(hash)` adds the one report shown. It never loads the panel or the labels.
+- **What it shows.** The report as stored, nothing recomputed:
+  - the headline by SEC-filer coverage and the metro subset, with its size;
+  - the table by era, beside the pooled figure (Q6), and the horizons side by side (D-B1);
+  - lead times, the per-component table and the context table;
+  - provenance: whether the run is a holdout or a reused holdout, and PROVISIONAL;
+  - the label kinds, the notes, the words and the known limits;
+  - the list of stored reports, and any of them can be opened.
+- **The wording.** A test checks that the page never says "precision" or "recall".
+- **How a report gets there.** The backtest still runs from the command line, so a report reaches the page through `outbound platform push`.
 
 **Decisions for a principal.**
 

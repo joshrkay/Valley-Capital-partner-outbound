@@ -14,6 +14,7 @@ import { runDrafter } from '../src/draft.mjs';
 import { runBriefer } from '../src/research.mjs';
 import { runCallPrep, callLoads } from '../src/calls.mjs';
 import { buildRoutes, chooseRoute } from '../src/routes.mjs';
+import { parseEvents } from '../src/events.mjs';
 
 const covers = (prefix, rel) => prefix === '' || rel === prefix || (prefix.endsWith('/') && rel.startsWith(prefix));
 const PRIVATE = ['network/network.json', `routes/${ID}.json`, `routes/${ID}.md`, 'contacts/known.json', 'contacts/vendors.json', 'contacts/vendor-tests/lemur-data-4417-2026-11-13.json'];
@@ -57,4 +58,19 @@ test('end to end, with all three stores in the data folder: the briefer, the dra
   const prep = await inUow(callLoads('callPrep', ID), (root) => runCallPrep({ client: null, dir: root, account, date: '2026-11-16', rules, ctx: loadContext({ dir: root, config: rules.config, env: {} }), now: NOW, dryRun: true }));
   assert.equal(prep.dryRun, true);
   assert.deepEqual(leaked(`${prep.system}\n${prep.user}`, rec), [], 'the call brief\'s prompt');
+});
+
+// PRD E22-S2: the forum event list is a rule file of public event pages, not the network. With it configured, the briefer's prompt
+// carries the events and still nothing from the three private stores: who in the firm belongs to an association stays in network/.
+test('with a forum event list configured, the briefer\'s prompt carries the events and still none of the private stores', async () => {
+  const { rec, snap, account } = await fullFolder();
+  const events = parseEvents({ maxPerAccount: 5, events: [{ _note: 'Invented, for tests.', id: 'example-forum-meeting', name: 'Example Forum Annual Meeting', host: 'Example Forum Events',
+    url: 'https://forum.example.org/annual/speakers/', dates: { start: '2026-10-05', end: '2026-10-06' }, association: 'Example Forum Association', national: true, states: [], metros: [], termsCheckedOn: '2026-11-01' }] }, { metros: rules.metros });
+  const { result: brief } = await withUnitOfWork({ load: async () => snap, flush: async () => {} }, LOADS.research, async (root) => {
+    for (const p of PRIVATE) assert.throws(() => readJson(join(root, p)), /was not loaded/, p);
+    return runBriefer({ client: null, dir: root, account, models: models(), playbooks: rules.playbooks, events, now: NOW, dryRun: true });
+  });
+  assert.equal(brief.dryRun, true);
+  assert.match(brief.user, /<forum_events[^>]*>.*Example Forum Annual Meeting.*<\/forum_events>/s);
+  assert.deepEqual(leaked(`${brief.system}\n${brief.user}`, rec), [], 'the briefer\'s prompt');
 });

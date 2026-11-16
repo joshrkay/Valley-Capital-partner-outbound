@@ -13,9 +13,11 @@ import { runDrafter } from '../src/draft.mjs';
 import {
   runCallPrep, gatherCallInputs, buildCallPrompt, checkCallBrief, numbersIn, paperInputs, readPaper, saveNotes, runCallExtract, processProposal,
   confirmProposal, confirmInFolder, commitSteps, rejectProposal, listCalls, buildFollowUp, originOf, callLoads, OUTCOME_CODES, NOT_SAY, UNCONFIRMED_PERSON,
+  editProposal, renderProposal,
 } from '../src/calls.mjs';
-import { buildOutcomesReport, runOutcomesReport, renderOutcomesReport, leadTimeBucket, HAND_PICKED } from '../src/outcomes.mjs';
-import { withUnitOfWork, snapshotFromDir, applyPlanToDir } from '../src/uow.mjs';
+import { buildOutcomesReport, runOutcomesReport, renderOutcomesReport, leadTimeBucket, handMeetings, HAND_PICKED, NO_ACCOUNT } from '../src/outcomes.mjs';
+import { recordEvent } from '../src/guard.mjs';
+import { withUnitOfWork, snapshotFromDir, applyPlanToDir, LOADS } from '../src/uow.mjs';
 import { JOB_KINDS, work } from '../src/platform/worker.mjs';
 import { platformClient } from '../src/platform/client.mjs';
 import { fakePostgrest } from './postgrest-fake.mjs';
@@ -395,6 +397,144 @@ test('the command line confirms through the folder\'s unit of work, so a second 
   assert.throws(() => cli('call', 'confirm', '--account', ID, '--proposal', r.proposalId, '--by', 'Pat Example'), /already confirmed/);
 });
 
+// ---- E15-S2: a principal corrects a proposal before confirming it ------------------------------------------------------------------
+const CORRECTION = {
+  outcomes: [{ code: 'held' }, { code: 'nda_requested' }, { code: 'not_selling_now', when: 'after their year end' }],
+  objections: ['A buyer may contact borrowers.', 'They want a quick close.'],
+  commitments: [{ who: 'us', what: 'Send our confidentiality agreement', by: '2026-11-24' }],
+  followUpDate: '2026-12-03',
+};
+const editsAudited = (dir) => readJsonl(join(dir, 'audit.jsonl')).filter((a) => a.type === 'call_proposal_edited');
+
+test('a principal corrects a pending proposal, then confirms it: nothing is recorded until then, and the outcome says it was corrected', async () => {
+  const { dir, r } = await logged();
+  const personBefore = acct(dir).person;
+  const before = readJson(proposalFile(dir, r.proposalId));
+  const e = editProposal({ dir, id: ID, proposalId: r.proposalId, by: 'Sam Example', edits: CORRECTION, now: AFTER });
+  assert.deepEqual(e.fields, ['outcomes', 'objections', 'commitments', 'followUpDate']);
+  const p = readJson(proposalFile(dir, r.proposalId));
+  assert.equal(p.status, 'pending');
+  // A code kept from the model keeps its quote from the notes; one a principal added is theirs, with no quote to look for.
+  assert.deepEqual(p.outcomes.map((o) => [o.code, o.when, o.quoteFound, o.source ?? 'notes']), [['held', '', true, 'notes'], ['nda_requested', '', true, 'notes'], ['not_selling_now', 'after their year end', false, 'principal']]);
+  assert.deepEqual(p.objections.map((o) => [o.text, o.source ?? 'notes']), [['A buyer may contact borrowers.', 'notes'], ['They want a quick close.', 'principal']]);
+  assert.deepEqual(p.commitments.map((c) => [c.who, c.what, c.by, c.byDate]), [['us', 'Send our confidentiality agreement', '2026-11-24', '2026-11-24']]);
+  assert.equal(p.followUpDate, '2026-12-03');
+  assert.ok(!p.problems.some((x) => /not in the notes/.test(x)), `a principal's own correction is not "not in the notes": ${p.problems.join(' | ')}`);
+  assert.deepEqual(p.people, before.people, 'the people named in the notes are not edited');
+  assert.equal(p.notesDigest, before.notesDigest, 'it still names the notes it was read from');
+  assert.deepEqual(p.original.outcomes.map((o) => o.code), ['held', 'nda_requested', 'tape_promised'], 'the model\'s proposal is kept beside the correction');
+  assert.deepEqual(p.edits.map((x) => [x.by, x.fields]), [['Sam Example', ['outcomes', 'objections', 'commitments', 'followUpDate']]]);
+  // The audit names who and which fields, never the values.
+  const [a] = editsAudited(dir);
+  assert.deepEqual({ ...a, ts: '<ts>' }, { ts: '<ts>', type: 'call_proposal_edited', accountId: ID, proposalId: r.proposalId, date: DATE, by: 'Sam Example', fields: ['outcomes', 'objections', 'commitments', 'followUpDate'] });
+  for (const value of ['not_selling_now', 'year end', 'quick close', '2026-12-03', '2026-11-24', 'confidentiality']) assert.ok(!JSON.stringify(a).includes(value), `the edit's audit line holds "${value}"`);
+  // Still recorded nowhere.
+  assert.deepEqual(meetings(dir), []);
+  assert.equal(existsSync(join(dir, 'outcomes.jsonl')), false);
+  assert.equal(acct(dir).outcomes, undefined);
+  assert.match(renderProposal(listCalls({ dir, id: ID }).proposals[0], ID), /Corrected by Sam Example \(outcomes, objections, commitments, followUpDate\)/);
+  // A principal who loaded the proposal before the correction cannot confirm what they did not see.
+  assert.throws(() => confirmProposal({ dir, id: ID, proposalId: r.proposalId, by: 'Pat Example', rules, now: AFTER, seenEdits: 0 }), /was corrected since you loaded it \(by Sam Example\)/);
+  assert.deepEqual(meetings(dir), []);
+  confirmProposal({ dir, id: ID, proposalId: r.proposalId, by: 'Pat Example', rules, now: AFTER, seenEdits: 1 });
+  const [line] = readJsonl(join(dir, 'outcomes.jsonl'));
+  assert.deepEqual([line.codes, line.followUpDate, line.counts], [['held', 'nda_requested', 'not_selling_now'], '2026-12-03', { objections: 2, commitments: 1, people: 1 }]);
+  assert.deepEqual(line.edited, { by: ['Sam Example'], fields: ['outcomes', 'objections', 'commitments', 'followUpDate'] }, 'the confirmed outcome records that a principal corrected it');
+  const o = acct(dir).outcomes[0];
+  assert.deepEqual(o.edited, line.edited);
+  assert.deepEqual(o.outcomes.find((x) => x.code === 'not_selling_now').when, 'after their year end');
+  assert.deepEqual(acct(dir).person, personBefore, 'no person is added to the account');
+  assert.equal(meetings(dir).length, 1);
+  assert.equal(readJsonl(join(dir, 'audit.jsonl')).find((x) => x.type === 'call_confirmed').edited, true);
+  assert.deepEqual(readJson(join(dir, 'calls', ID, `${DATE}-followup.json`)).items.map((i) => [i.who, i.what, i.by]), [['us', 'Send our confidentiality agreement', '2026-11-24']], 'the follow-up is the corrected one');
+  assert.throws(() => editProposal({ dir, id: ID, proposalId: r.proposalId, by: 'Sam Example', edits: { followUpDate: '2026-12-04' }, now: AFTER }), /already confirmed/);
+});
+
+test('a correction goes through the same checks as the model\'s proposal: allowed codes, real dates, nothing before the call, no person added', async () => {
+  const { dir, r } = await logged();
+  const edit = (edits, over = {}) => editProposal({ dir, id: ID, proposalId: r.proposalId, by: 'Pat Example', edits, now: AFTER, ...over });
+  const before = readJson(proposalFile(dir, r.proposalId));
+  assert.throws(() => edit({ outcomes: [{ code: 'held' }, { code: 'sold_everything' }] }), /"sold_everything" is not an outcome code/);
+  assert.throws(() => edit({ outcomes: [{ code: 'held' }, { code: 'held' }] }), /"held" is listed twice/);
+  assert.throws(() => edit({ followUpDate: '2026-02-30' }), /follow-up date "2026-02-30" is not a date/);
+  assert.throws(() => edit({ followUpDate: '2026-11-10' }), /follow-up date 2026-11-10 is before the call of 2026-11-17/);
+  assert.throws(() => edit({ commitments: [{ who: 'boss', what: 'Call back', by: '' }] }), /"boss" is not who: use us, them, both or unclear/);
+  assert.throws(() => edit({ commitments: [{ who: 'us', what: 'Send it', by: '2026-13-01' }] }), /"2026-13-01" is not a date/);
+  assert.throws(() => edit({ commitments: [{ who: 'us', what: 'Send it', by: '2026-11-01' }] }), /2026-11-01 is before the call of 2026-11-17/);
+  assert.throws(() => edit({ people: [{ name: 'Casey Example', title: '', context: '' }] }), /People named in the notes are not edited.*account set-person/);
+  assert.throws(() => edit({ date: '2026-11-18' }), /"date" cannot be corrected/);
+  assert.throws(() => edit({ followUpDate: '2026-12-05' }, { by: ' ' }), /A name is required/);
+  assert.throws(() => edit({}), /The correction changes nothing/);
+  assert.throws(() => edit({ outcomes: PROPOSAL_REPLY.outcomes.map(({ code }) => ({ code })), followUpDate: '2026-12-01' }), /The correction changes nothing/);
+  // Only a call that has happened: with a clock before the call, a correction is refused like a confirmation.
+  assert.throws(() => edit({ followUpDate: '2026-12-05' }, { now: NOW }), /2026-11-17 is later than today \(2026-11-14\)/);
+  assert.deepEqual(readJson(proposalFile(dir, r.proposalId)), before, 'a refused correction changes nothing');
+  assert.deepEqual(editsAudited(dir), []);
+  // Words for a deadline are kept as words; "when" and "referral" belong to their own codes only, as in the model's proposal.
+  edit({ outcomes: [{ code: 'held', when: 'ignored', referral: 'ignored' }], commitments: [{ who: 'them', what: 'Send the tape', by: 'after the NDA is signed' }], followUpDate: '' });
+  const p = readJson(proposalFile(dir, r.proposalId));
+  assert.deepEqual(p.outcomes.map((o) => [o.code, o.when, o.referral]), [['held', '', '']]);
+  assert.deepEqual(p.commitments.map((c) => [c.who, c.by, c.byDate]), [['them', 'after the NDA is signed', null]]);
+  assert.equal(p.followUpDate, '');
+  // A second correction by another principal is audited too, and the outcome names both.
+  edit({ followUpDate: '2026-12-08' }, { by: 'Sam Example' });
+  assert.deepEqual(editsAudited(dir).map((a) => [a.by, a.fields]), [['Pat Example', ['outcomes', 'commitments', 'followUpDate']], ['Sam Example', ['followUpDate']]], 'a field not given is not changed');
+  confirmProposal({ dir, id: ID, proposalId: r.proposalId, by: 'Pat Example', rules, now: AFTER });
+  assert.deepEqual(readJsonl(join(dir, 'outcomes.jsonl'))[0].edited, { by: ['Pat Example', 'Sam Example'], fields: ['outcomes', 'commitments', 'followUpDate'] });
+});
+
+test('a corrected proposal whose notes changed still cannot be confirmed; superseded and rejected proposals cannot be corrected', async () => {
+  const { dir, r } = await logged();
+  editProposal({ dir, id: ID, proposalId: r.proposalId, by: 'Pat Example', edits: { followUpDate: '2026-12-05' }, now: AFTER });
+  const notesFile = join(dir, 'calls', ID, `${DATE}-notes.md`);
+  writeFileSync(notesFile, 'Edited by hand.\n');
+  assert.throws(() => confirmProposal({ dir, id: ID, proposalId: r.proposalId, by: 'Pat', rules, now: AFTER }), /notes for the call of 2026-11-17 changed after proposal/);
+  assert.throws(() => editProposal({ dir, id: ID, proposalId: r.proposalId, by: 'Pat', edits: { followUpDate: '2026-12-06' }, now: AFTER }), /notes for the call of 2026-11-17 changed after proposal/);
+  assert.deepEqual(meetings(dir), []);
+  // New notes supersede the corrected proposal like any other.
+  assert.deepEqual(saveNotes({ dir, id: ID, date: DATE, notes: 'They are not selling now.', by: 'Pat', now: AFTER }).superseded, [r.proposalId]);
+  assert.throws(() => editProposal({ dir, id: ID, proposalId: r.proposalId, by: 'Pat', edits: { followUpDate: '2026-12-06' }, now: AFTER }), /superseded: its notes were replaced/);
+  const fresh = await runCallExtract({ client: fakeClient([reply(PROPOSAL_REPLY)]), dir, id: ID, date: DATE, by: 'Pat', models: rules.models, now: AFTER });
+  rejectProposal({ dir, id: ID, proposalId: fresh.proposalId, by: 'Pat' });
+  assert.throws(() => editProposal({ dir, id: ID, proposalId: fresh.proposalId, by: 'Pat', edits: { followUpDate: '2026-12-06' }, now: AFTER }), /already rejected/);
+  assert.throws(() => editProposal({ dir, id: ID, proposalId: 'nope', by: 'Pat', edits: { followUpDate: '2026-12-06' }, now: AFTER }), /No proposal "nope"/);
+});
+
+test('confirmation stays idempotent after a correction: an interrupted one is finished as corrected, and cannot be corrected meanwhile', async () => {
+  const { dir, r } = await logged();
+  editProposal({ dir, id: ID, proposalId: r.proposalId, by: 'Sam Example', edits: { outcomes: [{ code: 'held' }, { code: 'interested_later' }] }, now: AFTER });
+  await assert.rejects(confirmInFolder({ dir, id: ID, proposalId: r.proposalId, by: 'Pat Example', rules, now: AFTER, commit: (plan, d) => { applyPlanToDir(commitSteps(plan)[0], d); throw new Error('disk full'); } }), /stopped partway/);
+  assert.throws(() => editProposal({ dir, id: ID, proposalId: r.proposalId, by: 'Sam Example', edits: { outcomes: [{ code: 'held' }] }, now: AFTER }), /confirmation is unfinished/);
+  const done = await confirmInFolder({ dir, id: ID, proposalId: r.proposalId, by: 'Pat Example', rules, now: AFTER });
+  assert.equal(done.resumed, true);
+  assert.deepEqual(readJsonl(join(dir, 'outcomes.jsonl')).map((l) => [l.id, l.codes, l.edited?.by]), [[r.proposalId, ['held', 'interested_later'], ['Sam Example']]]);
+  assert.equal(meetings(dir).length, 1);
+  await assert.rejects(confirmInFolder({ dir, id: ID, proposalId: r.proposalId, by: 'Pat Example', rules, now: AFTER }), /already confirmed/);
+  assert.equal(meetings(dir).length, 1);
+});
+
+test('the command line corrects a proposal with call edit, then confirms it', async () => {
+  const day = '2026-11-12';   // a past date, since the command line reads the real clock
+  const { dir, r } = await logged(setup(), PROPOSAL_REPLY, day);
+  const env = { ...process.env, OUTBOUND_DATA_DIR: dir };
+  const cli = (...args) => execFileSync(process.execPath, [join(REPO, 'cli.mjs'), ...args], { env, encoding: 'utf8', stdio: 'pipe' });
+  const out = cli('call', 'edit', '--account', ID, '--proposal', r.proposalId, '--by', 'Sam Example', '--codes', 'held,nda_requested,wrong_person', '--referral', 'the head of special assets',
+    '--commitment', 'us|Send our confidentiality agreement|2026-11-20', '--commitment', 'both|Agree a date for the next call', '--follow-up', 'none');
+  assert.match(out, /Corrected proposal .*: outcomes, commitments, followUpDate\. Nothing is recorded until a principal confirms it\./);
+  assert.match(out, /wrong_person \(referral: the head of special assets\)/);
+  const p = readJson(proposalFile(dir, r.proposalId));
+  assert.deepEqual(p.outcomes.map((o) => o.code), ['held', 'nda_requested', 'wrong_person']);
+  assert.deepEqual(p.commitments.map((c) => [c.who, c.what, c.by]), [['us', 'Send our confidentiality agreement', '2026-11-20'], ['both', 'Agree a date for the next call', '']]);
+  assert.deepEqual([p.followUpDate, p.objections.length], ['', 1], 'objections were not given, so they are unchanged');
+  assert.throws(() => cli('call', 'edit', '--account', ID, '--proposal', r.proposalId, '--by', 'Sam Example', '--codes', 'held,sold'), /"sold" is not an outcome code/);
+  assert.throws(() => cli('call', 'edit', '--account', ID, '--proposal', r.proposalId, '--by', 'Sam Example', '--commitment', 'just words'), /who\|what\|by/);
+  const out2 = cli('call', 'edit', '--account', ID, '--proposal', r.proposalId, '--by', 'Sam Example', '--objections', 'none', '--when', 'ignored');
+  assert.match(out2, /: objections\./);
+  assert.match(cli('call', 'list', '--account', ID), /pending \(corrected by Sam Example\)/);
+  assert.match(cli('call', 'confirm', '--account', ID, '--proposal', r.proposalId, '--by', 'Pat Example'), /Recorded the call of 2026-11-12 .*held, nda_requested, wrong_person.*\n- Corrected by Sam Example before confirming/);
+  assert.deepEqual(readJsonl(join(dir, 'outcomes.jsonl'))[0].edited, { by: ['Sam Example'], fields: ['outcomes', 'objections', 'commitments', 'followUpDate'] });
+});
+
 // ---- E15-S3: the follow-up ----------------------------------------------------------------------------------------------------
 test('the follow-up is a checklist of what was agreed; the email is deferred and the guard\'s stop rule holds', async () => {
   const { dir, r } = await logged();
@@ -443,7 +583,7 @@ test('the report counts confirmed outcomes by signal type, tier and lead time, d
   ];
   const r = buildOutcomesReport({ lines, minToTune: 30, buckets: [30, 90, 180, 365], now: NOW });
   assert.equal(r.outcomes, 4);
-  assert.deepEqual(r.bySignalType['mf-noncurrent-rising'], { accounts: 2, calls: 3, reached: { held: 2, nda_requested: 1, nda_signed: 1, tape_promised: 1, tape_received: 0, not_selling_now: 1, wrong_person: 0, interested_later: 0, pricing_discussed: 0, declined: 0 } });
+  assert.deepEqual(r.bySignalType['mf-noncurrent-rising'], { accounts: 2, calls: 3, byHand: 0, reached: { held: 2, nda_requested: 1, nda_signed: 1, tape_promised: 1, tape_received: 0, not_selling_now: 1, wrong_person: 0, interested_later: 0, pricing_discussed: 0, declined: 0 } });
   assert.equal(r.bySignalType['acquired-metro-bank'].accounts, 1);
   assert.equal(r.bySignalType[HAND_PICKED].accounts, 1);
   assert.deepEqual(Object.fromEntries(Object.entries(r.byTier).map(([k, g]) => [k, g.accounts])), { A: 1, B: 1, untiered: 1 });
@@ -493,6 +633,97 @@ test('the report is written to reports/, reads only confirmed outcomes, and neve
   assert.throws(() => runOutcomesReport({ dir, config: rules.config, since: 'last week' }), /--since must be a date/);
 });
 
+// Meetings recorded by hand (guard event --type meeting, or the account page). Invented accounts; a6 has no account record.
+const HAND = {
+  lines: () => [
+    line({ id: 'p1', accountId: 'a1', originSignalTypes: ['mf-noncurrent-rising'], tier: 'A', firstSignalDate: '2026-06-30', date: '2026-09-10', codes: ['held', 'nda_requested'] }),
+    line({ id: 'p3', accountId: 'a3', originSignalTypes: ['acquired-metro-bank'], tier: 'B', firstSignalDate: '2026-05-01', date: '2026-11-01', codes: ['held'] }),
+  ],
+  touches: [
+    { type: 'meeting', accountId: 'a1', institution: 'Bank One Example', date: '2026-09-10', ref: 'call:p1' },   // the confirmed call's own meeting
+    { type: 'meeting', accountId: 'a1', institution: 'Bank One Example', date: '2026-08-01', note: 'met at a conference', by: 'Pat Example' },
+    { type: 'meeting', accountId: 'a2', institution: 'Bank Two Example', date: '2026-10-05', note: 'Lunch with Casey Example', by: 'Pat Example' },
+    { type: 'meeting', accountId: 'a2', institution: 'Bank Two Example', date: '2026-10-05', by: 'Sam Example' },   // the same meeting, recorded twice
+    { type: 'meeting', accountId: 'a3', institution: 'Bank Three Example', date: '2026-11-01' },   // no ref, on a confirmed call's date: that call
+    { type: 'reply', accountId: 'a4', institution: 'Bank Four Example', date: '2026-10-01' },
+    { type: 'meeting', accountId: 'a5', institution: 'Bank Five Example', date: '2026-10-20', ref: 'call:p-unfinished' },   // a confirmation under way
+    { type: 'meeting', accountId: 'a6', institution: 'Bank Six Example', date: '2026-10-25' },
+    { type: 'meeting', accountId: 'a7', institution: 'Bank Seven Example', date: '2026-11-02' },
+  ],
+  accounts: {
+    a1: { id: 'a1', name: 'Bank One Example', tier: 'A', originSignals: ['fdic:1:mf-noncurrent-rising:20260630'], pipeline: { signals: [{ id: 'fdic:1:mf-noncurrent-rising:20260630', type: 'mf-noncurrent-rising', period: '20260630' }] } },
+    a2: { id: 'a2', name: 'Bank Two Example', tier: 'B', person: { name: 'Casey Example' }, originSignals: ['fdic:2:cre-rising:20260331'], pipeline: { signals: [{ id: 'fdic:2:cre-rising:20260331', type: 'cre-rising', period: '20260331' }] } },
+    a7: { id: 'a7', name: 'Bank Seven Example', tier: null, originSignals: [] },
+  },
+};
+const zero = Object.fromEntries(Object.keys(OUTCOME_CODES).map((c) => [c, 0]));
+
+test('a meeting recorded by hand counts as a held call with no outcome codes, linked to the account\'s origin signals; a confirmed call\'s meeting is counted once', () => {
+  const lines = HAND.lines();
+  assert.deepEqual(handMeetings({ touches: HAND.touches, lines }), [{ accountId: 'a1', date: '2026-08-01' }, { accountId: 'a2', date: '2026-10-05' }, { accountId: 'a6', date: '2026-10-25' }, { accountId: 'a7', date: '2026-11-02' }]);
+  const r = buildOutcomesReport({ lines, touches: HAND.touches, accounts: HAND.accounts, minToTune: 30, buckets: [30, 90, 180, 365], now: NOW });
+  assert.deepEqual([r.outcomes, r.meetingsByHand], [2, 4]);
+  assert.deepEqual(r.totals, { accounts: 5, calls: 6, byHand: 4, reached: { ...zero, held: 5, nda_requested: 1 } });
+  assert.deepEqual(r.bySignalType, {
+    'acquired-metro-bank': { accounts: 1, calls: 1, byHand: 0, reached: { ...zero, held: 1 } },
+    'cre-rising': { accounts: 1, calls: 1, byHand: 1, reached: { ...zero, held: 1 } },
+    'mf-noncurrent-rising': { accounts: 1, calls: 2, byHand: 1, reached: { ...zero, held: 1, nda_requested: 1 } },
+    [HAND_PICKED]: { accounts: 1, calls: 1, byHand: 1, reached: { ...zero, held: 1 } },
+    [NO_ACCOUNT]: { accounts: 1, calls: 1, byHand: 1, reached: { ...zero, held: 1 } },
+  });
+  assert.deepEqual(Object.fromEntries(Object.entries(r.byTier).map(([k, g]) => [k, [g.accounts, g.byHand]])), { B: [2, 1], untiered: [2, 2], A: [1, 1] });
+  // a1: June 30 to its first meeting, by hand on August 1 (32 days), not its confirmed call; a2: March 31 to October 5 (188); a3: 184.
+  assert.deepEqual(Object.fromEntries(Object.entries(r.byLeadTime).map(([k, g]) => [k, g.accounts])), { '181-365 days': 2, 'unknown: no signal date or no meeting': 2, '31-90 days': 1 });
+  assert.deepEqual(r.leadTimeDays, { accounts: 3, min: 32, median: 184, max: 188 });
+  assert.equal(r.tooFewToTune, true);
+  assert.match(r.note, /2 confirmed outcome\(s\), fewer than 30: too few to tune scoring weights on\. 4 meeting\(s\) recorded by hand are counted as held calls/);
+  assert.match(r.counting, /recorded by hand/);
+  const text = renderOutcomesReport(r);
+  assert.match(text, /Confirmed call outcomes: 2, and 4 meeting\(s\) recorded by hand\./);
+  assert.match(text, /by hand/);
+  for (const leak of ['Casey', 'Lunch', 'conference', 'Bank Two', 'Bank One', 'Pat Example', 'Sam Example']) assert.ok(!JSON.stringify(r).includes(leak) && !text.includes(leak), `the report holds "${leak}"`);
+  assert.deepEqual(buildOutcomesReport({ lines, touches: HAND.touches, accounts: HAND.accounts, now: NOW }), r, 'same input, same report');
+  // Hand meetings carry no outcome, so they never count toward minToTune.
+  const many = Array.from({ length: 29 }, (_, i) => line({ id: `q${i}`, accountId: `b${i}` }));
+  const hands = Array.from({ length: 5 }, (_, i) => ({ type: 'meeting', accountId: `c${i}`, date: '2026-11-03' }));
+  assert.deepEqual(((x) => [x.outcomes, x.meetingsByHand, x.tooFewToTune])(buildOutcomesReport({ lines: many, touches: hands, minToTune: 30, now: NOW })), [29, 5, true]);
+});
+
+test('--since chooses which hand-recorded meetings are counted too, and never moves an account\'s first meeting', () => {
+  const r = buildOutcomesReport({ lines: HAND.lines(), touches: HAND.touches, accounts: HAND.accounts, since: '2026-09-01', now: NOW });
+  assert.deepEqual([r.outcomes, r.meetingsByHand, r.totals.accounts, r.totals.calls, r.totals.byHand], [2, 3, 5, 5, 3], 'a1\'s meeting of August 1 is before --since');
+  assert.deepEqual([r.bySignalType['mf-noncurrent-rising'].calls, r.bySignalType['mf-noncurrent-rising'].byHand], [1, 0]);
+  assert.deepEqual(r.leadTimeDays, { accounts: 3, min: 32, median: 184, max: 188 }, 'a1 still runs to its first meeting ever, recorded by hand before --since');
+  const late = buildOutcomesReport({ lines: HAND.lines(), touches: HAND.touches, accounts: HAND.accounts, since: '2026-10-06', now: NOW });
+  assert.deepEqual([late.outcomes, late.meetingsByHand, late.totals.accounts], [1, 2, 3]);
+  assert.equal(late.bySignalType['cre-rising'], undefined, 'a2\'s only meeting is before --since');
+});
+
+test('the report reads the touch log and the accounts: a meeting recorded with guard event counts, a confirmed call\'s does not count twice', async () => {
+  const { dir, r } = await logged();
+  // A principal records the meeting by hand first, then confirms the call of the same day: one meeting, counted as the confirmed call.
+  recordEvent(dir, { accountId: ID, institution: 'Acme Community Bank', type: 'meeting', date: DATE, by: 'Pat Example' }, loadContext({ dir, config: rules.config, env: {} }));
+  confirmProposal({ dir, id: ID, proposalId: r.proposalId, by: 'Pat Example', rules, now: AFTER });
+  assert.equal(meetings(dir).length, 1, 'confirming found the hand-recorded meeting and logged no second one');
+  put(dir, 'accounts/other-bank.json', ACCOUNT({ id: 'other-bank', name: 'Other Example Bank', tier: 'B', originSignals: ['fdic:88888:cre-rising:20260331'], pipeline: { signals: [{ id: 'fdic:88888:cre-rising:20260331', type: 'cre-rising', period: '20260331' }] } }));
+  recordEvent(dir, { accountId: 'other-bank', institution: 'Other Example Bank', type: 'meeting', date: '2026-11-18', note: 'coffee with Casey Example', by: 'Pat Example' }, loadContext({ dir, config: rules.config, env: {} }));
+  const { report } = runOutcomesReport({ dir, config: rules.config, now: NOW });
+  assert.deepEqual([report.outcomes, report.meetingsByHand, report.totals.accounts, report.totals.calls, report.totals.byHand], [1, 1, 2, 2, 1]);
+  assert.deepEqual(report.bySignalType['cre-rising'], { accounts: 1, calls: 1, byHand: 1, reached: { ...zero, held: 1 } });
+  assert.deepEqual(Object.keys(report.byTier).sort(), ['A', 'B']);
+  assert.ok(!JSON.stringify(report).includes('Casey'));
+  assert.ok(LOADS.outcomes.includes('touches.jsonl') && LOADS.outcomes.includes('accounts/'), 'the report\'s load list holds the touch log and the accounts');
+  // The same through the command line: guard event, then outcomes report.
+  const cliDir = setup();
+  const env = { ...process.env, OUTBOUND_DATA_DIR: cliDir };
+  const cli = (...args) => execFileSync(process.execPath, [join(REPO, 'cli.mjs'), ...args], { env, encoding: 'utf8', stdio: 'pipe' });
+  cli('guard', 'event', '--account', ID, '--type', 'meeting', '--date', '2026-11-12', '--note', 'met at their office', '--by', 'Pat Example');
+  const out = cli('outcomes', 'report');
+  assert.match(out, /Confirmed call outcomes: 0, and 1 meeting\(s\) recorded by hand\./);
+  assert.match(out, /mf-noncurrent-rising/);
+  assert.doesNotMatch(out, /their office/);
+});
+
 test('the origin of an account: signal types and the first signal date, from the pipeline block or the ids', () => {
   assert.deepEqual(originOf(ACCOUNT()), { types: ['acquired-metro-bank', 'mf-noncurrent-rising'], firstSignalDate: '2026-05-01' });
   assert.deepEqual(originOf({ originSignals: ['fdic:1:cre-rising:20260331', 'sec-filing:0001-26-000001'] }), { types: ['cre-rising', 'sec-filing'], firstSignalDate: null });
@@ -514,7 +745,7 @@ test('the load lists cover every call action: each runs in a unit of work exactl
   const noted = await uow(callLoads('callNotes', ID), (dir) => saveNotes({ dir, id: ID, date: '2026-11-18', notes: 'Second call.', by: 'Pat', now: AFTER }));
   assert.ok(noted.plan.docs.some((d) => d.path === `calls/${ID}/2026-11-18-notes.md`));
   await uow(callLoads('callExtract', ID), (dir) => runCallExtract({ client: fakeClient([reply(PROPOSAL_REPLY)]), dir, id: ID, date: DATE, by: 'Pat', models: rules.models, now: AFTER }));
-  const reported = await uow(['outcomes.jsonl', 'reports/'], (dir) => runOutcomesReport({ dir, config: rules.config, now: NOW }).report);
+  const reported = await uow(LOADS.outcomes, (dir) => runOutcomesReport({ dir, config: rules.config, now: NOW }).report);
   assert.equal(reported.result.outcomes, 0);
   assert.throws(() => callLoads('callPrep', '../x'), /Invalid id/);
 });
