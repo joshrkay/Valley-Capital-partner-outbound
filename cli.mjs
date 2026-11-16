@@ -24,6 +24,7 @@ import { runTriage, readTriage, renderTriage, triagePaths } from './src/triage.m
 import { coverageReport, renderCoverage } from './src/coverage.mjs';
 import { loadContext, checkTouch, recordObservedSend, recordEvent, addSuppression, dueList, touchFromAccount } from './src/guard.mjs';
 import { runBriefer } from './src/research.mjs';
+import { loadEvents } from './src/events.mjs';
 import { runDrafter, approveDraft } from './src/draft.mjs';
 import { makeClient } from './src/model.mjs';
 import { writeTruthTemplate, reviewList, markFinding, scorecard, passPilot, researchGate } from './src/pilot.mjs';
@@ -405,7 +406,7 @@ async function main() {
     const account = loadAccount(dir, id);
     if (!flags['dry-run']) { const g = researchGate({ dir, account, config: rules.config }); if (!g.allowed) throw new Error(g.reason); }
     const client = flags['dry-run'] ? null : await makeClient({ timeout: rules.models.research.timeoutMs });
-    const r = await runBriefer({ client, dir, account, models: rules.models, playbooks: rules.playbooks, dryRun: !!flags['dry-run'] });
+    const r = await runBriefer({ client, dir, account, models: rules.models, playbooks: rules.playbooks, events: loadEvents(), dryRun: !!flags['dry-run'] });   // events.json: the forum event list (E22-S2)
     if (r.dryRun) return out(`--- SYSTEM ---\n${r.system}\n\n--- USER ---\n${r.user}\n\n--- TOOLS ---\nweb_search (max ${r.cfg.maxSearches}), web_fetch (max ${r.cfg.maxFetches}), model ${r.cfg.model}, effort ${r.cfg.effort}`);
     return out(r);
   }
