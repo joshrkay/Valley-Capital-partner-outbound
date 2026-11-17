@@ -2,7 +2,8 @@
 // pending proposals with correct, confirm and reject, the confirmed outcomes, and the follow-up checklist. A brief that failed a check
 // is shown as NOT USABLE above everything else in it. There is no send button: the follow-up is the principal's own message.
 import { accountCalls } from '../../../lib/ops.mjs';
-import { Markdown, Problem } from '../../ui.jsx';
+import { Markdown, Problem, RuleCodes } from '../../ui.jsx';
+import { guardSentence } from '../../../lib/account-view.mjs';
 import { queueCallPrepAction, logCallAction, confirmCallAction, rejectCallAction, editCallAction } from '../actions.js';
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -93,7 +94,7 @@ export async function Calls({ client, id }) {
           </form>
           {!b ? <p className="muted small">No call brief yet.</p> : b.usable
             ? <div className="banner ok small">Call brief for {b.date}: every check passed.</div>
-            : <div className="banner error small" role="alert"><strong>NOT USABLE.</strong> The call brief for {b.date} failed the code checks. Do not rely on it.<ul>{b.problems.map((e, i) => <li key={i}>{e.code}: {e.message}</li>)}</ul></div>}
+            : <div className="banner error small" role="alert"><strong>NOT USABLE.</strong> The call brief for {b.date} failed the code checks. Do not rely on it.<ul>{b.problems.map((e, i) => <li key={i}>{guardSentence(e)}</li>)}</ul><RuleCodes codes={b.problems.map((e) => e.code)} /></div>}
         </div>
         <div className="panel">
           <h3 style={{ marginTop: 0 }}>After the call</h3>

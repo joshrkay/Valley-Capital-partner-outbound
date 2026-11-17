@@ -118,6 +118,24 @@ export async function listAccounts(client, rest) {
     .map((a) => ({ id: a.id, name: a.name, tier: a.tier ?? null, person: a.person?.name || null, roleConfirmed: !!a.contact?.roleConfirmed, fromPipeline: Array.isArray(a.originSignals) && a.originSignals.length > 0, researchedAt: researched.get(`research/${a.id}.json`) ?? null }));
 }
 
+// What Outreach needs besides the accounts: each account's drafts (path and status only, never their text) and the touch log (type,
+// date and account only). Two reads with the principal's token; a failure leaves them empty and the page shows the account's own record.
+export async function outreachSignals(rest) {
+  const [docs, lines] = await Promise.all([
+    rest.get('documents', { select: 'path,status:body->>status', or: '(path.like."drafts/*")', limit: 5000 }).catch(() => []),
+    rest.get('log_lines', { select: 'line', or: '(path.eq."touches.jsonl")', limit: 20000 }).catch(() => []),
+  ]);
+  const drafts = new Map();
+  for (const d of docs ?? []) {
+    const m = /^drafts\/([^/]+)\/[^/]+\.json$/.exec(String(d?.path ?? ''));
+    if (!m) continue;
+    if (!drafts.has(m[1])) drafts.set(m[1], []);
+    drafts.get(m[1]).push({ status: d.status ?? d.body?.status ?? null });
+  }
+  const touches = (lines ?? []).map((l) => l?.line).filter((t) => t && typeof t === 'object').map((t) => ({ accountId: t.accountId ?? null, type: t.type, date: t.date ?? null }));
+  return { drafts, touches };
+}
+
 // The account's name alone, for the page title: one document, read as the principal.
 export async function accountName(client, id) {
   const { store } = await mods();

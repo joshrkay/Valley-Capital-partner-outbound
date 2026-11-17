@@ -3,7 +3,8 @@
 // runs in code; no model sees the firm's network. There is no send button: a chosen route gives a principal a checklist only.
 import { accountRoutes } from '../../../lib/routes-ops.mjs';
 import { routeRow, evidenceLinks, TYPE_LABEL } from '../../../lib/routes-view.mjs';
-import { Problem } from '../../ui.jsx';
+import { Problem, RuleCodes } from '../../ui.jsx';
+import { guardSentence } from '../../../lib/account-view.mjs';
 import { buildRoutesAction, chooseRouteAction } from './routes-actions.js';
 
 function Evidence({ r }) {
@@ -57,7 +58,7 @@ export async function Routes({ client, id }) {
       {!rec ? <p className="muted small">No routes yet. Build them after the research has run and the firm's network is entered on the Network page.</p> : (
         <>
           <p className="small">Built {String(rec.builtAt).slice(0, 10)} from {rec.inputs.research ? `the research of ${rec.inputs.research.date}` : 'no research yet'}, {rec.inputs.ledger ? 'the sale ledger' : 'no sale ledger'}, and a network of {rec.inputs.network.people} people, {rec.inputs.network.firms} firms and {rec.inputs.network.memberships} memberships.</p>
-          {rec.guard.hardStops.length ? <div className="banner error small" role="alert"><strong>Stop.</strong>{rec.guard.blocksChoice ? ' No route can be chosen: an introduction must not go around an opt-out or a suppression.' : ''}<ul>{rec.guard.hardStops.map((h) => <li key={h.code}>{h.code}: {h.message}</li>)}</ul></div> : null}
+          {rec.guard.hardStops.length ? <div className="banner error small" role="alert"><strong>Stop.</strong>{rec.guard.blocksChoice ? ' No route can be chosen: an introduction must not go around an opt-out or a suppression.' : ''}<ul>{rec.guard.hardStops.map((h) => <li key={h.code}>{guardSentence(h)}</li>)}</ul><RuleCodes codes={rec.guard.hardStops.map((h) => h.code)} /></div> : null}
           {rec.guard.inConversation ? <div className="banner ok small">Already in conversation: a {rec.guard.inConversation.type} was recorded on {rec.guard.inConversation.date}.</div> : null}
           {direct ? <div className="panel"><h3 style={{ marginTop: 0 }}>The direct route</h3><Direct r={direct} /><p className="small">{direct.reasoning}</p></div> : null}
           <div className="scroll"><table>

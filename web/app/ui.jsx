@@ -63,6 +63,13 @@ export function Priority({ tier, excluded = false }) {
   return <span className={`chip ${p.cls}`}>{p.letter ? <span className="letter" aria-hidden="true">{p.letter}</span> : null}{p.label}</span>;
 }
 
+// The rule codes behind a verdict, in a disclosure: the sentences come first, the codes stay one click away.
+export function RuleCodes({ codes }) {
+  const list = [...new Set((codes ?? []).filter(Boolean))];
+  if (!list.length) return null;
+  return <details className="rulecodes"><summary>Rule codes</summary><span className="mono">{list.join(', ')}</span></details>;
+}
+
 // A colored note, only where a principal must act or should know: info, good, warn, bad.
 export function Note({ tone = 'info', role, children }) {
   return <div className={`note ${tone}`} role={role}>{children}</div>;

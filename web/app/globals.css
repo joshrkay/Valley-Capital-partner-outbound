@@ -517,6 +517,37 @@ table.plain .r { text-align: right; font-variant-numeric: tabular-nums; }
 .gloss dt:target { color: var(--accent-strong); }
 .gloss dt:target + dd { color: var(--ink); }
 
+/* ---------- Outreach, an account, Approvals ---------- */
+.sec { min-width: 0; scroll-margin-top: calc(var(--chrome-h) + 40px); }
+.sec > h2 { margin: 8px 0 8px; font-size: 1rem; }
+.sec > h2:first-child { margin-top: 4px; }
+.sec h3 { margin: 0 0 6px; }
+.sec .panel h3 + * { margin-top: 0; }
+#orders, #touches { scroll-margin-top: calc(var(--chrome-h) + 40px); }
+.nextbox { margin-top: 10px; padding: 10px 14px; border-radius: var(--radius); background: var(--accent-soft); border: 1px solid var(--accent-line); }
+.nextbox h2 { font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; color: var(--accent-strong); }
+.nextbox p { font-size: .9375rem; margin-top: 2px; }
+.nextbox.stop { background: var(--bad-bg); border-color: var(--bad); }
+.nextbox.stop h2, .nextbox.stop p { color: var(--bad); }
+.onpage { display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 10px 16px; box-shadow: none; }
+.note h2 { font-size: .875rem; margin-bottom: 4px; color: inherit; }
+.note ul { margin: 6px 0 0; padding-left: 18px; }
+.note .inline { margin-left: 6px; }
+.rulecodes { margin-top: 6px; font-size: .75rem; }
+.rulecodes > summary { cursor: pointer; color: inherit; opacity: .85; }
+.rulecodes .mono { display: block; margin-top: 2px; overflow-wrap: anywhere; }
+.rel-list .next { font-size: .8125rem; }
+.rel-list .next.stop { color: var(--bad); }
+.path a.pathlink { color: inherit; }
+.path li.cur a.pathlink { color: var(--path-ink); }
+mark { background: var(--warn-bg); color: var(--ink); box-shadow: 0 0 0 1px var(--warn); border-radius: 2px; padding: 0 1px; }
+.card-foot.left { text-align: left; display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
+.draft pre.text { margin: 8px 0 0; }
+.draft .card-body > .page { margin-top: 10px; }
+label:has(> input[type="checkbox"]) { flex-direction: row; align-items: center; gap: 8px; }
+.draft .card-head h2 { font-size: .9375rem; }
+input.narrow { width: 80px; }
+
 /* the app launcher: a native <dialog> */
 dialog.modal { border: 0; border-radius: var(--radius); padding: 0; width: min(880px, calc(100vw - 32px)); max-height: min(84vh, 780px); background: var(--surface); color: var(--ink); box-shadow: var(--shadow-pop); }
 dialog.modal::backdrop { background: var(--scrim); }

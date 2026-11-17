@@ -4,7 +4,8 @@
 // (web/lib/touches-ops.mjs). Nothing here sends anything, and no message text is stored.
 import { cookies } from 'next/headers';
 import { accountTouches } from '../../../lib/touches-ops.mjs';
-import { Problem } from '../../ui.jsx';
+import { Problem, RuleCodes } from '../../ui.jsx';
+import { ruleLabel, guardSentence } from '../../../lib/account-view.mjs';
 import { checkSendAction, recordSendAction, recordEventAction, recordOptOutAction } from './touches-actions.js';
 
 const LABEL = { touch: 'Send', reply: 'Reply', opt_out: 'Opt-out', bounce: 'Bounce', meeting: 'Meeting', handoff: 'Handoff' };
@@ -21,7 +22,8 @@ function Due({ due, next }) {
   if (due.state === 'due') return <div className="banner ok small">Step {due.step} ({channel(due.channel)}) is due now.</div>;
   return (
     <div className="banner warn small">
-      Step {due.step ?? next?.step} ({channel(due.channel ?? next?.channel)}) is not allowed today{due.due ? `; it is due ${due.due}` : ''}. The guard says: {due.blockedBy.join(', ')}.
+      Step {due.step ?? next?.step} ({channel(due.channel ?? next?.channel)}) is not allowed today{due.due ? `; it is due ${due.due}` : ''}. {due.blockedBy.map(ruleLabel).join(' ')}
+      <RuleCodes codes={due.blockedBy} />
     </div>
   );
 }
@@ -39,7 +41,7 @@ function History({ rows }) {
           <td>{h.channel ? channel(h.channel) : '–'}</td>
           <td className="mono">{h.sender ?? '–'}</td>
           <td>{h.by ?? <span className="muted">–</span>}</td>
-          <td className="small">{h.violations.length ? h.violations.map((v) => <span key={v} className="pill">{v}</span>) : null}{h.note ? <span className="muted">{h.note}</span> : null}{h.ref ? <span className="src">{h.ref}</span> : null}</td>
+          <td className="small">{h.violations.length ? h.violations.map((v) => <span key={v} className="pill">{ruleLabel(v)}</span>) : null}{h.violations.length ? <RuleCodes codes={h.violations} /> : null}{h.note ? <span className="muted">{h.note}</span> : null}{h.ref ? <span className="src">{h.ref}</span> : null}</td>
         </tr>
       ))}</tbody>
     </table></div>
@@ -54,7 +56,8 @@ function Verdict({ t }) {
   return (
     <div className="banner error small" role="alert">
       <strong>{head}: it breaks {t.verdict.errors.length} rule{t.verdict.errors.length === 1 ? '' : 's'}.</strong>
-      <ul>{t.verdict.errors.map((e) => <li key={e.code}>{e.code}: {e.message}</li>)}</ul>
+      <ul>{t.verdict.errors.map((e) => <li key={e.code}>{guardSentence(e)}</li>)}</ul>
+      <RuleCodes codes={t.verdict.errors.map((e) => e.code)} />
       If the send already went out, record it all the same: the log must match what happened.
     </div>
   );

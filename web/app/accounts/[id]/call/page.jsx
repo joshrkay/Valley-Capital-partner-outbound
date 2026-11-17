@@ -4,7 +4,8 @@
 import { requirePrincipal } from '../../../../lib/session.mjs';
 import { callDesk } from '../../../../lib/calldesk-ops.mjs';
 import { readTime, telHref, TARGET_SECONDS, LONG_SECONDS } from '../../../../lib/calldesk-view.mjs';
-import { NotAuthorized, Problem } from '../../../ui.jsx';
+import { NotAuthorized, Problem, RuleCodes } from '../../../ui.jsx';
+import { guardSentence } from '../../../../lib/account-view.mjs';
 import { Prompter, Stopwatch } from './prompter.jsx';
 
 export const metadata = { title: 'Call desk · Valley Capital outbound' };
@@ -37,7 +38,7 @@ function Waiting({ d, id }) {
     <>
       <div className="banner error" role="alert">
         <strong>Do not call. The guard refuses this call now, so the call sheet is hidden.</strong>
-        <ul>{d.errors.map((e) => <li key={e.code}>{e.code}: {e.message}</li>)}</ul>
+        <ul>{d.errors.map((e) => <li key={e.code}>{guardSentence(e)}</li>)}</ul><RuleCodes codes={d.errors.map((e) => e.code)} />
         <span className="small">Come back when the reason no longer holds. Nothing on this page changes the guard.</span>
       </div>
       {back}
@@ -50,7 +51,7 @@ function Sheet({ d }) {
   const t = readTime(s.voicemail);
   return (
     <>
-      {d.warnings.length ? <div className="banner warn small"><ul>{d.warnings.map((w) => <li key={w.code}>{w.code}: {w.message}</li>)}</ul></div> : null}
+      {d.warnings.length ? <div className="banner warn small"><ul>{d.warnings.map((w) => <li key={w.code}>{guardSentence(w)}</li>)}</ul><RuleCodes codes={d.warnings.map((w) => w.code)} /></div> : null}
       <div className="banner ok small">The guard allows this call now. The sheet was approved by {d.approvedBy || 'a principal'}{d.approvedAt ? ` on ${d.approvedAt.slice(0, 10)}` : ''}.</div>
 
       <div className="grid2">

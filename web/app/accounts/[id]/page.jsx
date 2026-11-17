@@ -1,14 +1,11 @@
 import { cache } from 'react';
 import { requirePrincipal as signedIn } from '../../../lib/session.mjs';
-import { accountDetail, accountName } from '../../../lib/ops.mjs';
+import { accountDetail, accountName, outreachSignals } from '../../../lib/ops.mjs';
+import { accountRoutes } from '../../../lib/routes-ops.mjs';
 import { loadRules } from '../../../lib/engine.mjs';
-import { period, num } from '../../../lib/format.mjs';
-import { NotAuthorized, Problem, Markdown } from '../../ui.jsx';
-import { confirmRoleAction, confirmOrderAction, queueResearchAction, queueDraftAction } from '../actions.js';
-import { Calls } from './calls.jsx';
-import { Routes } from './routes.jsx';
-import { Contact } from './contact.jsx';
-import { Touches } from './touches.jsx';
+import { nextStep } from '../../../lib/account-view.mjs';
+import { NotAuthorized, Problem } from '../../ui.jsx';
+import AccountRecord from './account-record.jsx';
 
 // Once per request, shared by the title and the page.
 const requirePrincipal = cache(signedIn);
@@ -24,6 +21,7 @@ export async function generateMetadata({ params }) {
   } catch { return fallback; }
 }
 
+// The account, its next step (from its drafts, its routes' hard stops, the touch log and the orders in force), and its sections.
 export default async function Account({ params }) {
   const ctx = await requirePrincipal();
   if (ctx.denied) return <NotAuthorized email={ctx.email} />;
@@ -32,78 +30,7 @@ export default async function Account({ params }) {
   let d, rules;
   try { [d, rules] = await Promise.all([accountDetail(ctx.client, id), loadRules()]); } catch (e) { return <Problem text={`This account could not be loaded: ${e.message}`} />; }
   if (!d) return <Problem text={`There is no account ${id}.`} />;
-  const { account: a, brief, research, gate, drafts, orders = [] } = d;
-  const pipe = a.pipeline;
-  return (
-    <>
-      <h1>{a.name ?? a.id}</h1>
-      <p className="sub">{a.id} · {a.type} · tier {a.tier ?? '–'} · sectors {(a.sectors ?? []).join(', ') || '–'}</p>
-
-      <div className="grid2">
-        <div className="panel">
-          <h3 style={{ marginTop: 0 }}>The person</h3>
-          <dl className="kv">
-            <dt>Name</dt><dd>{a.person?.name || <span className="muted">not named yet</span>}</dd>
-            <dt>Title</dt><dd>{a.person?.title || '–'}</dd>
-            <dt>Role</dt><dd>{a.contact?.roleConfirmed ? `confirmed by ${a.contact.roleConfirmedBy}` : 'unconfirmed'}</dd>
-          </dl>
-          <p className="small muted">Name the person under Contact details, below, with where the name came from: usually the brief's candidate finding.</p>
-          {a.person?.name && !a.contact?.roleConfirmed ? (
-            <form action={confirmRoleAction} className="inline"><input type="hidden" name="id" value={a.id} /><button type="submit">Confirm role (after reading the sources)</button></form>
-          ) : null}
-        </div>
-
-        <div className="panel">
-          <h3 style={{ marginTop: 0 }}>Research and drafts</h3>
-          <p className="small">{research ? `Last research ${research.date} (${research.mode === 'institution' ? 'institution research: no person named' : 'person research'}), ${research.findings} findings, risk screen ${String(research.risk ?? '–').replace(/_/g, ' ')}.` : 'Not researched yet.'}</p>
-          {gate.allowed ? (
-            <form action={queueResearchAction} className="inline"><input type="hidden" name="id" value={a.id} /><button type="submit">{research ? 'Research again' : 'Queue research'}</button></form>
-          ) : <div className="banner warn small">{gate.reason}</div>}
-          <form action={queueDraftAction} className="row" style={{ marginTop: 10 }}>
-            <input type="hidden" name="id" value={a.id} />
-            <label>Channel<select name="channel">{rules.config.channels.allowed.map((c) => <option key={c} value={c}>{c.replace('_', ' ')}</option>)}</select></label>
-            <label>Step<input type="number" name="step" min="1" defaultValue={drafts.length + 1} style={{ width: 70 }} /></label>
-            <button className="secondary" type="submit">Queue draft</button>
-          </form>
-          {drafts.length ? <ul className="small">{drafts.map((x) => <li key={`${x.step}-${x.channel}`}>Step {x.step}, {x.channel}: {x.status}{x.approvedBy ? ` by ${x.approvedBy}` : ''}{x.channel === 'call' && x.status === 'approved' ? <> · <a href={`/accounts/${encodeURIComponent(a.id)}/call`}>open the call desk</a></> : null}</li>)}</ul> : null}
-        </div>
-      </div>
-
-      {orders.length ? (
-        <>
-          <h2>Enforcement orders in force</h2>
-          <div className="panel small">
-            <p style={{ marginTop: 0 }}>No touch to this bank is approved until a principal has confirmed seeing each order below, once. Read the order first. Never mention it in a message.</p>
-            <ul>{orders.map((o) => (
-              <li key={o.id}>{o.type} from the {o.regulator}, {o.date} {o.link ? <a href={o.link} rel="noopener noreferrer nofollow" target="_blank">(the order)</a> : null}{' '}
-                {o.confirmation ? <span className="muted">confirmed by {o.confirmation.by}, {String(o.confirmation.at).slice(0, 10)}</span> : (
-                  <form action={confirmOrderAction} className="inline"><input type="hidden" name="id" value={a.id} /><input type="hidden" name="order" value={o.id} /><button type="submit">I have read this order</button></form>
-                )}
-              </li>))}</ul>
-          </div>
-        </>
-      ) : null}
-
-      <Contact client={ctx.client} id={a.id} />
-      <Touches client={ctx.client} id={a.id} />
-
-      {pipe ? (
-        <>
-          <h2>What the pipeline found</h2>
-          <div className="panel small">
-            <p style={{ marginTop: 0 }}>From scoring run {pipe.runId}, Call Report data as of {period(pipe.period)}. Tier {pipe.tier}, score {num(pipe.score, 1)} (distress {num(pipe.axes?.distress, 1)}, fit {num(pipe.axes?.fit, 1)}, timing {num(pipe.axes?.timing, 1)}).</p>
-            <p>{pipe.leadSector ? `Lead sector: ${pipe.leadSector}.` : pipe.leadSectorNote}</p>
-            {pipe.signals?.length ? <ul>{pipe.signals.map((s) => <li key={s.id}>{s.label} <span className="src">{period(s.period)}</span></li>)}</ul> : null}
-            <p className="muted">Context for research and for choosing who and when. It never appears in a message.</p>
-          </div>
-        </>
-      ) : null}
-
-      <Routes client={ctx.client} id={a.id} />
-      <Calls client={ctx.client} id={a.id} />
-
-      <h2>Brief</h2>
-      {brief ? <div className="panel"><Markdown text={brief} /></div> : <p className="muted">No brief yet.</p>}
-    </>
-  );
+  const [routes, signals] = await Promise.all([accountRoutes(ctx.client, id).catch(() => null), outreachSignals(ctx.rest)]);
+  const next = nextStep({ account: d.account, gate: d.gate, drafts: d.drafts, routes, touches: signals.touches.filter((t) => t.accountId === id), orders: d.orders ?? [], research: d.research });
+  return <AccountRecord client={ctx.client} d={d} rules={rules} next={next} />;
 }
