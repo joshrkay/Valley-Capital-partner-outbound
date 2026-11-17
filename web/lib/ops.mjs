@@ -16,11 +16,51 @@ const mods = async () => {
 const suppressionIn = (store, dir) => store.readJson(join(dir, 'suppression.json'), { entries: [] }).entries ?? [];
 
 // ---- Candidates ---------------------------------------------------------------------------------------------------------------
-// tier: 'A' | 'B' | 'all'; anything else means A and B, like the command line's default.
-export async function listCandidates(client, { tier, metro } = {}) {
+// The Banks list (docs/design-redesign.md, 5.2). The rows carry the item fields the engine's client reads by JSON path when asked
+// (itemFields: headline, fitCeiling, city, state, assets in thousands; null for an item scored before they existed). Two more are read
+// here the same way, so no migration is needed: the card's sentences, whose second is the reason when there is no headline, and the hard
+// filters an excluded bank failed.
+export const LIST_EXTRAS = 'key,sentences:item->card->sentences,filtersFailed:item->filtersFailed';
+
+// The extras by key, with the list's filter and order. One read with the principal's token. A failure gives an empty map: the page
+// shows what it has.
+export async function candidateExtras(rest, { metro } = {}) {
+  if (!rest) return new Map();
+  try {
+    const rows = await rest.get('candidates', { select: LIST_EXTRAS, order: 'score.desc.nullslast,key', limit: 1000, metros: metro ? `cs.{${metro}}` : undefined });
+    return new Map((rows ?? []).filter((r) => r && r.key).map((r) => [r.key, r]));
+  } catch { return new Map(); }
+}
+
+// "New this week": the keys in the latest triage's act now and watch. Read once per page; no triage yet means none is new.
+export async function newThisWeek(client) {
+  try {
+    const t = await latestTriage(client);
+    return new Set([...(t?.actNow ?? []), ...(t?.watch ?? [])].map((i) => i.key));
+  } catch { return new Set(); }
+}
+
+// tier: 'A' | 'B' | 'all'; anything else means A and B, like the command line's default. With `rest`, each row also carries the card's
+// sentences and failed filters, and whether it is new this week.
+export async function listCandidates(client, { tier, metro } = {}, { rest = null } = {}) {
+  const rows = await listCandidateRows(client, { tier, metro });
+  if (!rest) return rows;
+  const [extras, fresh] = await Promise.all([candidateExtras(rest, { metro }), newThisWeek(client)]);
+  return rows.map((r) => ({ ...r, sentences: extras.get(r.key)?.sentences ?? null, filtersFailed: extras.get(r.key)?.filtersFailed ?? null, isNew: fresh.has(r.key) }));
+}
+
+// The candidate items behind This week's act now cards (priority, place, fit ceiling), by key, read one by one as the principal. Only bank
+// keys, and a handful: act now is short by design.
+export async function candidateItems(client, keys, { max = 24 } = {}) {
+  const list = [...new Set((keys ?? []).filter((k) => /^fdic:\d+$/.test(String(k))))].slice(0, max);
+  const items = await Promise.all(list.map((k) => client.candidate(k).catch(() => null)));
+  return new Map(items.filter(Boolean).map((i) => [i.key, i]));
+}
+
+async function listCandidateRows(client, { tier, metro } = {}) {
   const { candidates } = await mods();
   const one = tier === 'A' || tier === 'B' ? tier : undefined;
-  let rows = await client.candidates({ tier: one, metro: metro || undefined, limit: 1000 });
+  let rows = await client.candidates({ tier: one, metro: metro || undefined, limit: 1000, itemFields: true });
   if (!one && tier !== 'all') rows = rows.filter((r) => r.tier === 'A' || r.tier === 'B');
   const snap = await client.load(['suppression.json', 'candidates/decisions.json', 'candidates/aliases.json']);
   const decisions = snap.docs['candidates/decisions.json'] ?? {};

@@ -125,7 +125,7 @@ p { margin: 0; }
 
 /* The internal-only notice: one slim bar, sticky under the chrome, on any page with loan or property detail. */
 .internal, .banner.context-only { position: sticky; top: var(--chrome-h); z-index: 20; background: var(--warn-bg); color: var(--warn); border-bottom: 1px solid var(--line); font-size: .75rem; }
-.internal { margin: -12px calc(50% - 50vw) 0; }
+.internal { margin: -12px calc(50% - 50vw) 12px; }
 .internal .wrap { padding-block: 5px; display: flex; gap: 4px 16px; flex-wrap: wrap; justify-content: space-between; align-items: center; }
 .internal .ic { width: 14px; height: 14px; margin-right: 6px; vertical-align: -2px; }
 .internal .who { font-weight: 700; color: var(--ink); }
@@ -287,14 +287,14 @@ table.dt tbody tr:last-child td { border-bottom: 0; }
 @media (max-width: 760px) {
   table.dt.banks thead { display: none; }
   table.dt.banks, table.dt.banks tbody, table.dt.banks tr, table.dt.banks td { display: block; width: auto; }
-  table.dt.banks tbody tr { padding: 12px 16px; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; }
+  table.dt.banks tbody tr { padding: 12px 16px; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: minmax(0, 1fr) 112px; gap: 6px 12px; }
   table.dt.banks tbody tr:last-child { border-bottom: 0; }
   table.dt.banks td { padding: 0; border: 0; }
   table.dt.banks tbody tr:hover td { background: transparent; }
   table.dt.banks td.c-num { display: none; }
   td.c-bank { grid-column: 1; grid-row: 1; }
   td.c-prio { grid-column: 1; grid-row: 2; }
-  td.c-score { grid-column: 2; grid-row: 1 / span 2; width: 120px; }
+  td.c-score { grid-column: 2; grid-row: 1 / span 2; width: auto; min-width: 0; }
   td.c-why, td.c-fit { grid-column: 1 / -1; }
   .why { max-width: none; }
 }
@@ -597,6 +597,7 @@ details.panel summary { cursor: pointer; }
   .lv-search input { width: 100%; }
   .lv-controls .ctl { flex: 1 1 140px; }
   .tab-panel { padding: 12px; }
+  .internal { font-size: .6875rem; }
   .answer-text { font-size: .9375rem; }
   th, td { padding: 6px 7px; }
   .decide .menu-panel { position: fixed; left: 16px; right: 16px; top: auto; width: auto; margin-top: 4px; }
