@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { makeDir } from './kit.mjs';
+import { makeDir, PLACEHOLDER_UA } from './kit.mjs';
 import { loadRules } from '../src/rules.mjs';
 import { readJson, writeJson } from '../src/store.mjs';
 import { runFdic, fdicPaths } from '../src/sources/fdic.mjs';
@@ -122,8 +122,10 @@ test('EDGAR: a CMBS-looking filer set aside as something else is flagged; a plac
   const dir = await edgarDir();
   const p = join(dir, 'sources', 'edgar', 'state.json');
   const st = readJson(p); st.outcomes.push({ cik: '1000009', company: 'Example 2021-C9 Commercial Mortgage Trust', outcome: 'not_cmbs' }); st.counts.filings++; writeJson(p, st);
-  const r = byId(await verifyEdgar({ dir, sec: { ...SEC_CFG, userAgent: rules.config.sec.userAgent }, fetchImpl: fakeSec().fetchImpl }));
+  const quiet = fakeSec();
+  const r = byId(await verifyEdgar({ dir, sec: { ...SEC_CFG, userAgent: PLACEHOLDER_UA.sec }, fetchImpl: quiet.fetchImpl }));
   assert.equal(r['edgar.accounted'].ok, false);
   assert.equal(r['edgar.accounted'].detail.doubtful[0].cik, '1000009');
   assert.equal(r['edgar.parse'].ok, false); assert.match(r['edgar.parse'].summary, /placeholder/);
+  assert.equal(quiet.calls.length, 0, 'nothing was requested with the placeholder');
 });

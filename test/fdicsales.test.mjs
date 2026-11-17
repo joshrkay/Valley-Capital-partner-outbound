@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { makeDir, put } from './kit.mjs';
+import { makeDir, put, PLACEHOLDER_UA } from './kit.mjs';
 import { loadRules } from '../src/rules.mjs';
 import { readJson, readJsonl } from '../src/store.mjs';
 import {
@@ -16,19 +16,20 @@ const rules = loadRules();
 const NOW = new Date('2026-11-14T12:00:00Z');
 const UA = 'Example Firm ops@example.test';
 const FDIC = { ...rules.config.fdic, userAgent: UA };
+const PLACEHOLDER = { ...rules.config.fdic, userAgent: PLACEHOLDER_UA.fdic };
 const FAILED = { 9001: { cert: '9001', name: 'Example Prairie Bank', city: 'Sampleton', state: 'AZ', failedOn: '2026-09-25', inMetros: true, metros: [{ cbsa: '38060', basis: ['main office'] }] } };
 
 // A clock that moves only when the adapter sleeps, so the waits it asks for can be checked exactly.
 function clock() { let t = 1_000_000; const waits = []; return { waits, nowMs: () => t, sleep: async (ms) => { waits.push(ms); t += ms; } }; }
 const run = (dir, site, over = {}) => { const c = clock(); return runFdicSales({ dir, fdic: FDIC, personalDomains: rules.config.personalDomains, fetchImpl: site.fetchImpl, now: NOW, sleep: c.sleep, nowMs: c.nowMs, ...over }).then((r) => ({ ...r, waits: c.waits })); };
 
-test('the User-Agent: the shipped placeholder is refused, and so is a personal email address', async () => {
-  assert.match(rules.config.fdic.userAgent, /\[CONFIRM/, 'the shipped config keeps the placeholder until a principal fills it');
-  assert.throws(() => fdicUserAgent(rules.config.fdic, rules.config.personalDomains), /fdic\.userAgent is a placeholder/);
+test('the User-Agent: a placeholder is refused, and so is a personal email address', async () => {
+  assert.throws(() => fdicUserAgent(PLACEHOLDER, rules.config.personalDomains), /fdic\.userAgent is a placeholder/);
+  assert.throws(() => fdicUserAgent({ ...FDIC, userAgent: '' }, rules.config.personalDomains), /fdic\.userAgent is a placeholder/, 'an empty contact is no contact');
   assert.throws(() => fdicUserAgent({ userAgent: 'Example Firm someone@gmail.com' }, rules.config.personalDomains), /personal domain/);
   assert.equal(fdicUserAgent({ userAgent: UA }, rules.config.personalDomains), UA);
   const site = fakeFdicWww();
-  await assert.rejects(runFdicSales({ dir: makeDir(), fdic: rules.config.fdic, personalDomains: rules.config.personalDomains, fetchImpl: site.fetchImpl, now: NOW, sleep: async () => {} }), /placeholder/);
+  await assert.rejects(runFdicSales({ dir: makeDir(), fdic: PLACEHOLDER, personalDomains: rules.config.personalDomains, fetchImpl: site.fetchImpl, now: NOW, sleep: async () => {} }), /placeholder/);
   assert.equal(site.calls.length, 0, 'nothing was requested');
 });
 
@@ -173,6 +174,8 @@ test('verify: every listed sale stored, every record sourced with no contact; an
   assert.equal(v.sample[0].check.startsWith('https://www.fdic.gov/asset-sales/events/'), true);
   const more = await verifyFdicSales({ dir, fdic: FDIC, fetchImpl: fakeFdicWww({ listing: LISTING(['exb2-26-sale-announcement', 'exb3-26-sale-announcement']) }).fetchImpl, sleep: async () => {}, now: NOW });
   assert.equal(more.checks.find((c) => c.id === 'fdicsales.listed').ok, false);
-  const ph = await verifyFdicSales({ dir, fdic: rules.config.fdic, now: NOW });
+  const quiet = fakeFdicWww();
+  const ph = await verifyFdicSales({ dir, fdic: PLACEHOLDER, fetchImpl: quiet.fetchImpl, sleep: async () => {}, now: NOW });
   assert.match(ph.checks.find((c) => c.id === 'fdicsales.listed').summary, /Skipped: .*placeholder/);
+  assert.equal(quiet.calls.length, 0, 'nothing was requested with the placeholder');
 });

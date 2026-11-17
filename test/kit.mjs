@@ -11,6 +11,14 @@ export const loadJson = (rel) => JSON.parse(readFileSync(join(OUT, rel), 'utf8')
 // As loadRules() gives it: config.json, with the contact rules (contacts.json) as config.contacts, which the guard reads.
 export const config = () => structuredClone({ ...loadJson('config.json'), contacts: loadJson('contacts.json') });
 export const models = () => structuredClone(loadJson('models.json'));
+// The [CONFIRM] contacts config.json shipped with until a principal filled them (PRD Q11, E16-S2, next-five E18), one per section that
+// sends a User-Agent. A test of the placeholder behaviour sets one on its own copy of the config, so it holds whatever config.json ships.
+export const PLACEHOLDER_UA = Object.freeze({
+  sec: '[CONFIRM: firm name and contact email for SEC fair access]',
+  fdic: '[CONFIRM: firm name and a monitored business contact for FDIC requests; no personal email]',
+  enforcement: '[CONFIRM: optional; firm name and a monitored business contact for Federal Reserve requests]',
+  mergers: '[CONFIRM: optional; firm name and a monitored business contact for Federal Reserve requests]',
+});
 
 export const makeDir = () => mkdtempSync(join(tmpdir(), 'outbound-test-'));
 export const put = (dir, rel, data) => { mkdirSync(dirname(join(dir, rel)), { recursive: true }); writeFileSync(join(dir, rel), typeof data === 'string' ? data : JSON.stringify(data, null, 2)); };

@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { makeDir, put, config } from './kit.mjs';
+import { makeDir, put, config, PLACEHOLDER_UA } from './kit.mjs';
 import { fakeFdic } from './fdic-fake.mjs';
 import { readJson, readJsonl, writeJson } from '../src/store.mjs';
 import { loadRules } from '../src/rules.mjs';
@@ -72,16 +72,24 @@ test('DISCLOSED SALE stays off and is listed as unavailable: it needs the SEC co
   const dir = await world();
   // A bank-disclosed sale in the sale ledger (from an 8-K Item 2.01 hit) is context, never a label.
   put(dir, 'sales/ledger.json', { builtAt: '2026-11-14T00:00:00Z', events: { 'sec-sale:x:fdic:201': { id: 'sec-sale:x:fdic:201', kind: 'bank_disclosed_sale', date: '2023-01-10', seller: { kind: 'bank', key: 'fdic:201', name: 'x' } } } });
-  buildLabels({ dir, config: cfg(), now: NOW, clock: () => NOW });
+  // While the SEC contact is a placeholder, that is one of the reasons.
+  const placeholder = cfg(); placeholder.sec.userAgent = PLACEHOLDER_UA.sec;
+  buildLabels({ dir, config: placeholder, now: NOW, clock: () => NOW });
   const l = readLabels(dir);
   assert.equal(l.kinds.disclosed_sale.status, 'unavailable');
   assert.match(l.kinds.disclosed_sale.reasons.join(' '), /Q11/);
   assert.match(l.kinds.disclosed_sale.reasons.join(' '), /confirmed filer/);
   assert.match(l.kinds.disclosed_sale.reasons.join(' '), /principal has read the filing/);
   assert.equal(l.labels.filter((x) => x.kind === 'disclosed_sale').length, 0);
-  assert.throws(() => buildLabels({ dir, config: cfg(), filings: true, now: NOW }), /unavailable[\s\S]*Q11/);
-  // Even with the SEC contact filled and a confirmed filer, the kind stays unavailable in this pass.
+  assert.throws(() => buildLabels({ dir, config: placeholder, filings: true, now: NOW }), /unavailable[\s\S]*Q11/);
+  // With the SEC contact filled and no confirmed filer, the kind is still unavailable: it needs confirmed filers.
   const filled = cfg(); filled.sec.userAgent = 'Invented Firm ops@invented-firm.test';
+  const noFiler = disclosedSaleStatus({ dir, config: filled });
+  assert.equal(noFiler.available, false);
+  assert.doesNotMatch(noFiler.reasons.join(' '), /Q11/);
+  assert.match(noFiler.reasons.join(' '), /confirmed filer/);
+  assert.throws(() => buildLabels({ dir, config: filled, filings: true, now: NOW }), /unavailable[\s\S]*confirmed filer/);
+  // Even with the SEC contact filled and a confirmed filer, the kind stays unavailable in this pass.
   put(dir, 'sources/edgar/filers.json', { 'fdic:201': { bank: 'fdic:201', ciks: { '0000990001': { status: 'confirmed', by: 'Pat Example', at: '2026-11-01T00:00:00Z' } } } });
   const st = disclosedSaleStatus({ dir, config: filled });
   assert.equal(st.available, false);

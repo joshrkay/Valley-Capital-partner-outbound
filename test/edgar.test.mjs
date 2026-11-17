@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { makeDir } from './kit.mjs';
+import { makeDir, PLACEHOLDER_UA } from './kit.mjs';
 import { loadRules } from '../src/rules.mjs';
 import { readJson, readJsonl } from '../src/store.mjs';
 import { parseFormIndex, latestByCik, filingsByCik, coFiled, mergePropertyRecords, quartersFor, parseCmbsAssets, decodeEntities, metroIndex, toLoan, loanSignals, specialServicerFromReport, runEdgar, edgarPaths, CMBS_NS, checkLoanFields } from '../src/sources/edgar.mjs';
@@ -132,8 +132,10 @@ test('a change in a loan\'s status between runs is logged with the old and new v
 });
 
 test('the run refuses a placeholder User-Agent, because the SEC asks for a real contact', async () => {
-  await assert.rejects(run(makeDir(), { ...SEC_CFG, userAgent: rules.config.sec.userAgent, ...fakeSec() }), /sec\.userAgent is a placeholder/);
-  assert.match(rules.config.sec.userAgent, /\[CONFIRM/, 'the shipped config keeps the placeholder until a principal fills it');
+  const sec = fakeSec();
+  await assert.rejects(run(makeDir(), { ...SEC_CFG, userAgent: PLACEHOLDER_UA.sec, ...sec }), /sec\.userAgent is a placeholder/);
+  await assert.rejects(run(makeDir(), { ...SEC_CFG, userAgent: '', ...sec }), /sec\.userAgent is a placeholder/, 'an empty contact is no contact');
+  assert.equal(sec.calls.length, 0, 'nothing was requested');
 });
 
 test('a capped text read stops downloading once it has enough', async () => {
