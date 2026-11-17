@@ -19,6 +19,20 @@ export const PLACEHOLDER_UA = Object.freeze({
   enforcement: '[CONFIRM: optional; firm name and a monitored business contact for Federal Reserve requests]',
   mergers: '[CONFIRM: optional; firm name and a monitored business contact for Federal Reserve requests]',
 });
+// The shipped buy box with the [CONFIRM] values buybox.json shipped with put back, until a principal filled them (PRD E0-S1, Q1). A test of
+// the placeholder behaviour (the refusal, PROVISIONAL output, conditions the data cannot measure, a failed job) uses this, so it holds
+// whatever buybox.json ships.
+export const placeholderBuybox = () => {
+  const b = structuredClone(loadJson('buybox.json'));
+  return {
+    ...b,
+    sectors: { ...b.sectors, shortTermRentalPortfolios: '[CONFIRM: in or out of the buy box? PRD Q1]' },
+    loanSize: { ...b.loanSize, minUsd: '[CONFIRM: smallest loan balance we buy]', maxUsd: '[CONFIRM: largest loan balance we buy]' },
+    statuses: '[CONFIRM: which of performing, sub-performing, non-performing, foreclosed (REO)]',
+    lien: '[CONFIRM: first lien only, or also junior liens]',
+    exclusions: ['[CONFIRM: what the firm will not touch (property types, loan types, situations)]'],
+  };
+};
 
 export const makeDir = () => mkdtempSync(join(tmpdir(), 'outbound-test-'));
 export const put = (dir, rel, data) => { mkdirSync(dirname(join(dir, rel)), { recursive: true }); writeFileSync(join(dir, rel), typeof data === 'string' ? data : JSON.stringify(data, null, 2)); };

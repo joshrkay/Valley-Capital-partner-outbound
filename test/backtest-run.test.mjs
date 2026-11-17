@@ -5,7 +5,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { makeDir, put, config, REPO, PLACEHOLDER_UA } from './kit.mjs';
+import { makeDir, put, config, REPO, PLACEHOLDER_UA, placeholderBuybox } from './kit.mjs';
 import { fakeFdic } from './fdic-fake.mjs';
 import { readJson, readJsonl, exists } from '../src/store.mjs';
 import { loadRules } from '../src/rules.mjs';
@@ -64,8 +64,9 @@ test('the replay runs each as-of quarter of the panel with the data known then; 
 
 test('every output is PROVISIONAL while the buy box has placeholders; the hard filters run with the buy box as it stands', async () => {
   const dir = await world();
-  assert.ok(validateBuybox(base.buybox).placeholders.length > 0);
-  const p = run(dir);
+  const unfilled = placeholderBuybox();
+  assert.ok(validateBuybox(unfilled).placeholders.length > 0);
+  const p = run(dir, { rules: rulesWith({}, { buybox: unfilled }) });
   assert.equal(p.report.provisional, true);
   assert.match(readFileSync(p.paths.md, 'utf8'), /^# PROVISIONAL/);
   assert.match(summarize(p.report), /^PROVISIONAL/);
@@ -305,10 +306,15 @@ test('COMMAND LINE: backtest run, --compare A B, report and verify on a data fol
   const env = { ...process.env, OUTBOUND_DATA_DIR: dir };
   const cli = (...args) => execFileSync(process.execPath, [join(REPO, 'cli.mjs'), 'backtest', ...args], { env, encoding: 'utf8', stdio: 'pipe' });
   const out = cli('run');
-  assert.match(out, /^PROVISIONAL/);
+  // The command line reads the shipped buybox.json, so its summary is PROVISIONAL exactly while that file has placeholders, and the
+  // report records that file's hash. The PROVISIONAL output on an explicit placeholder buy box is checked above.
+  const shippedUnfilled = validateBuybox(base.buybox, { metros: base.metros }).placeholders.length > 0;
+  assert.equal(/^PROVISIONAL/.test(out), shippedUnfilled, out);
   assert.match(out, /Base rate/);
   const hash = /Backtest report ([0-9a-f]{16})/.exec(out)[1];
   assert.ok(out.includes(join(dir, 'backtest', `report-${hash}.md`)), out);
+  const written = readReport({ dir, hash });
+  assert.deepEqual([written.provisional, written.inputs.buyboxHash], [shippedUnfilled, contentHash(base.buybox)]);
   const a = join(makeDir(), 'a.json'); writeFileSync(a, JSON.stringify(base.scoring));
   const b = join(makeDir(), 'b.json'); writeFileSync(b, JSON.stringify(weighted('creNoncurrentYoY', 0)));
   assert.match(cli('run', '--compare', a, b), new RegExp(`${a}[\\s\\S]*${b}`));

@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { makeDir, put, loadJson } from './kit.mjs';
+import { makeDir, put, loadJson, placeholderBuybox } from './kit.mjs';
 import { validateBuybox, validateScoring, runScoring, scoreBank, tierFor, buildProfile, findPlaceholders, contentHash, AXES } from '../src/score.mjs';
 import { confirmFiler, rejectFiler } from '../src/sources/filers.mjs';
 
@@ -39,8 +39,10 @@ const NOW = new Date('2026-11-13T12:00:00Z');
 const score = (dir, opts = {}) => runScoring({ dir, buybox: opts.buybox ?? filledBuybox(), scoring: opts.scoring ?? scoring(), metros, now: NOW, ...opts });
 const rising = (i) => ({ NCREMULT: 5000 + i * 2500, NCRENRES: 6000 + i * 1500, P3REMULT: 3000 + i * 200, NTREMULQ: i === 7 ? 300 : 0, NTRENRSQ: 0 });
 
-test('the shipped buy box has placeholders and no errors; a filled one passes; bad metros are errors', () => {
-  const v = validateBuybox(shippedBuybox(), { metros });
+test('the shipped buy box is filled, with no placeholders and no errors; one with placeholders has no errors but is not ok; a filled one passes; bad metros are errors', () => {
+  const shipped = validateBuybox(shippedBuybox(), { metros });
+  assert.deepEqual([shipped.errors, shipped.placeholders, shipped.ok], [[], [], true], 'a principal filled every [CONFIRM] value');
+  const v = validateBuybox(placeholderBuybox(), { metros });
   assert.deepEqual(v.errors, []);
   for (const p of ['sectors.shortTermRentalPortfolios', 'loanSize.minUsd', 'loanSize.maxUsd', 'statuses', 'lien', 'exclusions[0]']) assert.ok(v.placeholders.includes(p), p);
   assert.equal(v.ok, false);
@@ -63,8 +65,8 @@ test('the shipped scoring config is valid; every component has an axis; Tier A n
 
 test('scoring refuses a buy box with placeholders; --draft-buybox output is marked provisional and hashed', () => {
   const dir = world([{ cert: '1', name: 'Alpha Example Bank' }]);
-  assert.throws(() => score(dir, { buybox: shippedBuybox() }), /\[CONFIRM\] placeholders[\s\S]*loanSize\.minUsd/);
-  const out = score(dir, { buybox: shippedBuybox(), allowPlaceholders: true });
+  assert.throws(() => score(dir, { buybox: placeholderBuybox() }), /\[CONFIRM\] placeholders[\s\S]*loanSize\.minUsd/);
+  const out = score(dir, { buybox: placeholderBuybox(), allowPlaceholders: true });
   assert.equal(out.provisional, true);
   assert.ok(out.placeholders.includes('lien'));
   const filled = score(dir);
