@@ -1,10 +1,18 @@
-// Server only. The Supabase settings the app needs, and a refusal to run with a key that would bypass row-level security.
+// Server only. Which Supabase project the app talks to, and a refusal to run with a key that would bypass row-level security.
+//
+// The firm's own project is committed here. Both values are public by design: the publishable key can only act as the signed-in
+// principal, and row-level security plus the principals check guard every read and write. Committing them means the deployed app
+// always reaches the right project, whatever is or is not set in the hosting dashboard: a stale SUPABASE_URL / SUPABASE_ANON_KEY on
+// one Vercel project once sent every sign-in to the wrong place. Those old names are therefore no longer read.
+// To point a copy at another project (a test one), set WEB_SUPABASE_URL and WEB_SUPABASE_ANON_KEY together.
+export const FIRM_PROJECT = Object.freeze({ url: 'https://fsjpxiyjxnrygmfnqpto.supabase.co', key: 'sb_publishable_AlvlZCGc52RrWIglUZR5cA_6F7WYsDG' });
+
 export function supabaseEnv(env = process.env) {
-  const url = env.SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = env.SUPABASE_ANON_KEY || env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!url || !key) throw new Error('The app is not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY (see web/.env.example).');
-  if (isServiceKey(key)) throw new Error('SUPABASE_ANON_KEY holds a service-role key. The web app must act only as the signed-in principal; use the anon (publishable) key.');
-  return { url, key };
+  const url = env.WEB_SUPABASE_URL, key = env.WEB_SUPABASE_ANON_KEY;
+  if (Boolean(url) !== Boolean(key)) throw new Error('Set WEB_SUPABASE_URL and WEB_SUPABASE_ANON_KEY together, or neither to use the firm\'s project.');
+  const chosen = url ? { url, key } : { url: FIRM_PROJECT.url, key: FIRM_PROJECT.key };
+  if (isServiceKey(chosen.key)) throw new Error('WEB_SUPABASE_ANON_KEY holds a service-role key. The web app must act only as the signed-in principal; use the publishable (anon) key.');
+  return chosen;
 }
 
 // A service-role key bypasses row-level security. Supabase issues it as a JWT with role "service_role", or as an "sb_secret_" key.
