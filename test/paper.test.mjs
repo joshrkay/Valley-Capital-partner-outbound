@@ -486,7 +486,7 @@ test('each Q7 condition carries its own tier: the deposit proxy, the hotel and r
   assert.equal(mf.bounds.tier, 'inferred');
   assert.equal(h.bounds.tier, 'inferred');
   assert.equal(paper({ footprint: {} }).q7.sectors.find((s) => s.sector === 'multifamily').bounds.tier, 'reported');
-  assert.match(renderPaper(r), /Condition metro: Share in the buy-box metros, by the deposit proxy \[inferred\]: 60\.0%/);
+  assert.match(renderPaper(r), /Condition metro: Share in our metros, with deposits standing in for loans \[inferred\]: 60\.0%/);
 });
 
 // ---- Q7 status, by D-P3 (decided 2026-11-17) -----------------------------------------------------------------------------------------
@@ -527,10 +527,10 @@ test('D-P3: the status condition is the loans on each sector\'s own lines in the
   assert.deepEqual([cm.statusLoans.amount.value, cm.statusLoans.amount.tier, cm.bounds.low, cm.bounds.high], [0, 'reported', 0, 0]);
   // The text says which stages count as each status, citing D-P3, and states the fit rule.
   const t = renderPaper(r);
-  assert.match(t, /Status, by D-P3 \(buybox\.json statusStages\): non-performing = 90 days or more past due \(still accruing\) \+ nonaccrual; sub-performing = 30-89 days past due; foreclosed \(REO\/OREO\) = foreclosed property the bank owns \(OREO\)\./);
+  assert.match(t, /Status, by D-P3 \(buybox\.json statusStages\): non-performing = 90\+ days late and still accruing \+ not accruing; sub-performing = 30 to 89 days late; foreclosed \(REO\/OREO\) = foreclosed property the bank owns\./);
   assert.match(t, /Fit rule, D-P3: sector and metro must match; size and status narrow the range\./);
-  assert.match(t, /Multifamily loans in a stage the buy box buys \(30-89 days past due, 90 days or more past due \(still accruing\), nonaccrual\): \$15\.0 million {2}\[reported, June 30, 2026\]/);
-  assert.match(t, /Condition status: Multifamily loans in a stage the buy box buys .*\[reported\]: 1\.5%/);
+  assert.match(t, /Apartment loans in a stage the buy box buys \(30 to 89 days late, 90\+ days late and still accruing, not accruing\): \$15\.0 million {2}\[reported, June 30, 2026\]/);
+  assert.match(t, /Condition status: Apartment loans in a stage the buy box buys .*\[reported\]: 1\.5%/);
 });
 
 test('a stage FDIC does not report is "not reported" in the status sum, never zero: it widens the range, and the bound, instead of zeroing them', () => {
@@ -557,8 +557,8 @@ test('a stage FDIC does not report is "not reported" in the status sum, never ze
   assert.deepEqual([s.low, s.high, s.tier, s.method], [0.014, 0.3, 'inferred', 'share-interval']);
   assert.equal(mf.bounds.high, 300000 * 1000, 'min(0.3, 0.6, 1, 0.3, 1): the category share, not the 1.4% the reported stages alone would give');
   assert.equal(mf.bounds.tier, 'inferred');
-  assert.match(mf.conditions.find((c) => c.id === 'status').basis, /Not reported: 90 days or more past due \(still accruing\), multifamily \(no value from FDIC\)\..*never as zero/);
-  assert.match(renderPaper(nul), /Multifamily: 30-89 days past due: \$4\.0 million {2}\[reported, June 30, 2026\]; 90 days or more past due \(still accruing\): no value from FDIC: /);
+  assert.match(mf.conditions.find((c) => c.id === 'status').basis, /Not reported: 90\+ days late and still accruing, apartments \(no value from FDIC\)\..*never as zero/);
+  assert.match(renderPaper(nul), /Apartments: 30 to 89 days late: \$4\.0 million {2}\[reported, June 30, 2026\]; 90\+ days late and still accruing: no value from FDIC: /);
   everyValue(nul);
 });
 

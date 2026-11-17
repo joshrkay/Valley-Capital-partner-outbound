@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { readJson, readJsonl, writeJson, writeText, readText, listFiles, audit } from './store.mjs';
 import { norm } from './guard.mjs';
 import { suppressedBy } from './candidates.mjs';
-import { periodLabel, shiftQuarter } from './metrics.mjs';
+import { periodLabel, shiftQuarter, signalTitle } from './metrics.mjs';
 import { contentHash } from './score.mjs';
 import { filingSignals, loadFilingRules } from './sources/filings.mjs';
 import { FDIC_LOAN_SALES_URL } from './sources/fdic.mjs';
@@ -220,7 +220,8 @@ export function runTriage({ dir, rules, now = new Date(), since, metros, scoring
   const filings = filingSignals({ dir, rules: filingRules ?? loadFilingRules() });
 
   const labelOf = (c) => metros?.metros?.find((m) => m.cbsa === String(c))?.label ?? `CBSA ${c}`;
-  const ruleLabels = new Map([...(scoring?.signals ?? []), ...(scoring?.concentration?.signals ?? [])].map((r) => [r.id, r.label]));
+  // A rule's title, as its stored signals carry it (signalTitle, src/metrics.mjs): built from the rule, with its scoring.json label as the fallback.
+  const ruleLabels = new Map([...(scoring?.signals ?? []), ...(scoring?.concentration?.signals ?? [])].map((r) => [r.id, signalTitle(r) ?? r.label]));
   const signalLabel = (type) => ruleLabels.get(type) ?? type;
   const nameOf = (key) => byKey.get(key)?.name || base?.candidates?.[key]?.name || key;
 

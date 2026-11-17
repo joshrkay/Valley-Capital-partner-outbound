@@ -46,7 +46,7 @@ test('the short answer: priority, the headline, and each type\'s ceiling from th
   assert.match(text, /^Call first\. Late apartment loans up two quarters running\. Up to \$15\.4M of its late apartment loans could fit our buy box, and up to \$16\.0M of its late commercial-property loans if they are hotels or retail\.$/);
   assert.ok(parts.filter((p) => p.b).map((p) => p.t).includes('$16.0M'), 'the figures are set in bold');
   // Before the engine stored a headline: the card's first real sentence. With no record: no ceiling sentence.
-  assert.match(answerText(answerSentence({ ...item, card: { ...item.card, headline: null } }, null)), /^Call first\. Multifamily loans are 30\.00% of its CRE book/);
+  assert.match(answerText(answerSentence({ ...item, card: { ...item.card, headline: null } }, null)), /^Call first\. Apartment loans are 30\.00% of its CRE book/);
   assert.match(answerText(answerSentence({ ...item, tier: 'B', filtersFailed: ['failed bank'] }, paper)), /^Excluded from the list\./);
   assert.match(answerText(answerSentence({ ...item, tier: null, card: null }, null)), /^Not ranked\.$/);
 });
