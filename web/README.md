@@ -51,7 +51,7 @@ PRD E12-S5. It is a private Next.js app where the firm's principals can:
 
 ```bash
 cd web
-cp .env.example .env.local      # fill SUPABASE_URL and SUPABASE_ANON_KEY
+cp .env.example .env.local      # optional: only to point at a test project (WEB_SUPABASE_URL, WEB_SUPABASE_ANON_KEY)
 npm install
 npm run dev                     # http://localhost:3000
 npm test                        # server helpers against a fake Supabase REST API, no network
@@ -71,7 +71,7 @@ npm run build
 ## Deploy (Vercel)
 
 - Root directory `web`, with "include files outside the root directory" on. `next.config.mjs` traces `../src`, the rule files, `../site-snapshot` and `../node_modules/@anthropic-ai/sdk`.
-- Environment variables: `SUPABASE_URL` and `SUPABASE_ANON_KEY` (plus the `NEXT_PUBLIC_` copies if a client component ever needs them). `ENGINE_ROOT` is only needed if the repository layout differs at runtime.
+- Environment variables: none are required. The firm's Supabase URL and publishable key are committed in `lib/env.mjs`, so the deployed app cannot be pointed at the wrong project by a stale dashboard value; `SUPABASE_URL`, `SUPABASE_ANON_KEY` and the `NEXT_PUBLIC_` copies are no longer read. `WEB_SUPABASE_URL` with `WEB_SUPABASE_ANON_KEY` overrides both for a test project. `ENGINE_ROOT` is only needed if the repository layout differs at runtime.
 - Turn preview deployments off or protect them (PRD E12-S7).
 - **On the first deploy, check that a page loads data.** The engine is loaded at runtime from the traced files, which was verified with `next start` but not yet on Vercel.
 

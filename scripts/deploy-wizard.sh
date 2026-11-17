@@ -297,10 +297,9 @@ pause
 # ── 8 ─────────────────────────────────────────────────────────────────────
 stage "Vercel: settings for the web project"
 open_url "$VERCEL_PROJECT/settings"
-step "Build and Deployment: Root Directory = web ; turn ON 'Include files outside the root directory in the Build Step'."
-step "Environment Variables (Production and Preview):"
-note "    SUPABASE_URL      = $SUPABASE_URL"
-note "    SUPABASE_ANON_KEY = the publishable key from stage 2 (in $ENV_FILE)"
+step "Build and Deployment: Framework Preset = Next.js ; Root Directory = web ; turn ON 'Include files outside the root directory in the Build Step'."
+note "    No Supabase environment variables are needed: the firm's project URL and publishable key are committed in web/lib/env.mjs."
+note "    Only to point a deployment at another project, set WEB_SUPABASE_URL and WEB_SUPABASE_ANON_KEY together."
 warn "Never add the secret (service role) key here. The app refuses to start with one."
 step "Git: production branch = main."
 step "Deployment Protection: turn ON Vercel Authentication (Standard Protection), so previews need a Vercel login."

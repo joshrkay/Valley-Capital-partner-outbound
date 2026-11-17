@@ -7,7 +7,7 @@ import { engine, engineRoot } from '../lib/engine.mjs';
 import { restReader } from '../lib/rest.mjs';
 import { visibleCandidates, certOf } from '../lib/candidates-view.mjs';
 import { parseMarkdown, parseInline } from '../lib/markdown.mjs';
-import { isServiceKey, supabaseEnv } from '../lib/env.mjs';
+import { isServiceKey, supabaseEnv, FIRM_PROJECT } from '../lib/env.mjs';
 import { period, moneyThousands, pct, source } from '../lib/format.mjs';
 import * as ops from '../lib/ops.mjs';
 
@@ -171,9 +171,19 @@ test('the app refuses a service-role key and needs its settings', () => {
   assert.equal(isServiceKey(jwt({ role: 'anon' })), false);
   assert.equal(isServiceKey('sb_secret_abc'), true);
   assert.equal(isServiceKey('sb_publishable_abc'), false);
-  assert.throws(() => supabaseEnv({}), /not configured/);
-  assert.throws(() => supabaseEnv({ SUPABASE_URL: URL_, SUPABASE_ANON_KEY: jwt({ role: 'service_role' }) }), /service-role key/);
-  assert.deepEqual(supabaseEnv({ SUPABASE_URL: URL_, SUPABASE_ANON_KEY: 'sb_publishable_abc' }), { url: URL_, key: 'sb_publishable_abc' });
+  // With nothing set, the app talks to the firm's committed project, whose key is publishable, never a secret one.
+  assert.deepEqual(supabaseEnv({}), { url: FIRM_PROJECT.url, key: FIRM_PROJECT.key });
+  assert.match(FIRM_PROJECT.url, /^https:\/\/[a-z0-9]+\.supabase\.co$/);
+  assert.equal(isServiceKey(FIRM_PROJECT.key), false);
+  assert.ok(FIRM_PROJECT.key.startsWith('sb_publishable_'));
+  // The old names are ignored: a stale value in a hosting dashboard can no longer send sign-ins to another project.
+  assert.deepEqual(supabaseEnv({ SUPABASE_URL: URL_, SUPABASE_ANON_KEY: 'sb_publishable_abc', NEXT_PUBLIC_SUPABASE_URL: URL_ }), { url: FIRM_PROJECT.url, key: FIRM_PROJECT.key });
+  // Another project only through both override names together, and never with a service-role key.
+  assert.deepEqual(supabaseEnv({ WEB_SUPABASE_URL: URL_, WEB_SUPABASE_ANON_KEY: 'sb_publishable_abc' }), { url: URL_, key: 'sb_publishable_abc' });
+  assert.throws(() => supabaseEnv({ WEB_SUPABASE_URL: URL_ }), /together/);
+  assert.throws(() => supabaseEnv({ WEB_SUPABASE_ANON_KEY: 'sb_publishable_abc' }), /together/);
+  assert.throws(() => supabaseEnv({ WEB_SUPABASE_URL: URL_, WEB_SUPABASE_ANON_KEY: jwt({ role: 'service_role' }) }), /service-role key/);
+  assert.throws(() => supabaseEnv({ WEB_SUPABASE_URL: URL_, WEB_SUPABASE_ANON_KEY: 'sb_secret_abc' }), /service-role key/);
 });
 
 test('formatting: periods, thousands of dollars, ratios and source lines', () => {
