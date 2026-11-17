@@ -1,7 +1,7 @@
 // Checks on the committed rule files for the signal pipeline: buybox.json, scoring.json, metros.json (PRD E0-S1, E0-S2, E6-S2).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { loadJson } from './kit.mjs';
+import { loadJson, placeholderBuybox } from './kit.mjs';
 import { validateBuybox, validateScoring, AXES } from '../src/score.mjs';
 import { METRICS } from '../src/metrics.mjs';
 
@@ -26,13 +26,17 @@ test('metros.json: six metros with unique 5-digit codes, labels, and counties in
   assert.deepEqual([...metros.hqStates].sort(), Object.keys(STATE_FIPS).sort());
 });
 
-test('buybox.json: valid shape, metros all in metros.json, the direct-sale asset cap, and placeholders a principal must fill', () => {
+test('buybox.json: valid shape, metros all in metros.json, the direct-sale asset cap, and filled by a principal, with no placeholders left', () => {
   const v = validateBuybox(buybox, { metros });
   assert.deepEqual(v.errors, []);
   const known = new Set(metros.metros.map((m) => m.cbsa));
   for (const c of buybox.metros) assert.ok(known.has(c), c);
   assert.equal(buybox.filters.maxAssetsThousands, 10000000);
-  assert.ok(v.placeholders.includes('sectors.shortTermRentalPortfolios'), 'short-term rental portfolios stay an open question until a principal decides');
+  assert.deepEqual(v.placeholders, [], 'a principal filled every [CONFIRM] value');
+  assert.equal(v.ok, true);
+  assert.ok(['in', 'out'].includes(buybox.sectors.shortTermRentalPortfolios), 'a principal decided whether short-term rental portfolios are in (PRD Q1)');
+  // Until a principal decides, short-term rental portfolios stay an open question: a placeholder the check names.
+  assert.ok(validateBuybox(placeholderBuybox(), { metros }).placeholders.includes('sectors.shortTermRentalPortfolios'), 'an unanswered Q1 is a placeholder');
 });
 
 test('scoring.json: valid, every component on an axis, every axis used, every metric known, placeholders declared', () => {

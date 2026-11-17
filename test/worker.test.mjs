@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { makeDir, put, REPO, PLACEHOLDER_UA } from './kit.mjs';
+import { makeDir, put, REPO, PLACEHOLDER_UA, placeholderBuybox } from './kit.mjs';
 import { fakePostgrest } from './postgrest-fake.mjs';
 import { fakeFdic, METROS, TABLES } from './fdic-fake.mjs';
 import { platformClient } from '../src/platform/client.mjs';
@@ -12,7 +12,7 @@ import { push, pull } from '../src/platform/move.mjs';
 import { snapshotFromDir } from '../src/uow.mjs';
 import { loadRules } from '../src/rules.mjs';
 import { runFdic } from '../src/sources/fdic.mjs';
-import { runScoring } from '../src/score.mjs';
+import { runScoring, validateBuybox } from '../src/score.mjs';
 
 const rules = loadRules();
 const NOW = new Date('2026-11-13T12:00:00Z');
@@ -37,21 +37,29 @@ test('a principal queues the FDIC pull and scoring; the worker runs both and the
   assert.ok([...fake.docs.keys()].some((p) => /^paper\/fdic-\d+\.json$/.test(p)), 'score.run writes the paper estimates (E14-S1)');
   const [fdicJob, scoreJob] = fake.jobs;
   assert.equal(fdicJob.result.outcome, 'ok');
-  assert.equal(scoreJob.result.provisional, true);
+  // Provisional exactly while the shipped buy box has placeholders; the draft run on an explicit placeholder buy box is checked below.
+  assert.equal(scoreJob.result.provisional, validateBuybox(rules.buybox, { metros: rules.metros }).placeholders.length > 0);
   assert.equal(typeof scoreJob.result.tierA, 'number');
   // What the worker prints, which lands in scheduled-job logs, is ids, kinds and outcomes only.
   assert.deepEqual(logged, [`job ${fdicJob.id} sources.fdic done`, `job ${scoreJob.id} score.run done`]);
   for (const j of fake.jobs) assert.doesNotMatch(JSON.stringify(j.result), /Example|Bank/, 'no institution name in a job result');
 });
 
-test('scoring with an unfilled buy box fails the job with the reason, and writes nothing', async () => {
+test('scoring with an unfilled buy box fails the job with the reason, and writes nothing; with draftBuybox it runs, marked provisional', async () => {
   const fake = fakePostgrest();
+  const unfilled = { ...testRules, buybox: placeholderBuybox() };
   await pat(fake).enqueue('sources.fdic');
   await pat(fake).enqueue('score.run');
-  const done = await work({ client: worker(fake), rules: testRules, deps: deps() });
+  const done = await work({ client: worker(fake), rules: unfilled, deps: deps() });
   assert.deepEqual(done.map((d) => d.outcome), ['done', 'failed']);
   assert.match(fake.jobs[1].result.error, /\[CONFIRM\] placeholders/);
   assert.equal(fake.docs.has('candidates/latest.json'), false);
+  // The same buy box with draftBuybox: the job runs, and its result is marked provisional.
+  await pat(fake).enqueue('score.run', { draftBuybox: true });
+  const draft = await work({ client: worker(fake), rules: unfilled, deps: deps() });
+  assert.deepEqual(draft.map((d) => [d.kind, d.outcome]), [['score.run', 'done']]);
+  assert.equal(fake.jobs[2].result.provisional, true);
+  assert.ok(fake.docs.has('candidates/latest.json'));
 });
 
 test('research needs a model key, and a pipeline account waits for the pilot without spending anything', async () => {

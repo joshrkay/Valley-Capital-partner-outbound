@@ -7,7 +7,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fakePostgrest } from '../../test/postgrest-fake.mjs';
-import { makeDir, put, config } from '../../test/kit.mjs';
+import { makeDir, put, config, placeholderBuybox } from '../../test/kit.mjs';
 import { fakeFdic } from '../../test/fdic-fake.mjs';
 import { btTables, btConfig, METROS, NOW, FROM, TO, SALES } from '../../test/backtest-kit.mjs';
 import { platformClient } from '../../src/platform/client.mjs';
@@ -27,7 +27,8 @@ const client = (fake) => platformClient({ url: URL_, key: 'anon-key', accessToke
 const base = loadRules();
 const BT = btConfig({ holdoutFrom: undefined, holdout: { by: 'bank', share: 0.5, seed: 'test-seed' }, horizonsReported: [2, 4],
   eras: [{ id: 'early', label: 'Early', from: '2022-03-31', to: '2022-12-31' }, { id: 'late', label: 'Late', from: '2023-03-31', to: '2023-12-31' }] });
-const rules = { ...base, config: { ...config(), backtest: BT } };
+// The placeholder buy box (test/kit.mjs), so the report's PROVISIONAL line is tested whatever buybox.json ships.
+const rules = { ...base, buybox: placeholderBuybox(), config: { ...config(), backtest: BT } };
 const DAY1 = new Date('2026-11-14T12:00:00Z'), DAY2 = new Date('2026-11-15T09:00:00Z'), DAY3 = new Date('2026-11-16T10:00:00Z');
 
 // A data folder with the panel and the labels, as `outbound backtest panel` and `labels` leave it. No report yet.

@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { statSync } from 'node:fs';
-import { makeDir, put, loadJson } from './kit.mjs';
+import { makeDir, put, loadJson, placeholderBuybox } from './kit.mjs';
 import { buildPaper, frechetBounds, sizeShareInterval, paperValues, paperAt, paperFileId, paperPath, readPaper, renderPaper, formatValue, paperForBriefer,
   TIERS, STATUS, SERIES_BREAK_2023, TAPE_REQUEST, BOUNDS_METHOD } from '../src/paper.mjs';
 import { runScoring } from '../src/score.mjs';
@@ -334,9 +334,9 @@ test('every buy-box condition the data cannot measure enters as 0 to all, so the
   assert.equal(h.bounds.low, 0);
   assert.match(r.q8.unknowns.find((u) => u.id === 'in-box-floor').text, /lien position/);
   assert.match(renderPaper(r), /Unknown condition lien: .*0\.0% to 100\.0%/);
-  // The shipped buy box's placeholders may restrict anything, so each counts as an unknown condition until a principal fills it.
-  const shipped = paper({ footprint: ALL_IN_BOX, buybox: shippedBuybox(), placeholders: ['loanSize.minUsd', 'loanSize.maxUsd', 'statuses', 'lien', 'exclusions[0]'] });
-  const sm = shipped.q7.sectors.find((s) => s.sector === 'multifamily');
+  // A buy box's placeholders may restrict anything, so each counts as an unknown condition until a principal fills it.
+  const unfilled = paper({ footprint: ALL_IN_BOX, buybox: placeholderBuybox(), placeholders: ['loanSize.minUsd', 'loanSize.maxUsd', 'statuses', 'lien', 'exclusions[0]'] });
+  const sm = unfilled.q7.sectors.find((s) => s.sector === 'multifamily');
   assert.deepEqual(sm.unknownConditions.map((u) => u.id), ['size', 'status', 'lien', 'exclusions']);
   assert.ok(sm.unknownConditions.every((u) => /placeholder/.test(u.reason)));
   assert.equal(sm.bounds.low, 0);
@@ -428,7 +428,7 @@ test('the scoring run writes one record per scored bank to paper/, provisional w
   const dir = world();
   confirmFiler({ dir, bank: 'fdic:1', cik: '9900101', by: 'Pat Example', now: NOW });
   put(dir, 'sources/edgar/filings.json', { a: { key: 'sec:a', accession: '0009900101-26-000001', cik: '0009900101', filerCiks: ['0009900101'], form: '10-Q', items: [], fileDate: '2026-10-01', searches: ['loan-sale-cre'], link: 'https://www.sec.gov/Archives/edgar/data/9900101/000990010126000001/', firstSeenAt: '2026-11-13T12:00:00Z' } });
-  const out = runScoring({ dir, buybox: shippedBuybox(), scoring: scoring(), metros, now: NOW, allowPlaceholders: true });
+  const out = runScoring({ dir, buybox: placeholderBuybox(), scoring: scoring(), metros, now: NOW, allowPlaceholders: true });
   for (const it of out.items) {
     const rec = readPaper({ dir, key: it.key });
     assert.ok(rec, it.key);
@@ -441,7 +441,7 @@ test('the scoring run writes one record per scored bank to paper/, provisional w
   assert.ok(!readPaper({ dir, key: 'fdic:2' }).q6.items.some((i) => i.type === 'acquisition'));
   const p = paperPath(dir, 'fdic:1');
   const before = statSync(p).mtimeMs;
-  const again = runScoring({ dir, buybox: shippedBuybox(), scoring: scoring(), metros, now: new Date('2026-11-14T12:00:00Z'), allowPlaceholders: true });
+  const again = runScoring({ dir, buybox: placeholderBuybox(), scoring: scoring(), metros, now: new Date('2026-11-14T12:00:00Z'), allowPlaceholders: true });
   assert.equal(statSync(p).mtimeMs, before, 'an unchanged record is not rewritten');
   assert.equal(readPaper({ dir, key: 'fdic:1' }).runId, out.runId, 'its runId names the run that last changed it');
   const audits = readJsonl(join(dir, 'audit.jsonl')).filter((a) => a.type === 'scoring_run');
