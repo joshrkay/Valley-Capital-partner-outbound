@@ -24,11 +24,20 @@ export const addUsage = (a, b) => {
 
 const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
 
+// Claude Haiku has no server-side refusal fallback (a fallback list returns a 400), so fallbacks are sent only for other models.
+const isHaiku = (model) => /^claude-haiku/.test(String(model ?? ''));
+const useFallbacks = (cfg) => Boolean(cfg.fallbacks) && !isHaiku(cfg.model);
+
 function request(client, params, cfg) {
-  return cfg.fallbacks
+  return useFallbacks(cfg)
     ? client.beta.messages.create({ ...params, betas: [FALLBACK_BETA], fallbacks: cfg.fallbacks })
     : client.messages.create(params);
 }
+
+// The web tools with dynamic filtering (_20260209) run on the Opus, Sonnet and Fable models; Haiku takes the basic versions.
+export const webToolTypes = (model) => isHaiku(model)
+  ? { search: 'web_search_20250305', fetch: 'web_fetch_20250910' }
+  : { search: 'web_search_20260209', fetch: 'web_fetch_20260209' };
 
 // One structured request with no tools. Never throws: returns { ok: false, reason } for an API error, a refusal, a cut-off reply, or bad JSON.
 export async function callJson({ client, cfg, system, messages, schema }) {
@@ -131,9 +140,10 @@ export function extractJson(text) {
 // A research run: web search and fetch run on Anthropic's servers; a long turn can pause and is sent back until it finishes.
 // The model has no tool that acts in the world, so a hostile page cannot make it do anything. Never throws.
 export async function callResearch({ client, cfg, system, user, ledger = newLedger() }) {
+  const web = webToolTypes(cfg.model);
   const tools = [
-    { type: 'web_search_20260209', name: 'web_search', max_uses: cfg.maxSearches },
-    { type: 'web_fetch_20260209', name: 'web_fetch', max_uses: cfg.maxFetches, ...(cfg.fetchBlockedDomains?.length ? { blocked_domains: cfg.fetchBlockedDomains } : {}) },
+    { type: web.search, name: 'web_search', max_uses: cfg.maxSearches },
+    { type: web.fetch, name: 'web_fetch', max_uses: cfg.maxFetches, ...(cfg.fetchBlockedDomains?.length ? { blocked_domains: cfg.fetchBlockedDomains } : {}) },
   ];
   const params = { model: cfg.model, max_tokens: cfg.maxTokens, system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }], tools, output_config: { effort: cfg.effort } };
   const messages = [{ role: 'user', content: user }];
