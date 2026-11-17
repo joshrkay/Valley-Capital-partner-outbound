@@ -548,6 +548,19 @@ label:has(> input[type="checkbox"]) { flex-direction: row; align-items: center; 
 .draft .card-head h2 { font-size: .9375rem; }
 input.narrow { width: 80px; }
 
+/* ---------- System status and Senders ---------- */
+.statusline { padding: 14px 16px; border-left: 4px solid var(--line-strong); }
+.statusline.good { border-left-color: var(--good); }
+.statusline.bad { border-left-color: var(--bad); }
+.statusline h2 { font-size: 1rem; }
+.statusline p, .statusline ul { margin-top: 6px; }
+.statusline ul { padding-left: 20px; }
+.refresh form { display: block; }
+.refresh form + form { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.refresh p { margin-top: 4px; }
+.refresh .check { margin-top: 6px; }
+td.indent { padding-left: 24px; }
+
 /* the app launcher: a native <dialog> */
 dialog.modal { border: 0; border-radius: var(--radius); padding: 0; width: min(880px, calc(100vw - 32px)); max-height: min(84vh, 780px); background: var(--surface); color: var(--ink); box-shadow: var(--shadow-pop); }
 dialog.modal::backdrop { background: var(--scrim); }
@@ -612,7 +625,7 @@ button.btn.quiet { border-color: transparent; background: transparent; }
 button.btn.sm { min-height: 26px; padding: 0 10px; }
 pre.text { white-space: pre-wrap; word-wrap: break-word; font-family: var(--font-mono); font-size: .75rem; background: var(--sunken); padding: 10px; border-radius: var(--radius); border: 1px solid var(--line); }
 .brief h2 { margin-top: 18px; } .brief ul { padding-left: 20px; } .brief li { margin: 4px 0; }
-.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; align-items: start; }
 .grid2 > .panel { margin: 0; }
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; }
 .kv dt { color: var(--muted); } .kv dd { margin: 0; min-width: 0; }

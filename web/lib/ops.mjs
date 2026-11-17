@@ -399,7 +399,7 @@ export async function statusOverview(rest, client) {
   const rules = await loadRules();
   const [runs, jobs, killDoc, snap] = await Promise.all([rest.runs(50), rest.jobs(25), rest.killDocument(), client ? client.load(['sources/edgar/state.json']) : { docs: {} }]);
   const lines = runs.map((r) => r.line);
-  return { runs: lines.slice(0, 20), jobs, kill: { config: !!rules.config.killSwitch, document: killDoc }, edgar: edgarStatus({ state: snap.docs['sources/edgar/state.json'] ?? null, runs: lines, jobs }) };
+  return { runs: lines.slice(0, 20), recentRuns: lines, staleDays: rules.triage?.health?.staleDays ?? {}, jobs, kill: { config: !!rules.config.killSwitch, document: killDoc }, edgar: edgarStatus({ state: snap.docs['sources/edgar/state.json'] ?? null, runs: lines, jobs }) };
 }
 
 // Signal coverage (PRD next-five E18-S1): the engine's own report (src/coverage.mjs), from stored data. The candidates come from their
