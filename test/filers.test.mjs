@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
-import { makeDir } from './kit.mjs';
+import { makeDir, PLACEHOLDER_UA } from './kit.mjs';
 import { loadRules } from '../src/rules.mjs';
 import { readJson, readJsonl } from '../src/store.mjs';
 import { runFdic } from '../src/sources/fdic.mjs';
@@ -113,7 +113,9 @@ test('suggestions fail plainly when FDIC drops a holding-company field, and refu
   assert.equal(r.outcome, 'failed');
   assert.match(r.errors[0], /FDIC did not return requested field\(s\): RSSDHCR/);
   assert.equal(existsSync(filerPaths(dir).suggestions), false);
-  await assert.rejects(suggestFilers({ dir, sec: rules.config.sec, rules: FR, fetchImpl: both().fetchImpl, now: NOW, sleep: nosleep }), /sec\.userAgent is a placeholder/);
+  const net = both();
+  await assert.rejects(suggestFilers({ dir, sec: { ...SEC, userAgent: PLACEHOLDER_UA.sec }, rules: FR, fetchImpl: net.fetchImpl, now: NOW, sleep: nosleep }), /sec\.userAgent is a placeholder/);
+  assert.equal(net.sec.calls.length, 0, 'nothing was asked of SEC with the placeholder');
 });
 
 test('names compare without case, punctuation or legal-form words', () => {

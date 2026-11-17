@@ -10,6 +10,9 @@ import { readJson } from '../src/store.mjs';
 import { readFileSync } from 'node:fs';
 import { makeDir, account, models, fakeClient, textReply, loadJson } from './kit.mjs';
 
+// The Sonnet path: a research config on claude-sonnet-5-5 with the server-side fallback, as a principal may set it.
+const sonnetModels = () => { const m = models(); m.research = { ...m.research, model: 'claude-sonnet-5-5', fallbacks: 'default' }; return m; };
+
 const playbooks = loadJson('playbooks.json');
 const PAGE = 'https://www.acmebank.test/press/q3-results';
 const PAGE_TEXT = 'Acme Community Bank today reported third quarter results. Non-performing loans were $12.4 million at September 30, 2026. Management said it intends to reduce non-performing commercial real estate loans through sales. Jordan Sample, Chief Credit Officer, leads the special assets group.';
@@ -105,7 +108,7 @@ test('end to end: a paused turn is resumed, findings are verified, files are wri
   const dir = makeDir();
   const finalObj = raw([finding(), person(), person({ id: 'p2', source_url: PAGE, quote: 'Jordan Sample, Chief Credit Officer, leads the special assets group' }), finding({ id: 'bad', source_url: 'https://invented.example.test/x' })], { person_check: { status: 'confirmed', note: 'Two pages agree.', finding_ids: ['p1', 'p2'] } });
   const client = happyClient(finalObj);
-  const out = await runBriefer({ client, dir, account: account(), models: models(), playbooks, now: new Date('2026-11-13T12:00:00Z') });
+  const out = await runBriefer({ client, dir, account: account(), models: sonnetModels(), playbooks, now: new Date('2026-11-13T12:00:00Z') });
   assert.equal(out.ok, true);
   assert.equal(out.findings, 3);
   assert.equal(out.draftReady, 2);                    // F3 got "partly" so it is context only
@@ -233,7 +236,7 @@ test('wire check: the real SDK sends the two server tools, effort, and the fallb
   await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
   try {
     const client = new Anthropic({ apiKey: 'test-key', baseURL: `http://127.0.0.1:${server.address().port}`, maxRetries: 0 });
-    const r = await callResearch({ client, cfg: models().research, system: 'SYS', user: 'USER' });
+    const r = await callResearch({ client, cfg: sonnetModels().research, system: 'SYS', user: 'USER' });
     assert.equal(r.ok, true);
     assert.equal(r.turns, 2);
     assert.equal(seen.length, 2);
@@ -249,4 +252,26 @@ test('wire check: the real SDK sends the two server tools, effort, and the fallb
     assert.equal(req.body.temperature, undefined);
     assert.equal(seen[1].body.messages.at(-1).role, 'assistant');   // resumed with the paused content, no extra user turn
   } finally { server.close(); }
+});
+
+test('Haiku research: the plain endpoint with no fallback, and the basic web search and fetch tools', async () => {
+  const cfg = { ...models().research, model: 'claude-haiku-5-5', fallbacks: 'default' };   // a fallback set by mistake is not sent
+  const client = fakeClient([{ content: [{ type: 'text', text: '{"ok":true}' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 5 }, model: 'fake' }]);
+  const r = await callResearch({ client, cfg, system: 'SYS', user: 'USER' });
+  assert.equal(r.ok, true);
+  const call = client.calls[0];
+  assert.notEqual(call.kind, 'beta');
+  assert.equal(call.params.fallbacks, undefined);
+  assert.equal(call.params.betas, undefined);
+  assert.deepEqual(call.params.tools.map((t) => [t.type, t.name, t.max_uses]), [['web_search_20250305', 'web_search', cfg.maxSearches], ['web_fetch_20250910', 'web_fetch', cfg.maxFetches]]);
+  assert.ok(call.params.tools[1].blocked_domains.includes('linkedin.com'));
+});
+
+test('the shipped models: every job runs on Claude Haiku 5.5, and none sets a refusal fallback Haiku does not have', () => {
+  const m = models();
+  for (const [job, cfg] of Object.entries(m)) {
+    if (!cfg || typeof cfg !== 'object' || !('model' in cfg)) continue;
+    assert.equal(cfg.model, 'claude-haiku-5-5', job);
+    assert.equal(cfg.fallbacks, undefined, job);
+  }
 });

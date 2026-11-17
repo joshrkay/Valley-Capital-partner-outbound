@@ -156,7 +156,7 @@ test('a good draft is assembled by the script: greeting, approved claim wording,
   assert.deepEqual(rec.claimsUsed, ['confidential-no-borrower-contact', 'one-page-summary', 'reply-or-decline', 'no-obligation']);
   assert.deepEqual(rec.factsUsed, ['acme-bank:F1']);
   assert.ok(existsSync(join(s.dir, 'drafts', 'acme-bank', '2-email.md')));
-  assert.equal(client.calls[0].params.model, 'claude-sonnet-5-5');
+  assert.equal(client.calls[0].params.model, 'claude-haiku-5-5');
   assert.equal(client.calls[0].params.tools, undefined);          // the drafter has no tools: no research, no actions
 });
 

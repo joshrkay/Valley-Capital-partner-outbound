@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { makeDir, put, REPO } from './kit.mjs';
+import { makeDir, put, REPO, PLACEHOLDER_UA } from './kit.mjs';
 import { loadRules } from '../src/rules.mjs';
 import { readJson, readJsonl } from '../src/store.mjs';
 import { RUNS, CHANGES } from '../src/sources/runlog.mjs';
@@ -90,7 +90,7 @@ test('flags: fixed phrases only, by word boundary, counted; the press release\'s
 test('a run: orders against organizations stored with codes, dates, parties and links; terminations linked to their orders', async () => {
   const dir = world();
   const site = fakeFed();
-  const r = await run(dir, site);
+  const r = await run(dir, site, { enforcement: { ...CFG, userAgent: PLACEHOLDER_UA.enforcement } });
   assert.equal(r.outcome, 'ok', JSON.stringify(r));
   assert.deepEqual([r.actionsRead, r.skippedIndividual, r.orders, r.ordersNew, r.terminations, r.inUniverse], [10, 3, 7, 7, 2, 4]);
   const o = orders(dir);
@@ -107,6 +107,11 @@ test('a run: orders against organizations stored with codes, dates, parties and 
   const line = readJsonl(RUNS(dir)).at(-1);
   assert.equal(line.source, 'enforcement');
   assert.match(line.notes.join(' '), /3 against individuals skipped/);
+  assert.match(line.notes.join(' '), /userAgent is a placeholder: requests sent no custom User-Agent/);
+  // Once a principal fills it, every request names the firm.
+  const named = fakeFed();
+  await run(world(), named, { enforcement: { ...CFG, userAgent: 'Example Firm ops@example.test' } });
+  assert.ok(named.calls.length && named.calls.every((x) => x.ua === 'Example Firm ops@example.test'), 'a filled userAgent is sent on every request');
 });
 
 test('actions against individuals are not stored: no person\'s name reaches the store, the run log or the change log', async () => {

@@ -5,7 +5,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { makeDir, put, config, REPO } from './kit.mjs';
+import { makeDir, put, config, REPO, PLACEHOLDER_UA } from './kit.mjs';
 import { fakeFdic } from './fdic-fake.mjs';
 import { readJson, readJsonl, exists } from '../src/store.mjs';
 import { loadRules } from '../src/rules.mjs';
@@ -21,15 +21,17 @@ const rulesWith = (over = {}, { scoring, buybox } = {}) => ({ ...base, config: {
 const filledBuybox = () => ({ ...structuredClone(base.buybox), sectors: { include: ['hospitality', 'multifamily', 'retail'], shortTermRentalPortfolios: 'out' }, loanSize: { minUsd: 1000000, maxUsd: 25000000 }, statuses: ['non-performing'], lien: 'first', exclusions: ['ground-up construction'] });
 const weighted = (id, w) => { const s = structuredClone(base.scoring); s.components.find((c) => c.id === id).weight = w; return s; };
 
-async function world({ pulledAt = NOW } = {}) {
+async function world({ pulledAt = NOW, labelsConfig = { ...config(), backtest: btConfig() } } = {}) {
   const dir = makeDir();
   const f = fakeFdic(btTables());
   const r = await runPanel({ dir, metros: METROS, config: btConfig(), lookbackQuarters: 8, from: FROM, to: TO, fetchImpl: f.fetchImpl, now: pulledAt, clock: () => pulledAt, sleep: async () => {} });
   assert.equal(r.outcome, 'ok');
   put(dir, 'sources/fdic/sales.json', SALES());
-  assert.equal(buildLabels({ dir, config: { ...config(), backtest: btConfig() }, now: pulledAt, clock: () => pulledAt }).outcome, 'ok');
+  assert.equal(buildLabels({ dir, config: labelsConfig, now: pulledAt, clock: () => pulledAt }).outcome, 'ok');
   return dir;
 }
+// The labels' config with the SEC contact set: a [CONFIRM] placeholder, or an invented firm's.
+const labelsWithSec = (userAgent) => { const c = { ...config(), backtest: btConfig() }; c.sec.userAgent = userAgent; return c; };
 const run = (dir, opts = {}) => runBacktest({ dir, rules: opts.rules ?? rulesWith(), now: NOW, ...opts });
 const head = (rep, i = 0) => rep.results[i].headline.all;
 
@@ -240,13 +242,20 @@ test('WORDS: never "precision" or "recall"; unlabelled banks are never called ne
 });
 
 test('label kinds: what counted, and disclosed_sale listed as unavailable rather than left out', async () => {
-  const dir = await world();
+  // While the SEC contact is a placeholder, the reasons name it (Q11).
+  const dir = await world({ labelsConfig: labelsWithSec(PLACEHOLDER_UA.sec) });
   const { report, paths } = run(dir);
   assert.equal(report.labelKinds.disclosed_sale.status, 'unavailable');
   assert.match(report.labelKinds.disclosed_sale.reasons.join(' '), /Q11/);
   assert.equal(report.labelKinds.failure.status, 'on');
   assert.equal(report.labelKinds.merger.status, 'off');
   assert.match(readFileSync(paths.md, 'utf8'), /disclosed_sale: unavailable/);
+  // With the contact filled and no confirmed filer, it is still listed as unavailable: it needs confirmed filers.
+  const filled = run(await world({ labelsConfig: labelsWithSec('Invented Firm ops@invented-firm.test') }));
+  assert.equal(filled.report.labelKinds.disclosed_sale.status, 'unavailable');
+  assert.doesNotMatch(filled.report.labelKinds.disclosed_sale.reasons.join(' '), /Q11/);
+  assert.match(filled.report.labelKinds.disclosed_sale.reasons.join(' '), /confirmed filer/);
+  assert.match(readFileSync(filled.paths.md, 'utf8'), /disclosed_sale: unavailable/);
 });
 
 test('a horizon that runs past the labels\' date is flagged: those labels are incomplete', async () => {
@@ -306,7 +315,9 @@ test('COMMAND LINE: backtest run, --compare A B, report and verify on a data fol
   assert.match(cli('report'), /Backtest report [0-9a-f]{16}: two scoring files side by side/);
   assert.match(cli('report', '--hash', hash), new RegExp(`Backtest report ${hash}`));
   assert.match(cli('verify'), /PASS {2}backtest\.coverage/);
-  assert.throws(() => cli('labels', '--filings'), /unavailable[\s\S]*Q11/);
+  // The command line reads the shipped config.json, so this checks the reason that holds whatever it ships: the data folder has no
+  // confirmed filer. The SEC-contact reason (Q11) is checked on an explicit placeholder in test/backtest-labels.test.mjs.
+  assert.throws(() => cli('labels', '--filings'), /disclosed_sale is unavailable, so outbound backtest labels --filings does not run[\s\S]*confirmed filer/);
   assert.throws(() => cli('run', '--horizon', 'x'), /horizon/);
 });
 

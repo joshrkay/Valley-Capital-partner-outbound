@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { makeDir, put, REPO } from './kit.mjs';
+import { makeDir, put, REPO, PLACEHOLDER_UA } from './kit.mjs';
 import { fakePostgrest } from './postgrest-fake.mjs';
 import { fakeFdic, METROS, TABLES } from './fdic-fake.mjs';
 import { platformClient } from '../src/platform/client.mjs';
@@ -115,9 +115,12 @@ test('the CMBS pull runs as a job: refused while the SEC contact is a placeholde
   const { fakeSec } = await import('./edgar-fake.mjs');
   const fake = fakePostgrest();
   await pat(fake).enqueue('sources.edgar');
-  await work({ client: worker(fake), rules, deps: deps({ fetchImpl: fakeSec().fetchImpl }) });
+  const placeholder = { ...rules, config: { ...rules.config, sec: { ...rules.config.sec, userAgent: PLACEHOLDER_UA.sec } } };
+  const quiet = fakeSec();
+  await work({ client: worker(fake), rules: placeholder, deps: deps({ fetchImpl: quiet.fetchImpl }) });
   assert.equal(fake.jobs[0].status, 'failed');
   assert.match(fake.jobs[0].result.error, /sec\.userAgent is a placeholder/);
+  assert.equal(quiet.calls.length, 0, 'nothing was requested with the placeholder');
 
   const filled = { ...rules, config: { ...rules.config, sec: { ...rules.config.sec, userAgent: 'Example Firm ops@example.test', minIntervalMs: 0, knownSpecialServicers: ['Example Special Servicing LLC'] } } };
   await pat(fake).enqueue('sources.edgar');
@@ -160,9 +163,12 @@ test('the FDIC loan-sale pull runs as a job: refused while the FDIC contact is a
   const { fakeFdicWww } = await import('./fdicsales-fake.mjs');
   const fake = fakePostgrest();
   await pat(fake).enqueue('sources.fdicsales');
-  await work({ client: worker(fake), rules, deps: deps({ fetchImpl: fakeFdicWww().fetchImpl, sleep: async () => {} }) });
+  const placeholder = { ...rules, config: { ...rules.config, fdic: { ...rules.config.fdic, userAgent: PLACEHOLDER_UA.fdic } } };
+  const quiet = fakeFdicWww();
+  await work({ client: worker(fake), rules: placeholder, deps: deps({ fetchImpl: quiet.fetchImpl, sleep: async () => {} }) });
   assert.equal(fake.jobs[0].status, 'failed');
   assert.match(fake.jobs[0].result.error, /fdic\.userAgent is a placeholder/);
+  assert.equal(quiet.calls.length, 0, 'nothing was requested with the placeholder');
 
   const filled = { ...rules, config: { ...rules.config, fdic: { ...rules.config.fdic, userAgent: 'Example Firm ops@example.test', minIntervalMs: 0 } } };
   await pat(fake).enqueue('sources.fdicsales');

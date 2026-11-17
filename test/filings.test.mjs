@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
-import { makeDir } from './kit.mjs';
+import { makeDir, PLACEHOLDER_UA } from './kit.mjs';
 import { loadRules } from '../src/rules.mjs';
 import { readJson, readJsonl, writeJson } from '../src/store.mjs';
 import { runFdic } from '../src/sources/fdic.mjs';
@@ -19,6 +19,7 @@ const FR = loadFilingRules();
 const NOW = new Date('2026-11-13T12:00:00Z');
 const UA = 'Example Firm ops@example.test';
 const SEC = { ...rules.config.sec, userAgent: UA, minIntervalMs: 0 };
+const PLACEHOLDER = { ...SEC, userAgent: PLACEHOLDER_UA.sec };
 const nosleep = async () => {};
 const day = (n) => new Date(NOW.getTime() + n * 86400000);
 
@@ -381,7 +382,9 @@ test('with no confirmed filer only discovery runs, the run is suspect, and a fil
 });
 
 test('the run refuses a placeholder User-Agent, because the SEC asks for a real contact', async () => {
-  await assert.rejects(runFilings({ dir: await mapped(), sec: rules.config.sec, rules: FR, fetchImpl: fakeSearch().fetchImpl, now: NOW, sleep: nosleep }), /sec\.userAgent is a placeholder/);
+  const fake = fakeSearch();
+  await assert.rejects(runFilings({ dir: await mapped(), sec: PLACEHOLDER, rules: FR, fetchImpl: fake.fetchImpl, now: NOW, sleep: nosleep }), /sec\.userAgent is a placeholder/);
+  assert.equal(fake.calls.length, 0, 'nothing was requested');
 });
 
 test('nothing stored holds filing text or a person, even if the server sent text', async () => {
@@ -449,8 +452,10 @@ test('verify: nothing run yet, no confirmed filer, or a placeholder contact each
   assert.match(byId(await vf(none))['filings.mapped'].summary, /outbound filers suggest/);
   const dir = await mapped();
   await run(dir);
-  const r = byId(await vf(dir, fakeSearch(), { sec: rules.config.sec }));
+  const quiet = fakeSearch();
+  const r = byId(await vf(dir, quiet, { sec: PLACEHOLDER }));
   assert.equal(r['filings.recall'].ok, false); assert.match(r['filings.recall'].summary, /placeholder/);
+  assert.equal(quiet.calls.length, 0, 'nothing was requested with the placeholder');
 });
 
 // ---- The worker ----------------------------------------------------------------------------------------------------------------
@@ -466,7 +471,7 @@ test('the listener runs as a job: refused while the SEC contact is a placeholder
   const queue = () => fake.jobs.push({ id: fake.jobs.length + 1, kind: 'sources.filings', params: {}, status: 'queued', requested_by: 'pat@example.test', result: null });
   const deps = { fetchImpl: fakeSearch().fetchImpl, now: () => NOW, sleep: nosleep };
   queue();
-  await work({ client: worker, rules, deps });
+  await work({ client: worker, rules: { ...rules, config: { ...rules.config, sec: { ...rules.config.sec, userAgent: PLACEHOLDER_UA.sec } } }, deps });
   assert.equal(fake.jobs[0].status, 'failed');
   assert.match(fake.jobs[0].result.error, /sec\.userAgent is a placeholder/);
 

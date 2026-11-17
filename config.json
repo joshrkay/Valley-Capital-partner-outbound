@@ -15,7 +15,7 @@
   },
   "sec": {
     "_note": "SEC EDGAR access for the CMBS adapter (PRD E4-S2). The SEC asks automated clients to name themselves with a contact (fair access policy [verify current wording]) and to stay under 10 requests a second; 150 ms between requests keeps well under. userAgent is a [CONFIRM] placeholder until a principal fills it (PRD Q11): firm name and a monitored contact email, e.g. \"Firm Name ops@firm-domain\". knownSpecialServicers is the reviewed list of special servicer firm names; a name the distribution report shows that is not on it is flagged in the run notes, never guessed. Seeded with the ten firm names that appeared as special servicer on distribution-report covers in the 2026-11-13 runs. A name matches when it directly follows the label, compared without case or punctuation, so \"LNR Partners\" covers \"LNR Partners, LLC\", \"LNR Partners,LLC\" and \"LNR Partners, Inc.\". A principal should review the list; add a firm only after checking it.",
-    "userAgent": "[CONFIRM: firm name and contact email for SEC fair access]",
+    "userAgent": "Valley Capital Partners josh@valleycapitalpartner.com",
     "minIntervalMs": 150,
     "sinceDays": 45,
     "maxEx102Bytes": 5000000,
@@ -24,14 +24,14 @@
   },
   "fdic": {
     "_note": "FDIC loan-sale announcements on www.fdic.gov (PRD E16-S2, outbound sources run fdicsales). Gentle by design: requests are at least minIntervalMs apart (20 s, so three a minute), or further if robots.txt sets a longer Crawl-delay, and only paths robots.txt allows are read. At most maxEvents sale pages per run; an announcement PDF is read once, when it is new or its link changes, and at most maxPdfBytes of it. userAgent is a [CONFIRM] placeholder until a principal fills it: the firm's name and a monitored BUSINESS contact, e.g. \"Firm Name ops@firm-domain\". The run refuses while it is a placeholder, and refuses an email address at a personal domain (personalDomains below).",
-    "userAgent": "[CONFIRM: firm name and a monitored business contact for FDIC requests; no personal email]",
+    "userAgent": "Valley Capital Partners josh@valleycapitalpartner.com",
     "minIntervalMs": 20000,
     "maxEvents": 12,
     "maxPdfBytes": 5000000
   },
   "enforcement": {
     "_note": "Enforcement orders (PRD next-five E18-S2, outbound sources run enforcement). The Federal Reserve's action files only, for now. Every value is a PLACEHOLDER for a principal to review. minIntervalMs: at least this long between requests (www.federalreserve.gov sets no Crawl-delay; robots.txt answered 404 on 2026-11-16). maxDocsPerRun: order documents read per run, for orders that name a bank in the universe; each is read once. maxPdfBytes: the most of one order PDF read. minShare: a file holding fewer actions than this share of the last run's count fails the run, so a truncated file never stands in for the record. reviewWindowDays: how far back an unmatched order is put on the review list (outbound enforcement unmatched). flags: the fixed phrases looked for in an order's text; only which appear is stored, never the text. userAgent: optional; while it is a placeholder, requests send no custom User-Agent. If a principal fills it, the firm's name and a monitored business contact.",
-    "userAgent": "[CONFIRM: optional; firm name and a monitored business contact for Federal Reserve requests]",
+    "userAgent": "Valley Capital Partners josh@valleycapitalpartner.com",
     "minIntervalMs": 2000,
     "maxDocsPerRun": 25,
     "maxPdfBytes": 5000000,
@@ -56,7 +56,7 @@
   },
   "mergers": {
     "_note": "Merger applications (PRD next-five E18-S3, outbound sources run mergerapps): the Federal Reserve's weekly H.2 release, one page per district. PLACEHOLDERS. districts: the Reserve Bank districts read each week; all twelve, since a bank in our metros can be acquired by a holding company anywhere. backfillWeeks: how far back the first run reads. maxWeeksPerRun: weeks read per run (each week is 14 requests). minIntervalMs: at least this long between requests. minRowsPerWeek: a week with fewer filings across the districts is noted in the run log. userAgent: optional, as for enforcement. gapLeadDays: PLACEHOLDER; outbound mergers gap counts only closes from this many days after the first H.2 week read, since an application is filed months before its close (Q5, decided 2026-11-16: accept the gap and count it).",
-    "userAgent": "[CONFIRM: optional; firm name and a monitored business contact for Federal Reserve requests]",
+    "userAgent": "Valley Capital Partners josh@valleycapitalpartner.com",
     "districts": ["boston", "newyork", "philadelphia", "cleveland", "richmond", "atlanta", "chicago", "stlouis", "minneapolis", "kansascity", "dallas", "sanfrancisco"],
     "gapLeadDays": 180,
     "backfillWeeks": 26,
