@@ -114,7 +114,7 @@ export default function AccountRecord({ client, d, rules, next }) {
 
         <section id="routes" className="sec"><Routes client={client} id={a.id} /></section>
         <section className="sec"><Touches client={client} id={a.id} /></section>
-        <section id="calls" className="sec"><Calls client={client} id={a.id} /></section>
+        <section className="sec"><Calls client={client} id={a.id} /></section>
 
         {pipe ? (
           <div className="card more">

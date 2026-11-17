@@ -23,7 +23,7 @@ export default async function Intermediary({ params }) {
 
       {advisor ? (
         <div className="panel small">
-          <h3 style={{ marginTop: 0 }}>Buyer list</h3>
+          <h3>Buyer list</h3>
           <p>State: <strong>{(reg?.state ?? 'not_started').replace(/_/g, ' ')}</strong>{reg?.recertifyBy ? `, re-certify by ${reg.recertifyBy}` : ''}. Only the state is kept here, never the agreement. {d.credibilityPackage ? `Credibility package approved by ${d.credibilityPackage.approvedBy}.` : 'Proof of funds waits for the credibility package to be approved (outbound intermediaries credibility-approved).'}</p>
           <form action={setRegistrationAction} className="row">
             <input type="hidden" name="key" value={firm.key} />

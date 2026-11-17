@@ -3,7 +3,7 @@ import { loadRules } from '../../lib/engine.mjs';
 import { salesOverview } from '../../lib/ops.mjs';
 import { moneyDollars, when } from '../../lib/format.mjs';
 import { kindLabel, partyLink, assetLine, countsLine, recoveryText } from '../../lib/sales-view.mjs';
-import { NotAuthorized, Problem, ContextOnlyBanner } from '../ui.jsx';
+import { NotAuthorized, Problem, ContextOnlyBanner, PageHead } from '../ui.jsx';
 
 export const metadata = { title: 'Sales · Valley Capital outbound' };
 
@@ -24,8 +24,7 @@ export default async function Sales() {
   return (
     <>
       <ContextOnlyBanner />
-      <h1>Who sells to whom</h1>
-      <p className="sub">Every sale event the stored data shows: CMBS liquidations, sales banks disclosed to the SEC, whole-bank acquisitions in our metros, and FDIC loan-sale announcements{d.builtAt ? `. Ledger built ${when(d.builtAt)}` : ''}. A buyer no source names is shown as unknown. Balances are in dollars.</p>
+      <PageHead icon="dollar" tone="t-sale" eyebrow="Market" title="Who sells to whom" lede={<>Every sale event the stored data shows: CMBS liquidations, sales banks disclosed to the SEC, whole-bank acquisitions in our metros, and FDIC loan-sale announcements{d.builtAt ? `. Ledger built ${when(d.builtAt)}` : ''}. A buyer no source names is shown as unknown. Balances are in dollars.</>} />
       {!d.builtAt ? <p className="muted">No ledger yet. It is rebuilt after each CMBS or FDIC loan-sale pull; queue one on the Status page, or run <code>outbound sales build</code>.</p> : (
         <>
           <h2>Recent sale events</h2>
@@ -39,8 +38,8 @@ export default async function Sales() {
                   <td><Party p={e.seller} />{e.seller?.via ? <span className="src">through {partyLink(e.seller.via) ? <a href={partyLink(e.seller.via)}>{e.seller.via.name}</a> : e.seller.via.name}</span> : null}</td>
                   <td><Party p={e.buyer} /></td>
                   <td className="small">{assetLine(e.asset, metro)}</td>
-                  <td className="num" title={e.asset?.balanceBasis ?? undefined}>{moneyDollars(e.asset?.balance)}</td>
-                  <td className="small">{(e.sources ?? []).filter((s) => s.link).map((s, i) => <a key={i} href={s.link} rel="noopener noreferrer nofollow" target="_blank" style={{ marginRight: 6 }}>{s.source}</a>)}</td>
+                  <td className="num">{moneyDollars(e.asset?.balance)}{e.asset?.balanceBasis ? <span className="src">{e.asset.balanceBasis}</span> : null}</td>
+                  <td className="small">{(e.sources ?? []).filter((s) => s.link).map((s, i) => <a key={i} href={s.link} rel="noopener noreferrer nofollow" target="_blank" className="mr6">{s.source}</a>)}</td>
                 </tr>
               ))}</tbody>
             </table></div>
@@ -84,7 +83,7 @@ export default async function Sales() {
               <tbody>{d.pricing.groups.map((g) => (
                 <tr key={`${g.propertyType}|${g.metro}`}>
                   <td>{g.propertyType}</td><td>{g.metro ? metro(g.metro) : '–'}</td><td className="num">{g.events}</td><td className="num">{g.withRecovery}</td>
-                  <td className="num" title={g.impliedRecovery?.label}>{recoveryText(g.impliedRecovery)}</td>
+                  <td className="num">{recoveryText(g.impliedRecovery)}{g.impliedRecovery?.label ? <span className="src">{g.impliedRecovery.label}</span> : null}</td>
                   <td className="num">{g.withRecovery > 1 ? `${(g.min * 100).toFixed(1)}–${(g.max * 100).toFixed(1)}%` : '–'}</td>
                 </tr>
               ))}</tbody>

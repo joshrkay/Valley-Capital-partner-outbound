@@ -76,7 +76,7 @@ export async function Touches({ client, id }) {
 
       <div className="grid2">
         <div className="panel">
-          <h3 style={{ marginTop: 0 }}>Where the sequence stands</h3>
+          <h3>Where the sequence stands</h3>
           <p className="small">{t.sent} send{t.sent === 1 ? '' : 's'} recorded.{t.next ? ` Next in the sequence: step ${t.next.step}, ${channel(t.next.channel)}.` : ''}</p>
           <Due due={t.due} next={t.next} />
           <h4>History, newest first</h4>
@@ -84,7 +84,7 @@ export async function Touches({ client, id }) {
         </div>
 
         <div className="panel">
-          <h3 style={{ marginTop: 0 }}>Record a send</h3>
+          <h3>Record a send</h3>
           {t.senders.length ? (
             <>
               <p className="small">After you have sent it. This records step {p.step}: one more than the sends already recorded, as the command line counts it. Check first: the guard's verdict for exactly that send shows below.</p>
@@ -115,7 +115,7 @@ export async function Touches({ client, id }) {
 
       <div className="grid2">
         <div className="panel">
-          <h3 style={{ marginTop: 0 }}>Record a reply, bounce, meeting or handoff</h3>
+          <h3>Record a reply, bounce, meeting or handoff</h3>
           <p className="small">A reply, a meeting or a handoff ends the sequence for everyone at this bank: a principal takes it from there. A bounce stops email to this account.</p>
           <form action={recordEventAction} className="row">
             <input type="hidden" name="id" value={id} />
@@ -127,7 +127,7 @@ export async function Touches({ client, id }) {
         </div>
 
         <div className="panel">
-          <h3 style={{ marginTop: 0 }}>Record an opt-out</h3>
+          <h3>Record an opt-out</h3>
           <div className="banner warn small">
             An opt-out suppresses the person who asked and their address at once: they go on the suppression list and are never contacted again.{' '}
             The fields below start from the account's contact{named.length ? <> (<strong>{named.join(', ')}</strong>)</> : ''}. If someone else at the bank asked to be removed, enter their name and address instead.{' '}
@@ -136,11 +136,11 @@ export async function Touches({ client, id }) {
           <form action={recordOptOutAction}>
             <input type="hidden" name="id" value={id} />
             <label>Date<input type="date" name="date" defaultValue={t.today} max={t.today} required /></label>
-            <label style={{ marginTop: 8 }}>Who opted out: name<input name="optOutName" defaultValue={t.optOut.name} maxLength={200} /></label>
-            <label style={{ marginTop: 8 }}>Their email address<input type="email" name="optOutEmail" defaultValue={t.optOut.email} maxLength={200} /></label>
-            <label style={{ marginTop: 8 }}>Short internal note (optional: never the reply's text, no personal data)<input name="note" maxLength={200} /></label>
-            <label style={{ marginTop: 8 }}><input type="checkbox" name="confirm" value="yes" required /> They asked not to be contacted. I understand this suppresses the person and the address at once.</label>
-            <p style={{ marginTop: 8 }}><button className="danger" type="submit">Record the opt-out</button></p>
+            <label className="mt8">Who opted out: name<input name="optOutName" defaultValue={t.optOut.name} maxLength={200} /></label>
+            <label className="mt8">Their email address<input type="email" name="optOutEmail" defaultValue={t.optOut.email} maxLength={200} /></label>
+            <label className="mt8">Short internal note (optional: never the reply's text, no personal data)<input name="note" maxLength={200} /></label>
+            <label className="mt8"><input type="checkbox" name="confirm" value="yes" required /> They asked not to be contacted. I understand this suppresses the person and the address at once.</label>
+            <p className="mt8"><button className="danger" type="submit">Record the opt-out</button></p>
           </form>
         </div>
       </div>

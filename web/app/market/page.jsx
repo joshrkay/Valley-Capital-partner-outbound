@@ -1,7 +1,7 @@
 import { requirePrincipal } from '../../lib/session.mjs';
 import { latestMarketPack } from '../../lib/ops.mjs';
 import { moneyDollars } from '../../lib/format.mjs';
-import { NotAuthorized, Problem } from '../ui.jsx';
+import { NotAuthorized, Problem, PageHead } from '../ui.jsx';
 
 export const metadata = { title: 'Market · Valley Capital outbound' };
 
@@ -15,7 +15,7 @@ export default async function Market() {
   if (ctx.denied) return <NotAuthorized email={ctx.email} />;
   let p;
   try { p = await latestMarketPack(ctx.client); } catch (e) { return <Problem text={`The market pack could not be loaded: ${e.message}`} />; }
-  if (!p) return <><h1>Market</h1><p className="muted">No market pack yet. Run: outbound market pack --quarter YYYY-MM-DD</p></>;
+  if (!p) return <><PageHead icon="chart" tone="t-mkt" eyebrow="Market" title="Market by quarter" /><p className="muted">No market pack yet. Run: outbound market pack --quarter YYYY-MM-DD</p></>;
   const cmbs = (title, t, bal) => (
     <>
       <h2>{title}</h2>
@@ -27,8 +27,7 @@ export default async function Market() {
   );
   return (
     <>
-      <h1>Market, quarter ending {p.quarter}</h1>
-      <p className="sub">Aggregates only: no bank, servicer, trust, property or person is named. For principals now; it becomes a data section in the Hotel loan watch only after counsel answers.</p>
+      <PageHead icon="chart" tone="t-mkt" eyebrow="Market by quarter" title={`Market, quarter ending ${p.quarter}`} lede={<>Aggregates only: no bank, servicer, trust, property or person is named. For principals now; it becomes a data section in the Hotel loan watch only after counsel answers.</>} />
       <h2>Banks: CRE noncurrent ratio</h2>
       <p className="small muted">{p.method.fdic}</p>
       <div className="scroll"><table>

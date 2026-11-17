@@ -107,6 +107,9 @@ test('ONE REPORT: the headline by SEC-filer coverage and the metro subset, lead 
   assert.equal(rep.kind, 'Training');
   const res = r.results[0], h = res.headline, view = rep.results[0];
 
+  // Score check (was Calibration) opens with the headline in one sentence, from the report's own figures.
+  assert.match(view.sentence, new RegExp(`^The training banks: the top ${BT.topK} by distress and timing had an observed-label yield of \\d+\\.\\d%, .*× the base rate of \\d+\\.\\d%, and held \\d+\\.\\d% of the observed labels\\. Read: too few to tune on`));
+  assert.doesNotMatch(view.sentence, /precision|recall/i);
   // The headline: the distress-and-timing ranking only, every stratum with its counts.
   assert.match(view.headline.intro, /distress and timing points only/);
   assert.match(view.headline.intro, /fit is left out/);

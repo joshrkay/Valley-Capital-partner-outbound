@@ -82,6 +82,22 @@ test('server components by default: only the navigation, the launcher, the menus
   for (const f of client) assert.doesNotMatch(src(join(WEB, f)), /lib\/(ops|session|engine|rest|env)\.mjs|fetch\(|process\.env/, f);
 });
 
+test('nothing important on hover only: no title attribute except on an icon button that also has a label', () => {
+  for (const f of APP.filter((x) => x.endsWith('.jsx'))) {
+    for (const m of src(f).matchAll(/<([a-z]+)\b[^>]*\stitle=/g)) assert.match(m[0], /aria-label=/, `${f}: a hover-only title on <${m[1]}>`);
+  }
+});
+
+test('Advisors and servicers is one menu item with a filter for each kind; Score check and Briefer pilot carry their new names', () => {
+  const page = src(join(WEB, 'app/intermediaries/page.jsx'));
+  assert.match(page, /title="Advisors and servicers"/);
+  assert.match(page, /href=\{`\/intermediaries\?kind=\$\{k\}`\}/);
+  assert.match(page, /href="\/servicers"/);
+  assert.equal(currentHref('/servicers'), currentHref('/intermediaries'));
+  assert.match(src(join(WEB, 'lib/calibration-view.mjs')), /title: 'Score check'/);
+  assert.match(src(join(WEB, 'app/pilot/page.jsx')), /title="Briefer pilot"/);
+});
+
 test('no runtime third-party request, no send button, and the shell keeps the internal-only rule', () => {
   for (const f of [...APP, join(WEB, 'app/globals.css')]) {
     const s = src(f);

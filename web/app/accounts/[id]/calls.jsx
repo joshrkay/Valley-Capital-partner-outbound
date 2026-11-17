@@ -17,29 +17,29 @@ function Correct({ p, id, codes, who }) {
   const has = new Map(p.outcomes.map((o) => [o.code, o]));
   const rows = [...p.commitments, { who: 'us', what: '', by: '' }, { who: 'them', what: '', by: '' }];
   return (
-    <details style={{ marginTop: 8 }}>
+    <details className="mt8">
       <summary>Correct this proposal before confirming it</summary>
       <form action={editCallAction}>
         <input type="hidden" name="id" value={id} /><input type="hidden" name="proposal" value={p.id} /><input type="hidden" name="edits" value={String(p.edits.length)} />
         <h4>Outcomes</h4>
         {codes.map((c) => (
-          <label key={c.code} style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}><input type="checkbox" name="code" value={c.code} defaultChecked={has.has(c.code)} /><strong>{c.code}</strong> <span className="small">{c.help}</span></label>
+          <label key={c.code} className="check"><input type="checkbox" name="code" value={c.code} defaultChecked={has.has(c.code)} /><strong>{c.code}</strong> <span className="small">{c.help}</span></label>
         ))}
-        <div className="row" style={{ marginTop: 8 }}>
+        <div className="row mt8">
           <label>Not selling now: when they said they might<input name="when" defaultValue={has.get('not_selling_now')?.when ?? ''} maxLength={200} /></label>
           <label>Wrong person: who they said decides<input name="referral" defaultValue={has.get('wrong_person')?.referral ?? ''} maxLength={200} /></label>
         </div>
-        <label style={{ marginTop: 8 }}>Objections, one per line<textarea name="objections" rows={3} defaultValue={p.objections.map((o) => o.text).join('\n')} /></label>
+        <label className="mt8">Objections, one per line<textarea name="objections" rows={3} defaultValue={p.objections.map((o) => o.text).join('\n')} /></label>
         <h4>Commitments <span className="small muted">(leave “what” empty to drop a row)</span></h4>
         <input type="hidden" name="commitmentRows" value={String(rows.length)} />
         {rows.map((c, i) => (
-          <div key={i} className="row" style={{ marginBottom: 6 }}>
+          <div key={i} className="row mb6">
             <label>Who<select name={`who.${i}`} defaultValue={c.who}>{who.map((w) => <option key={w} value={w}>{WHO[w] ?? w}</option>)}</select></label>
-            <label style={{ flex: 1 }}>What<input name={`what.${i}`} defaultValue={c.what} maxLength={300} /></label>
+            <label className="grow1">What<input name={`what.${i}`} defaultValue={c.what} maxLength={300} /></label>
             <label>By (a date, or words)<input name={`by.${i}`} defaultValue={c.by ?? ''} maxLength={100} /></label>
           </div>
         ))}
-        <label style={{ marginTop: 8 }}>Follow-up date<input type="date" name="followUpDate" defaultValue={p.followUpDate || ''} min={p.date} /></label>
+        <label className="mt8">Follow-up date<input type="date" name="followUpDate" defaultValue={p.followUpDate || ''} min={p.date} /></label>
         <p className="small muted">The same checks as the model’s proposal: codes from the fixed list, real dates, nothing dated before the call. Who corrected which fields is audited, never the values, and the confirmed outcome records that a principal corrected it. Nothing is recorded until a principal confirms it.</p>
         <button className="secondary" type="submit">Save the correction</button>
       </form>
@@ -50,7 +50,7 @@ function Correct({ p, id, codes, who }) {
 function Proposal({ p, id, codes, who }) {
   return (
     <div className="panel">
-      <h3 style={{ marginTop: 0 }}>Proposed outcome for the call of {p.date} <span className="pill">pending</span>{p.edits.length ? <> <span className="pill">corrected by {correctors(p.edits)}</span></> : null}</h3>
+      <h3>Proposed outcome for the call of {p.date} <span className="pill">pending</span>{p.edits.length ? <> <span className="pill">corrected by {correctors(p.edits)}</span></> : null}</h3>
       <p className="small muted">Read from the notes by a model{p.edits.length ? ', then corrected by a principal' : ''}. Nothing is recorded until a principal confirms it.</p>
       <dl className="kv small">
         <dt>Outcomes</dt><dd>{p.outcomes.length ? p.outcomes.map((o) => (
@@ -85,7 +85,7 @@ export async function Calls({ client, id }) {
       <h2 id="calls">Calls</h2>
       <div className="grid2">
         <div className="panel">
-          <h3 style={{ marginTop: 0 }}>Before the call</h3>
+          <h3>Before the call</h3>
           <p className="small">A one-page brief from the account, the research, the signals, the paper estimate if there is one, the touch history and the approved claims. Code checks every citation, number and claim.</p>
           <form action={queueCallPrepAction} className="row">
             <input type="hidden" name="id" value={id} />
@@ -97,12 +97,12 @@ export async function Calls({ client, id }) {
             : <div className="banner error small" role="alert"><strong>NOT USABLE.</strong> The call brief for {b.date} failed the code checks. Do not rely on it.<ul>{b.problems.map((e, i) => <li key={i}>{guardSentence(e)}</li>)}</ul><RuleCodes codes={b.problems.map((e) => e.code)} /></div>}
         </div>
         <div className="panel">
-          <h3 style={{ marginTop: 0 }}>After the call</h3>
+          <h3>After the call</h3>
           <form action={logCallAction}>
             <input type="hidden" name="id" value={id} />
             <label>Call date<input type="date" name="date" defaultValue={today()} max={today()} required /></label>
-            <label style={{ marginTop: 8 }}>Your notes<textarea name="notes" required maxLength={50000} rows={8} /></label>
-            <p style={{ marginTop: 8 }}><button type="submit">Save notes and propose an outcome</button></p>
+            <label className="mt8">Your notes<textarea name="notes" required maxLength={50000} rows={8} /></label>
+            <p className="mt8"><button type="submit">Save notes and propose an outcome</button></p>
           </form>
           <p className="small muted">The notes stay in the private data store, for principals only. A model proposes what to record. Nothing is recorded until a principal confirms it.</p>
         </div>

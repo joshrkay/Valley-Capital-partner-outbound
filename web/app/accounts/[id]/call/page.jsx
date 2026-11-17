@@ -56,18 +56,18 @@ function Sheet({ d }) {
 
       <div className="grid2">
         <div className="panel">
-          <h3 style={{ marginTop: 0 }}>If you get voicemail</h3>
+          <h3>If you get voicemail</h3>
           <p className="small muted">About {t.seconds} seconds at a placeholder pace ({t.words} words). The target is {TARGET_SECONDS}. {t.verdict === 'too_long' ? `Over ${LONG_SECONDS}: shorten it before you leave it.` : t.verdict === 'long' ? 'A little long.' : ''}</p>
           <Prompter>
-            {s.voicemail ? <p style={{ margin: 0 }}>{s.voicemail}</p> : <p className="muted" style={{ margin: 0 }}>This sheet has no voicemail script.</p>}
+            {s.voicemail ? <p className="m0">{s.voicemail}</p> : <p className="muted m0">This sheet has no voicemail script.</p>}
           </Prompter>
           <p className="small">Say your name and number clearly: <strong>{d.sender.name}{d.sender.title ? `, ${d.sender.title}` : ''}</strong>, <strong className="mono">{d.sender.phone}</strong>. This number comes from the sender settings, not from the draft.</p>
           <Stopwatch target={TARGET_SECONDS} limit={LONG_SECONDS} />
         </div>
         <div className="panel">
-          <h3 style={{ marginTop: 0 }}>If they answer</h3>
+          <h3>If they answer</h3>
           <p className="small muted">The first ten seconds.</p>
-          <Prompter>{s.openingLine ? <p style={{ margin: 0 }}>{s.openingLine}</p> : <p className="muted" style={{ margin: 0 }}>No opening line.</p>}</Prompter>
+          <Prompter>{s.openingLine ? <p className="m0">{s.openingLine}</p> : <p className="muted m0">No opening line.</p>}</Prompter>
         </div>
       </div>
 

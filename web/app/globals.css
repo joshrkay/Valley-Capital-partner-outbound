@@ -12,7 +12,7 @@
   --faint: #6b6b6b;
   --line: #e5e5e5;
   --line-strong: #c9c9c9;
-  --accent: #0176d3;
+  --accent: #016cc2;
   --accent-strong: #014486;
   --accent-ink: #ffffff;
   --accent-soft: #eef4ff;
@@ -229,6 +229,14 @@ body:has(#codes:checked) .code { display: block; }
 .panel-form input[type="text"] { width: min(320px, 72vw); }
 .contents { display: contents; }
 .mt8 { margin-top: 8px; }
+.mr6 { margin-right: 6px; }
+.mt6 { margin-top: 6px; }
+.mb6 { margin-bottom: 6px; }
+.mb8 { margin-bottom: 8px; }
+.m0 { margin: 0; }
+label.grow1 { flex: 1; }
+.panel.signin { max-width: 460px; margin: 24px auto; }
+label.grow { flex: 1 1 240px; }
 .mt12 { margin-top: 12px; }
 .empty { padding: 32px 16px; text-align: center; color: var(--muted); }
 details.explain { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px; }
@@ -530,6 +538,7 @@ table.plain .r { text-align: right; font-variant-numeric: tabular-nums; }
 .nextbox.stop { background: var(--bad-bg); border-color: var(--bad); }
 .nextbox.stop h2, .nextbox.stop p { color: var(--bad); }
 .onpage { display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 10px 16px; box-shadow: none; }
+.onpage a[aria-current="page"] { color: var(--ink); font-weight: 700; }
 .note h2 { font-size: .875rem; margin-bottom: 4px; color: inherit; }
 .note ul { margin: 6px 0 0; padding-left: 18px; }
 .note .inline { margin-left: 6px; }
