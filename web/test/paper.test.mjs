@@ -81,7 +81,8 @@ test('the candidate page reads its paper record through the PostgREST document r
 });
 
 test('Q7 on the page, with the shipped buy box: the status rule (D-P3), each sector\'s status-eligible loans by line, and its OREO as its own figure', () => {
-  const src = readFileSync(new URL('../app/candidates/[key]/paper-estimate.jsx', import.meta.url), 'utf8');
+  // Q7 is the "How much could fit" tab, split out of paper-estimate.jsx (docs/design-redesign.md, 5.3).
+  const src = readFileSync(new URL('../app/candidates/[key]/fit-ranges.jsx', import.meta.url), 'utf8');
   for (const s of ['q7.statusRule', 'q7.fitRule', 's.statusLoans', 's.oreo', 'notReported']) assert.ok(src.includes(s), s);
   const buybox = JSON.parse(readFileSync(new URL('../../buybox.json', import.meta.url), 'utf8'));
   const r = record({ buybox, placeholders: [] });
@@ -95,14 +96,30 @@ test('Q7 on the page, with the shipped buy box: the status rule (D-P3), each sec
   assert.ok(r.summary.some((s) => s.id === 'inBoxOreo:multifamily' && show(at(r, s.ref)).text === '$1.0M'), 'beside the loan bounds in the summary');
 });
 
-test('the page component renders from the record only, keeps the house style and carries no secret', () => {
-  const src = readFileSync(new URL('../app/candidates/[key]/paper-estimate.jsx', import.meta.url), 'utf8');
-  assert.doesNotMatch(src, /'use client'|process\.env|SERVICE|fetch\(|dangerouslySetInnerHTML/, 'a server component with no secrets, fetches or raw HTML');
-  for (const h of ['Summary', 'Q1.', 'Q2.', 'Q3.', 'Q4.', 'Q5.', 'Q6.', 'Q7.', 'Q8.', 'The tape request']) assert.ok(src.includes(h), h);
-  assert.ok(src.indexOf('Summary') < src.indexOf('Q1.') && src.indexOf('Q8.') < src.indexOf('The tape request'), 'summary first; unknowns and the tape request last');
-  assert.ok(src.includes('c.share.tier') && src.includes('s.unknownConditions'), 'Q7 shows each condition\'s tier, and the conditions that cannot be measured');
+// The bank page in its new order (docs/design-redesign.md, 5.3): the short answer first and "What to ask for" last, across the tabs.
+const SECTION_FILES = ['paper-estimate.jsx', 'answer.jsx', 'holdings.jsx', 'fit-ranges.jsx', 'more-detail.jsx', 'ask-for.jsx', 'where.jsx', 'sidebar.jsx', 'highlights.jsx', 'bank-record.jsx', 'page.jsx'];
+const bankSrc = (f) => readFileSync(new URL(`../app/candidates/[key]/${f}`, import.meta.url), 'utf8');
+
+test('the bank page renders from the record only, in its new section order, as server components with no secret', async () => {
+  for (const f of SECTION_FILES) assert.doesNotMatch(bankSrc(f), /'use client'|"use client"|process\.env|SERVICE|fetch\(|dangerouslySetInnerHTML/, `${f}: a server component with no secrets, fetches or raw HTML`);
+  const { SECTIONS, TABS } = await import('../lib/bank-view.mjs');
+  assert.deepEqual(SECTIONS.map(([, title]) => title), ['The short answer', 'Why now', 'What it holds', 'How much could we buy?', 'More detail', 'What to ask for']);
+  assert.deepEqual(TABS.map(([k]) => k), ['overview', 'holdings', 'fit', 'details']);
+  assert.deepEqual([...new Set(SECTIONS.map(([, , tab]) => tab))], TABS.map(([k]) => k), 'the sections run through the tabs in order');
+  // The composer places the sections in that order: the short answer first, What to ask for last.
+  const src = bankSrc('paper-estimate.jsx');
+  const at_ = (s) => { const i = src.indexOf(s); assert.ok(i > 0, s); return i; };
+  const order = ['<Answer ', '<WhyNow ', '<Holdings ', '<FitRanges ', '<MoreDetail ', '<AskFor '].map(at_);
+  assert.deepEqual(order, [...order].sort((a, b) => a - b), 'the short answer first; what to ask for last');
+  assert.match(bankSrc('answer.jsx'), /The short answer/);
+  assert.match(bankSrc('ask-for.jsx'), /What to ask for[\s\S]*the loan tape/);
+  // How much could fit shows each condition's tier, and the conditions that cannot be measured (why the floor is $0).
+  const fit = bankSrc('fit-ranges.jsx');
+  assert.ok(fit.includes('tierName(c.share.tier)') && fit.includes('s.unknownConditions'), 'each condition\'s tier, and the conditions that cannot be measured');
   const mf = record().q7.sectors.find((s) => s.sector === 'multifamily');
   assert.deepEqual(mf.unknownConditions.map((u) => u.id), ['size', 'status', 'lien', 'exclusions'], 'what the page lists to say why the floor is 0');
-  const page = readFileSync(new URL('../app/candidates/[key]/page.jsx', import.meta.url), 'utf8');
-  assert.match(page, /<PaperEstimate paper=\{paper\} \/>/);
+  assert.match(bankSrc('page.jsx'), /<BankRecord [^>]*paper=\{d\.paper\}/);
+  assert.match(bankSrc('bank-record.jsx'), /<InternalNotice paper /, 'the sticky internal notice, with the paper-estimate rule');
+  assert.match(bankSrc('paper-estimate.jsx'), /<input type="checkbox" id="codes" \/>/, 'the codes switch is a checkbox, read by one CSS rule');
+  for (const f of SECTION_FILES) assert.doesNotMatch(bankSrc(f), />\s*Send\b/, `${f}: no send button`);
 });

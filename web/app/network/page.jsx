@@ -3,7 +3,7 @@
 // Private: names and relationships only, kept in the data store, never sent to a model. Viewing it is audited.
 import { requirePrincipal } from '../../lib/session.mjs';
 import { networkOverview } from '../../lib/routes-ops.mjs';
-import { NotAuthorized, Problem } from '../ui.jsx';
+import { NotAuthorized, Problem, PageHead } from '../ui.jsx';
 import { addPersonAction, addFirmAction, addMembershipAction, removeEntryAction } from './actions.js';
 
 export const metadata = { title: 'Network · Valley Capital outbound' };
@@ -20,8 +20,7 @@ export default async function Network() {
   try { n = await networkOverview(ctx.client, { by: ctx.principal.name }); } catch (e) { return <Problem text={`The network could not be loaded: ${e.message}`} />; }
   return (
     <>
-      <h1>The firm's network</h1>
-      <p className="sub">The principals' own relationships, for finding warm routes to the person who decides on loan sales (PRD E22). Routes are built on each account's page.</p>
+      <PageHead icon="people" tone="t-out" eyebrow="Market · Our network" title="The firm's network" lede={<>The principals' own relationships, for finding warm routes to the person who decides on loan sales (PRD E22). Routes are built on each account's page.</>} />
       <div className="banner warn small" role="note">Private. Names and relationships only: never an email address or a phone number, because nothing here contacts anyone. It is matched in code; no model ever sees it, and nothing is drafted or sent to anyone in it. Removing an entry removes it from every route that used it.</div>
 
       <h2>People ({n.people.length})</h2>

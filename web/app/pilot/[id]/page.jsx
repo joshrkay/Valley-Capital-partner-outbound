@@ -17,7 +17,7 @@ export default async function Review({ params }) {
       {r.staleReview ? <div className="banner warn">The research was run again since the last review, so verdicts start over.</div> : null}
       {r.findings.map((f) => (
         <div key={f.id} className="panel">
-          <p style={{ marginTop: 0 }}><strong>[{f.id}]</strong> {f.claim}</p>
+          <p><strong>[{f.id}]</strong> {f.claim}</p>
           <p className="small muted">“{f.quote}”</p>
           <p className="small"><a href={f.url} rel="noopener noreferrer nofollow" target="_blank">{f.url}</a> · {f.kind} · {f.use === 'draft' ? 'cleared for a message' : 'context only'}{f.assetSpecific ? ' · asset' : ''}</p>
           <form action={verdictAction} className="inline">

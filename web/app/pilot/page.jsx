@@ -1,10 +1,10 @@
 import { requirePrincipal } from '../../lib/session.mjs';
 import { pilotOverview } from '../../lib/ops.mjs';
 import { pct } from '../../lib/format.mjs';
-import { NotAuthorized, Problem } from '../ui.jsx';
+import { NotAuthorized, Problem, PageHead } from '../ui.jsx';
 import { passAction } from './actions.js';
 
-export const metadata = { title: 'Pilot · Valley Capital outbound' };
+export const metadata = { title: 'Briefer pilot · Valley Capital outbound' };
 
 export default async function Pilot() {
   const ctx = await requirePrincipal();
@@ -14,8 +14,7 @@ export default async function Pilot() {
   const { card: { accounts, totals }, status } = o;
   return (
     <>
-      <h1>Pilot</h1>
-      <p className="sub">The briefer is checked on accounts the principals already know before it researches any bank from the candidate list (PRD E1). Truth sheets are written with <span className="mono">outbound pilot template</span>.</p>
+      <PageHead icon="doc" tone="t-set" eyebrow="Setup and checks · was Pilot" title="Briefer pilot" lede={<>The briefer is checked on accounts the principals already know before it researches any bank from the candidate list (PRD E1). Truth sheets are written with <span className="mono">outbound pilot template</span>.</>} />
       <div className={`banner ${status.passed ? 'ok' : 'warn'}`}>{status.passed ? `Passed by ${status.by} on ${String(status.at).slice(0, 10)}.` : 'Not passed yet. Accounts from the candidate list cannot be researched.'}</div>
       <div className="panel">
         <dl className="kv">
@@ -25,7 +24,7 @@ export default async function Pilot() {
           <dt>Recall</dt><dd>{totals.recall === null ? '–' : pct(totals.recall, 0)}</dd>
           <dt>Cost per brief</dt><dd>{totals.costPerBrief === null ? '–' : `$${totals.costPerBrief.toFixed(2)} (tokens only)`}</dd>
         </dl>
-        {!status.passed ? <form action={passAction} className="inline" style={{ marginTop: 10 }}><button type="submit">Record a pass</button></form> : null}
+        {!status.passed ? <form action={passAction} className="inline mt8"><button type="submit">Record a pass</button></form> : null}
       </div>
       {accounts.length ? (
         <div className="scroll">

@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { statSync } from 'node:fs';
 import { makeDir, put, loadJson, placeholderBuybox } from './kit.mjs';
-import { buildPaper, frechetBounds, sizeShareInterval, statusEligible, paperValues, paperAt, paperFileId, paperPath, readPaper, renderPaper, formatValue, paperForBriefer,
-  TIERS, STATUS, SERIES_BREAK_2023, TAPE_REQUEST, BOUNDS_METHOD } from '../src/paper.mjs';
+import { buildPaper, frechetBounds, sizeShareInterval, statusEligible, paperValues, paperAt, paperFileId, paperPath, readPaper, renderPaper, formatValue, paperForBriefer, fitCeilingOf,
+  TIERS, STATUS, SERIES_BREAK_2023, TAPE_REQUEST, BOUNDS_METHOD, NONFARM_TOTAL_STAGES, STAGE_LABELS } from '../src/paper.mjs';
 import { runScoring, validateBuybox } from '../src/score.mjs';
 import { SEMIANNUAL_FIELDS, FDIC_FIELDS } from '../src/sources/fdic.mjs';
 import { confirmFiler } from '../src/sources/filers.mjs';
@@ -248,6 +248,132 @@ test('the sections cover the latest eight quarters, however many quarters the fi
   // The quarter before the window is read on its own, for the first point's net change, as the growth base would be.
   assert.equal(r.q1.trend.series.find((s) => s.id === 'multifamily').points[0].netChange, 10000 * 1000);
   assert.deepEqual(r, paper({ financials: { CERT: '1', quarters: Object.fromEntries(Object.entries(qs).filter(([k]) => k >= '20240630')) } }), 'older quarters change nothing');
+});
+
+// ---- The nonfarm nonresidential total's stages ----------------------------------------------------------------------------------------
+test('the nonfarm nonresidential total has its own 30-89, 90+ and nonaccrual stages, in a category\'s shape, from FDIC\'s totals', () => {
+  const r = paper();
+  const nf = r.q1.nonfarmTotal;
+  const mf = r.q1.categories.find((c) => c.id === 'multifamily');
+  assert.deepEqual(Object.keys(nf.stages), Object.keys(mf.stages), 'the same stage ids as every category');
+  for (const [k, s] of Object.entries(nf.stages)) assert.deepEqual(Object.keys(s), Object.keys(mf.stages[k]), `${k}: { amount, shareOfBalance }`);
+  // P3RENRES 6,000, P9RENRES 2,000, NARENRES 8,000 (thousands), each over LNRENRES 600,000.
+  assert.deepEqual(Object.values(nf.stages).map((s) => [s.amount.value, s.amount.tier, s.amount.method, s.amount.sources.map((x) => x.field)]),
+    [[6000 * 1000, 'reported', 'fdic-field', ['P3RENRES']], [2000 * 1000, 'reported', 'fdic-field', ['P9RENRES']], [8000 * 1000, 'reported', 'fdic-field', ['NARENRES']]]);
+  assert.deepEqual(Object.values(nf.stages).map((s) => s.shareOfBalance.value), [6000 / 600000, 2000 / 600000, 8000 / 600000]);
+  assert.equal(nf.stages.nonaccrual.amount.asOf, '2026-06-30');
+  // The two lines add up to the total here, as on all 360 rows checked: the stage is the same figure either way.
+  const lines = r.q1.categories.filter((c) => c.id.startsWith('nonfarmNonresidential'));
+  for (const k of Object.keys(nf.stages)) assert.equal(nf.stages[k].amount.value, lines.reduce((s, c) => s + c.stages[k].amount.value, 0), k);
+  const t = renderPaper(r);
+  assert.match(t, /Nonfarm nonresidential in total \(owner-occupied and other\)\n {4}Balance: \$600\.0 million {2}\[reported, June 30, 2026\]\n {4}30-89 days past due: \$6\.0 million {2}\[reported, June 30, 2026\]\n {4}90 days or more past due: \$2\.0 million {2}\[reported, June 30, 2026\]\n {4}Nonaccrual: \$8\.0 million {2}\[reported, June 30, 2026\]/);
+  assert.deepEqual(Object.keys(NONFARM_TOTAL_STAGES), Object.keys(STAGE_LABELS));
+});
+
+test('where a report lacks a nonfarm total, its two lines stand in and say so; with neither, the stage is a gap, never 0', () => {
+  // FDIC sends no value for P9RENRES, and the data was pulled before NARENRES (invented: the lines are then the only basis).
+  const qs = quarters(REPS, (rep) => (rep === '20260630' ? { P9RENRES: null } : {}));
+  delete qs['20260630'].NARENRES;
+  const r = paper({ financials: { CERT: '1', quarters: qs } });
+  const nf = r.q1.nonfarmTotal.stages;
+  assert.deepEqual([nf.pastDue90.amount.value, nf.pastDue90.amount.tier, nf.pastDue90.amount.sources.map((x) => x.field)], [(1500 + 500) * 1000, 'reported', ['P9RENROT', 'P9RENROW']]);
+  assert.match(nf.pastDue90.amount.method, /^sum-of-fields: its two lines, standing in for P9RENRES$/);
+  assert.match(nf.pastDue90.amount.note, /FDIC reports no value for P9RENRES at June 30, 2026\. So this is the sum of its two lines, other and owner-occupied \(P9RENROT \+ P9RENROW\)/);
+  assert.deepEqual([nf.nonaccrual.amount.value, nf.nonaccrual.amount.sources.map((x) => x.field)], [(6000 + 2000) * 1000, ['NARENROT', 'NARENROW']]);
+  assert.match(nf.nonaccrual.amount.note, /NARENRES is not in the stored report/);
+  assert.equal(nf.nonaccrual.shareOfBalance.value, 8000 / 600000);
+  assert.deepEqual([nf.pastDue30to89.amount.method, nf.pastDue30to89.amount.sources.map((x) => x.field)], ['fdic-field', ['P3RENRES']], 'a stage whose total is reported keeps it');
+  everyValue(r);
+  // The total and a line both without a value: a gap that names both, never 0 and never half the sum.
+  const none = paper({ financials: { CERT: '1', quarters: quarters(REPS, (rep) => (rep === '20260630' ? { P3RENRES: null, P3RENROW: null } : {})) } });
+  const g = none.q1.nonfarmTotal.stages.pastDue30to89;
+  assert.deepEqual([g.amount.value, g.amount.status, g.amount.tier, g.shareOfBalance.value], [null, 'null', null, null]);
+  assert.match(g.amount.reason, /no value for P3RENRES at June 30, 2026\. Its two lines \(P3RENROT \+ P3RENROW\) cannot stand in: FDIC reports no value for P3RENROW/);
+  everyValue(none);
+  // No financials at all: every stage is "not on file", as every other Q1 figure is.
+  const empty = paper({ financials: null });
+  for (const s of Object.values(empty.q1.nonfarmTotal.stages)) assert.deepEqual([s.amount.value, s.amount.status], [null, 'not-on-file']);
+});
+
+// ---- The seriously-late trend ---------------------------------------------------------------------------------------------------------
+const lateOf = (q) => (q.P9RECONS + q.NARECONS + q.P9REMULT + q.NAREMULT + q.P9RENRES + q.NARENRES) / (q.LNRECONS + q.LNREMULT + q.LNRENRES);
+
+test('the seriously-late share of the CRE book, one point per quarter on file, oldest first, from the Q1 stages over the CRE book', () => {
+  const qs = quarters(REPS, (rep, i) => ({ NAREMULT: 10000 + i * 1000, NARENROT: 6000 + i * 500, NARENRES: 8000 + i * 500 }));
+  const r = paper({ financials: { CERT: '1', quarters: qs } });
+  const pts = r.trend.seriouslyLateShare;
+  assert.ok(Array.isArray(pts));
+  assert.deepEqual(pts.map((p) => p.quarter), ['2024Q3', '2024Q4', '2025Q1', '2025Q2', '2025Q3', '2025Q4', '2026Q1', '2026Q2']);
+  assert.deepEqual(pts.map((p) => p.repdte), REPS);
+  assert.deepEqual(pts.map((p) => p.asOf), REPS.map((x) => `${x.slice(0, 4)}-${x.slice(4, 6)}-${x.slice(6)}`));
+  pts.forEach((p, i) => assert.ok(Math.abs(p.value - lateOf(qs[REPS[i]])) < 1e-15, `${p.quarter}: ${p.value}`));
+  assert.ok(Math.abs(pts[0].value - (300 + 1000 + 1000 + 10000 + 2000 + 8000) / 1000000) < 1e-15, '90+ plus nonaccrual, over construction + multifamily + nonfarm nonresidential');
+  assert.ok(pts.every((p) => !('fields' in p) && !('valueStatus' in p)));
+  // The latest point is the Q1 stages, as shown, over the CRE book: nothing is counted that Q1 does not show.
+  const cat = (id) => r.q1.categories.find((c) => c.id === id);
+  const late = ['construction', 'multifamily'].flatMap((id) => [cat(id).stages.pastDue90.amount.value, cat(id).stages.nonaccrual.amount.value])
+    .concat([r.q1.nonfarmTotal.stages.pastDue90.amount.value, r.q1.nonfarmTotal.stages.nonaccrual.amount.value]).reduce((s, x) => s + x, 0);
+  assert.ok(Math.abs(pts.at(-1).value - late / r.q1.creBook.value) < 1e-15);
+  const about = r.trend.about.seriouslyLateShare;
+  assert.deepEqual([about.unit, about.kind, about.tier, about.file], ['pct', 'stock', 'reported', 'sources/fdic/financials/1.json']);
+  assert.deepEqual(about.numerator, ['P9RECONS', 'NARECONS', 'P9REMULT', 'NAREMULT', 'P9RENRES', 'NARENRES']);
+  assert.deepEqual(about.denominator, r.q1.creBook.sources.map((s) => s.field));
+  assert.match(about.note, /none is filled in/); assert.match(about.note, /never 0/);
+  assert.match(renderPaper(r), /Seriously late share of the CRE book: 90 days or more past due plus nonaccrual, over the CRE book \[reported\]: September 30, 2024 2\.2%; .*; June 30, 2026 3\.3%\n/);
+  // The series sits beside the record's values, not among them: it is not a value with a unit, and the briefer's copy leaves it out.
+  assert.ok(!paperValues(r).some(({ path }) => path.startsWith('trend')));
+  assert.ok(!JSON.stringify(paperForBriefer(r)).includes('seriouslyLateShare'));
+});
+
+test('the seriously-late trend never invents a quarter: N quarters on file give N points, a missing quarter has none, and the window is eight', () => {
+  // Three quarters on file: three points.
+  assert.deepEqual(paper({ financials: { CERT: '1', quarters: quarters(REPS.slice(-3)) } }).trend.seriouslyLateShare.map((p) => p.quarter), ['2025Q4', '2026Q1', '2026Q2']);
+  // One quarter, and none.
+  assert.equal(paper({ financials: { CERT: '1', quarters: quarters(['20260630']) } }).trend.seriouslyLateShare.length, 1);
+  assert.deepEqual(paper({ financials: null }).trend.seriouslyLateShare, []);
+  // A quarter missing from the file in the middle of the window: no point for it, and nothing between its neighbours.
+  const holed = quarters(REPS.filter((x) => x !== '20250930'));
+  const pts = paper({ financials: { CERT: '1', quarters: holed } }).trend.seriouslyLateShare;
+  assert.deepEqual(pts.map((p) => p.repdte), REPS.filter((x) => x !== '20250930'));
+  assert.equal(pts.length, 7);
+  // Twelve quarters on file: the latest eight, as every other series.
+  const twelve = quarters(['20230930', '20231231', '20240331', '20240630', ...REPS]);
+  assert.deepEqual(paper({ financials: { CERT: '1', quarters: twelve } }).trend.seriouslyLateShare.map((p) => p.repdte), REPS);
+});
+
+test('a quarter with no basis is null with its status and reason, never 0; a quarter on the nonfarm lines lists its own fields', () => {
+  const qs = quarters(REPS, (rep) => ({ ...(rep === '20250331' ? { NARECONS: null } : {}), ...(rep === '20250630' ? { LNRECONS: 0, LNREMULT: 0, LNRENRES: 0 } : {}), ...(rep === '20251231' ? { P9RENRES: null } : {}) }));
+  const r = paper({ financials: { CERT: '1', quarters: qs } });
+  const at = (rep) => r.trend.seriouslyLateShare.find((p) => p.repdte === rep);
+  assert.deepEqual([at('20250331').value, at('20250331').valueStatus], [null, 'unknown']);
+  assert.match(at('20250331').valueReason, /FDIC reports no value for NARECONS at March 31, 2025/);
+  assert.deepEqual([at('20250630').value, at('20250630').valueStatus], [null, 'zero-denominator'], 'no CRE book: no share, not 0');
+  // P9RENRES has no value: its lines, P9RENROT + P9RENROW (1,500 + 500), stand in, the same 2,000, and the point names its fields.
+  const fb = at('20251231');
+  assert.ok(Math.abs(fb.value - lateOf(Q())) < 1e-15);
+  assert.deepEqual(fb.fields, ['P9RECONS', 'NARECONS', 'P9REMULT', 'NAREMULT', 'P9RENROT', 'P9RENROW', 'NARENRES', 'LNRECONS', 'LNREMULT', 'LNRENRES']);
+  assert.ok(r.trend.seriouslyLateShare.filter((p) => p !== fb).every((p) => !('fields' in p)));
+  assert.equal(r.trend.seriouslyLateShare.length, 8, 'a quarter on file with a gap keeps its point; it is not dropped or filled in');
+  assert.match(renderPaper(r), /March 31, 2025 unknown; June 30, 2025 no ratio \(zero base\);/);
+});
+
+// ---- The could-fit ceilings the candidate list shows ------------------------------------------------------------------------------------
+test('fitCeilingOf: one entry per buy-box sector with measured Q7 bounds, as stored, in dollars; a gap is left out; nothing is added up', () => {
+  const r = paper();
+  const fc = fitCeilingOf(r);
+  assert.deepEqual(fc, r.q7.sectors.map((s) => ({ sector: s.sector, label: s.label, category: s.category, high: s.bounds.high, low: s.bounds.low, tier: s.bounds.tier, asOf: s.bounds.asOf })));
+  assert.deepEqual(fc.map((x) => x.sector), ['hospitality', 'multifamily', 'retail']);
+  assert.deepEqual(fc.find((x) => x.sector === 'multifamily'), { sector: 'multifamily', label: 'Multifamily', category: 'multifamily', high: 11000 * 1000, low: 0, tier: 'inferred', asOf: '2026-06-30' });
+  // Hotel and retail are the same nonfarm nonresidential loans, so their ceilings are equal and must never be added.
+  assert.equal(fc.find((x) => x.sector === 'hospitality').high, fc.find((x) => x.sector === 'retail').high);
+  for (const x of fc) assert.deepEqual(Object.keys(x), ['sector', 'label', 'category', 'high', 'low', 'tier', 'asOf']);
+  // A sector whose bounds are a gap is left out; no financials leave nothing to show.
+  const mixed = { q7: { sectors: [r.q7.sectors[1], { ...r.q7.sectors[0], bounds: { value: null, status: 'unknown', reason: 'No condition could be measured.', unit: 'usd', tier: null } }] } };
+  assert.deepEqual(fitCeilingOf(mixed).map((x) => x.sector), ['multifamily']);
+  assert.deepEqual(fitCeilingOf(paper({ financials: null })), []);
+  assert.deepEqual(fitCeilingOf(null), []);
+  // Only the sectors the buy box includes.
+  assert.deepEqual(fitCeilingOf(paper({ buybox: filledBuybox({ sectors: { include: ['multifamily'], shortTermRentalPortfolios: 'out' } }) })).map((x) => x.sector), ['multifamily']);
 });
 
 // ---- Q7: bounds only ------------------------------------------------------------------------------------------------------------------

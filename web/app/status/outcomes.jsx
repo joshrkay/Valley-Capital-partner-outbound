@@ -9,7 +9,7 @@ function Table({ title, rows, columns, totals }) {
     <>
       <h3>{title}</h3>
       <div className="scroll"><table>
-        <thead><tr><th>Group</th>{columns.map((c) => <th key={c.label} className="num" title={c.title}>{c.label}</th>)}</tr></thead>
+        <thead><tr><th>Group</th>{columns.map((c) => <th key={c.label} className="num">{c.label}{c.title ? <span className="src">{c.title}</span> : null}</th>)}</tr></thead>
         <tbody>
           {rows.length ? rows.map((r) => <tr key={r.label}><td className="mono">{r.label}</td>{r.cells.map((n, i) => <td key={i} className="num">{n}</td>)}</tr>)
             : <tr><td colSpan={columns.length + 1} className="muted">None yet.</td></tr>}

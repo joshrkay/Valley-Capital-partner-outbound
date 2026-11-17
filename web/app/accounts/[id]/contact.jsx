@@ -74,7 +74,7 @@ export async function Contact({ client, id }) {
 
       <div className="grid2">
         <div className="panel">
-          <h3 style={{ marginTop: 0 }}>Each field and its source</h3>
+          <h3>Each field and its source</h3>
           <dl className="kv">
             {Object.keys(FIELD_LABEL).map((f) => (
               <Fragment key={f}><dt>{FIELD_LABEL[f]}</dt><dd>{a.person?.[f] ? <>{a.person[f]}<br /><Source s={st.fields[f]} /></> : <span className="muted">–</span>}</dd></Fragment>
@@ -93,7 +93,7 @@ export async function Contact({ client, id }) {
         </div>
 
         <div className="panel">
-          <h3 style={{ marginTop: 0 }}>Email</h3>
+          <h3>Email</h3>
           <div className={`banner ${tone} small`}>
             {st.email.address ? <strong>{st.email.address}: </strong> : null}{says}
             {st.email.state === 'verified' ? ` ${v.method.replace(/_/g, ' ')}, by ${v.by} on ${v.verifiedOn}; verify again by ${st.email.reverifyBy}.` : ''}
@@ -137,13 +137,13 @@ export async function Contact({ client, id }) {
 
       {named || st.email.address ? (
         <div className="panel">
-          <h3 style={{ marginTop: 0 }}>Forget this person (a deletion request)</h3>
+          <h3>Forget this person (a deletion request)</h3>
           <p className="small">Removes them from every record: this account and any other that holds them, the research and the brief, drafts addressed to them, call notes and proposals, the pilot sheets, the known list, and any note in the touch log. The touch log keeps its events, so a reply or an opt-out still stops outreach. A hashed suppression entry keeps them from being contacted or named again. This cannot be undone.</p>
           <form action={forgetPersonAction}>
             <input type="hidden" name="id" value={a.id} />
             <label>Reason<input name="reason" required maxLength={300} /></label>
-            <label style={{ marginTop: 8 }}>Type the account's name to confirm: <strong>{a.name}</strong><input name="confirm" required autoComplete="off" /></label>
-            <p style={{ marginTop: 8 }}><button className="danger" type="submit">Forget this person</button></p>
+            <label className="mt8">Type the account's name to confirm: <strong>{a.name}</strong><input name="confirm" required autoComplete="off" /></label>
+            <p className="mt8"><button className="danger" type="submit">Forget this person</button></p>
           </form>
         </div>
       ) : null}

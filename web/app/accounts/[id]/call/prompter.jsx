@@ -9,7 +9,7 @@ export function Prompter({ children }) {
   const [i, setI] = useState(1);
   return (
     <div>
-      <div className="row small" style={{ marginBottom: 8 }}>
+      <div className="row small mb8">
         <button type="button" className="secondary" disabled={i === 0} onClick={() => setI((n) => Math.max(0, n - 1))} aria-label="Smaller text">A−</button>
         <button type="button" className="secondary" disabled={i === SIZES.length - 1} onClick={() => setI((n) => Math.min(SIZES.length - 1, n + 1))} aria-label="Larger text">A+</button>
       </div>
@@ -37,7 +37,7 @@ export function Stopwatch({ target, limit }) {
     <div className={`banner ${state} stopwatch`} role="timer" aria-live="off">
       <span className="mono clock">{s.toFixed(1)}s</span>
       <span className="small"> of about {target}s. {s > limit ? 'Too long to leave on a voicemail.' : s > target ? 'A little long.' : 'Within the target.'}</span>
-      <span className="row" style={{ marginTop: 6 }}>
+      <span className="row mt6">
         <button type="button" onClick={toggle}>{running ? 'Stop' : ms ? 'Resume' : 'Start'}</button>
         <button type="button" className="secondary" onClick={reset} disabled={!ms && !running}>Reset</button>
       </span>

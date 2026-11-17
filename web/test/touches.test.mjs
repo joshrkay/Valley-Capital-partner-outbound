@@ -153,7 +153,8 @@ test('an opt-out needs a confirmation, then suppresses the person and the addres
 });
 
 test('the account page shows the panel with one import and one element; the opt-out form needs its confirmation; the note says what it is not', () => {
-  const page = readFileSync(join(WEB, 'app', 'accounts', '[id]', 'page.jsx'), 'utf8');
+  // The account page's sections are composed in account-record.jsx (docs/design-redesign.md, 5.5).
+  const page = readFileSync(join(WEB, 'app', 'accounts', '[id]', 'account-record.jsx'), 'utf8');
   assert.match(page, /^import \{ Touches \} from '\.\/touches\.jsx';$/m);
   assert.equal((page.match(/<Touches /g) ?? []).length, 1);
   const panel = readFileSync(join(WEB, 'app', 'accounts', '[id]', 'touches.jsx'), 'utf8');

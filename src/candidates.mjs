@@ -182,7 +182,106 @@ export function buildCard(item, { scoring = {} } = {}) {
     else continue;
     add(t, [s.id, ...s.evidence]);
   }
-  return { text: S.map((s) => s.text).join(' '), sentences: S, period };
+  const head = headlineFor(item, dist, rec);
+  return { text: S.map((s) => s.text).join(' '), sentences: S, period, headline: head?.text ?? null, headlineEvidence: head?.evidence ?? [] };
+}
+
+// ---- The headline: one short line for the list (docs/design-redesign.md 5.2) -----------------------------------------------------
+// From the bank's first signal a template can state, else from its strongest distress component (the card's first distress sentence),
+// else null. Like the card, it is built in code from fixed words and computed values: plain names for each metric (the glossary's,
+// docs/design-redesign.md 6), metro labels from metros.json and dates. No label stored on a signal and no config text reaches it, and
+// it carries the ids it states (headlineEvidence). It is at most HEADLINE_MAX characters: a template whose closing figure would run
+// over drops that figure. The card's sentences are not changed by it.
+export const HEADLINE_MAX = 90;
+export const HEADLINE_METRICS = Object.freeze({
+  creLoans: { noun: 'CRE loans' },
+  creNoncurrentRatio: { noun: 'Seriously late CRE loans' },
+  creNonaccrualRatio: { noun: 'CRE loans not accruing' },
+  earlyStageDelinquency: { noun: 'CRE loans 30 to 89 days late' },
+  creOreo: { noun: 'Foreclosed commercial property', first: 'First foreclosed commercial property in' },
+  creOreoRatio: { noun: 'Foreclosed commercial property', of: 'of CRE loans' },
+  creNetChargeOffs: { noun: 'CRE write-offs this quarter', first: 'First CRE write-off in' },
+  creNetChargeOffRate: { noun: 'CRE write-offs this quarter', of: 'of CRE loans' },
+  investorCreShare: { noun: 'Investor-owned share of commercial property loans' },
+  creShareOfLoans: { noun: 'CRE share of all loans' },
+  mfNoncurrentRatio: { noun: 'Seriously late apartment loans' },
+  mfNonaccrualRatio: { noun: 'Apartment loans not accruing' },
+  mfEarlyStageDelinquency: { noun: 'Apartment loans 30 to 89 days late' },
+});
+// Score components that are not a metric: the paper profile's measures and the deposit footprint.
+const HEADLINE_MEASURES = Object.freeze({
+  buyboxNoncurrentRatio: (v) => `Seriously late loans at ${shortPct(v)} in the loan types we buy`,
+  buyboxCreShare: (v) => `Loan types we buy are ${shortPct(v)} of its CRE book`,
+  buyboxShareOfLoans: (v) => `Loan types we buy are ${shortPct(v)} of its loans`,
+  footprint: (v) => `${shortPct(v)} of its deposits are in our metros`,
+});
+const COUNT_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
+const countWord = (n) => COUNT_WORDS[n] ?? String(n);
+const SHORT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const isDay = (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d));
+const shortDate = (d) => `${SHORT_MONTHS[Number(d.slice(5, 7)) - 1]} ${Number(d.slice(8, 10))}, ${d.slice(0, 4)}`;
+// 2.4%, or two decimals under 1% (0.42%), so a small ratio never shows as 0.0%.
+const shortPct = (v) => { const x = v * 100; return `${Math.abs(x) < 1 ? x.toFixed(2) : x.toFixed(1)}%`; };
+const shortPts = (v) => { const x = Math.abs(v * 100); return `${x < 1 ? x.toFixed(2) : x.toFixed(1)} points`; };
+const shortValue = (metric, v) => (METRICS[metric]?.kind === 'amount' ? money(v) : shortPct(v));
+const isNum = (v) => v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v));
+// The line, with its closing figure if that still fits.
+const fit = (main, tail = '') => (`${main}${tail}`.length <= HEADLINE_MAX ? `${main}${tail}` : main);
+
+function signalHeadline(s) {
+  if (SIGNAL_TYPES.includes(s.rule)) {
+    const m = HEADLINE_METRICS[s.metric];
+    if (!m || !METRICS[s.metric] || !isNum(s.value)) return null;
+    const at = `${shortValue(s.metric, s.value)}${m.of ? ` ${m.of}` : ''}`;
+    if (s.rule === 'rising') return fit(Number.isInteger(s.quarters) && s.quarters > 1 ? `${m.noun} up ${countWord(s.quarters)} quarters running` : `${m.noun} up from last quarter`, `, to ${at}`);
+    if (s.rule === 'firstPositive') return !Number.isInteger(s.lookback) ? null : m.first ? fit(`${m.first} ${countWord(s.lookback)} quarters`, ` (${at})`) : fit(`${m.noun} above zero for the first time in ${countWord(s.lookback)} quarters`);
+    if (s.rule === 'above') return fit(`${m.noun} at ${at}`);
+    if (s.rule === 'changeAbove') return isNum(s.change) ? fit(`${m.noun} up ${shortPts(s.change)} ${s.over === 'yoy' ? 'in a year' : 'since last quarter'}`, `, to ${at}`) : null;
+    return null;
+  }
+  if (s.rule === 'concentration') {
+    if (!isNum(s.value) || !DENOMINATORS[s.denominator?.basis]) return null;
+    if (s.test === 'construction') return isNum(s.threshold) ? fit(`Construction loans at ${pct(s.value, 0)} of capital`, ` (screen: ${pct(s.threshold, 0)})`) : null;
+    if (s.test === 'cre') return isNum(s.growth) ? fit(`CRE loans at ${pct(s.value, 0)} of capital, up ${pct(s.growth, 0)} in three years`) : null;
+    return null;
+  }
+  if (s.rule === 'acquisition') {
+    const places = [...new Set((s.metros ?? []).map((x) => x.label).filter(Boolean))];
+    if (!places.length || !/^\d+$/.test(String(s.targetCert)) || !isDay(s.effective)) return null;
+    const where = places.length > 2 ? `${places[0]} and ${places.length - 1} more metros` : places.join(' and ');
+    return fit(`${s.eventKind === 'failure' ? 'Took over a failed bank' : 'Acquired a bank'} in ${where}`, `, effective ${shortDate(s.effective)}`);
+  }
+  if (s.rule === 'filing') return isDay(s.fileDate) ? fit('An SEC filing matched a saved search', `, filed ${shortDate(s.fileDate)}`) : null;
+  if (s.rule === 'sale') return isDay(s.date) ? fit('Has sold before', `, on ${shortDate(s.date)}`) : null;
+  if (s.rule === 'enforcement') {
+    if (!isDay(s.date)) return null;
+    if (s.type === 'enforcement_active') return fit('Under an enforcement order', ` since ${shortDate(s.date)}`);
+    return fit(s.type === 'enforcement_terminated' ? 'An enforcement order ended' : 'An enforcement action', `, effective ${shortDate(s.date)}`);
+  }
+  if (s.rule === 'merger') return isDay(s.date) ? fit('In a pending merger application', `, filed the week ending ${shortDate(s.date)}`) : null;
+  return null;
+}
+
+function componentHeadline(c) {
+  if (!isNum(c.value)) return null;
+  if (HEADLINE_MEASURES[c.metric] && !c.change) return fit(HEADLINE_MEASURES[c.metric](c.value));
+  const m = HEADLINE_METRICS[c.metric];
+  if (!m || !METRICS[c.metric]) return null;
+  if (c.change === 'qoq' || c.change === 'yoy') return fit(`${m.noun} ${c.value < 0 ? 'down' : 'up'} ${shortPts(c.value)} ${c.change === 'yoy' ? 'in a year' : 'since last quarter'}`);
+  return fit(`${m.noun} at ${shortValue(c.metric, c.value)}${m.of ? ` ${m.of}` : ''}`);
+}
+
+// `dist` is the card's distress components, strongest first; `rec` names a quarter's FDIC record.
+function headlineFor(item, dist, rec) {
+  for (const s of item.signals ?? []) {
+    const text = signalHeadline(s);
+    if (text) return { text, evidence: [...new Set([s.id, ...(s.evidence ?? [])])] };
+  }
+  for (const c of dist) {
+    const text = componentHeadline(c);
+    if (text) return { text, evidence: [...new Set((c.inputs ?? []).map((x) => x.repdte).filter(Boolean))].map(rec) };
+  }
+  return null;
 }
 
 // ---- The list and a principal's decisions (E6-S4) ------------------------------------------------------------------------------
