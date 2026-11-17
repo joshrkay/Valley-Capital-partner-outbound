@@ -5,8 +5,8 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeDir, put, loadJson } from './kit.mjs';
 import { runScoring } from '../src/score.mjs';
-import { buildCard, listCandidates, promote, dismiss, snooze, matchInstitution, addAlias, suppressedBy, leadSectorFor, getCandidate } from '../src/candidates.mjs';
-import { MONTH_NAMES } from '../src/metrics.mjs';
+import { buildCard, listCandidates, promote, dismiss, snooze, matchInstitution, addAlias, suppressedBy, leadSectorFor, getCandidate, HEADLINE_METRICS, HEADLINE_MAX } from '../src/candidates.mjs';
+import { MONTH_NAMES, METRICS } from '../src/metrics.mjs';
 
 const metros = loadJson('metros.json');
 const scoring = () => structuredClone(loadJson('scoring.json'));
@@ -201,4 +201,98 @@ test('promote refuses a bank that fails the hard filters', () => {
   const { dir } = world([{ cert: '1', name: 'Alpha Example Bank', fn: mfDistress }]);
   editLatest(dir, (l) => { l.items[0].filtersFailed = ['failed bank']; l.items[0].tier = null; });
   assert.throws(() => promote({ dir, key: 'fdic:1', by: 'Pat Example' }), /fails the hard filters \(failed bank\)/);
+});
+
+// ---- The headline (docs/design-redesign.md 5.2) -----------------------------------------------------------------------------------
+// A bare item for buildCard: one bank, no categories, and the signals and components a test gives it.
+const bare = (signals = [], components = []) => ({ key: 'fdic:1', cert: '1', name: 'Alpha Example Bank', latestRepdte: '20260630', profile: { categories: [], footprint: { metros: [] } }, components, signals });
+const headline = (signals, components) => buildCard(bare(signals, components), { scoring: scoring() }).headline;
+const sig = (over) => ({ id: `fdic:1:${over.type ?? 'x'}:20260630`, kind: 'state', period: '20260630', evidence: ['fdic:1:20260630'], label: 'a stored label', ...over });
+
+test('the headline is one short line from the bank\'s first signal, with the ids it states; the card\'s sentences are unchanged', () => {
+  const { out } = world([{ cert: '1', name: 'Alpha Example Bank', fn: mfDistress }]);
+  const it = out.items[0];
+  assert.equal(it.signals[0].type, 'cre-noncurrent-rising');
+  // CRE noncurrent at June 30, 2026: (4,000 + 22,500 + 2,000) / 1,000,000 = 2.85%.
+  assert.equal(it.card.headline, 'Seriously late CRE loans up two quarters running, to 2.9%');
+  assert.deepEqual(it.card.headlineEvidence, [it.signals[0].id, ...it.signals[0].evidence]);
+  assert.ok(it.card.headline.length <= HEADLINE_MAX);
+  assert.ok(!it.card.sentences.some((s) => s.text.includes(it.card.headline)), 'the headline is not a card sentence');
+  assert.equal(it.card.text, it.card.sentences.map((s) => s.text).join(' '));
+  const { headline: h, headlineEvidence: he, ...rest } = it.card;
+  assert.deepEqual(Object.keys(rest), ['text', 'sentences', 'period']);
+  assert.ok(h && he.length);
+});
+
+test('with no signal, the headline is the strongest distress component; with neither, it is null', () => {
+  // Constant quarters: no signal fires. The strongest distress component is the noncurrent ratio in the categories the buy box buys,
+  // (15,000 + 12,000) / (300,000 + 600,000) = 3%, worth 11.25 of its 15 points.
+  const { out } = world([{ cert: '1', name: 'Alpha Example Bank' }]);
+  const it = out.items[0];
+  assert.deepEqual(it.signals, []);
+  const top = it.components.filter((c) => c.axis === 'distress' && c.points > 0).sort((a, b) => b.points - a.points)[0];
+  assert.equal(top.id, 'buyboxNoncurrentRatio');
+  assert.equal(it.card.headline, 'Seriously late loans at 3.0% in the loan types we buy');
+  assert.deepEqual(it.card.headlineEvidence, ['fdic:1:20260630']);
+  // A metric component, and a change.
+  assert.equal(headline([], [{ id: 'creNoncurrentRatio', axis: 'distress', metric: 'creNoncurrentRatio', change: null, value: 0.024, points: 6, inputs: [{ field: 'NCRENRES', repdte: '20260630', value: 1 }] }]), 'Seriously late CRE loans at 2.4%');
+  assert.equal(headline([], [{ id: 'creNoncurrentYoY', axis: 'distress', metric: 'creNoncurrentRatio', change: 'yoy', value: 0.0065, points: 4, inputs: [] }]), 'Seriously late CRE loans up 0.65 points in a year');
+  assert.equal(headline([], [{ id: 'creOreoRatio', axis: 'distress', metric: 'creOreoRatio', change: null, value: 0.004, points: 2, inputs: [] }]), 'Foreclosed commercial property at 0.40% of CRE loans');
+  // Fit and timing components never make the headline, nor does a distress component with no points.
+  assert.equal(headline([], [{ id: 'buyboxCreShare', axis: 'fit', metric: 'buyboxCreShare', value: 0.9, points: 10, inputs: [] }, { id: 'creNoncurrentRatio', axis: 'distress', metric: 'creNoncurrentRatio', value: 0, points: 0, inputs: [] }]), null);
+  assert.deepEqual(buildCard(bare(), { scoring: scoring() }).headlineEvidence, []);
+});
+
+test('every kind of signal has a fixed template, and one a template cannot state is passed over for the next', () => {
+  const cases = [
+    [sig({ type: 'mf-noncurrent-rising', rule: 'rising', metric: 'mfNoncurrentRatio', value: 0.075, quarters: 2 }), 'Seriously late apartment loans up two quarters running, to 7.5%'],
+    [sig({ type: 'early-stage-rising', rule: 'rising', metric: 'earlyStageDelinquency', value: 0.0042, quarters: 1 }), 'CRE loans 30 to 89 days late up from last quarter, to 0.42%'],
+    [sig({ type: 'first-cre-chargeoff', rule: 'firstPositive', metric: 'creNetChargeOffs', value: 300, lookback: 8 }), 'First CRE write-off in eight quarters ($300 thousand)'],
+    [sig({ type: 'cre-oreo-up', rule: 'rising', metric: 'creOreo', value: 4000, quarters: 1 }), 'Foreclosed commercial property up from last quarter, to $4.0 million'],
+    [sig({ type: 'cre-noncurrent-high', rule: 'above', metric: 'creNoncurrentRatio', value: 0.0345, threshold: 0.03 }), 'Seriously late CRE loans at 3.5%'],
+    [sig({ type: 'mf-noncurrent-jump', rule: 'changeAbove', metric: 'mfNoncurrentRatio', value: 0.05, change: 0.012, over: 'yoy', threshold: 0.01 }), 'Seriously late apartment loans up 1.2 points in a year, to 5.0%'],
+    [sig({ type: 'concentration-construction', rule: 'concentration', test: 'construction', value: 1.82, threshold: 1, denominator: { basis: 'tier1PlusAllowance' } }), 'Construction loans at 182% of capital (screen: 100%)'],
+    [sig({ type: 'concentration-cre', rule: 'concentration', test: 'cre', value: 5.14, growth: 1.05, threshold: 3, growthThreshold: 0.5, denominator: { basis: 'totalRiskBasedCapital' } }), 'CRE loans at 514% of capital, up 105% in three years'],
+    [sig({ type: 'acquired-metro-bank', kind: 'event', rule: 'acquisition', eventKind: 'merger', targetCert: '777', effective: '2026-06-01', metros: [{ cbsa: '38060', branches: 4, label: 'Phoenix' }] }), 'Acquired a bank in Phoenix, effective Jun 1, 2026'],
+    [sig({ type: 'acquired-metro-bank', kind: 'event', rule: 'acquisition', eventKind: 'failure', targetCert: '777', effective: '2026-09-25', metros: [{ cbsa: '29820', label: 'Las Vegas' }, { cbsa: '31080', label: 'Los Angeles' }, { cbsa: '41740', label: 'San Diego' }] }), 'Took over a failed bank in Las Vegas and 2 more metros, effective Sep 25, 2026'],
+    [sig({ type: 'loan-sale-cre', kind: 'event', rule: 'filing', fileDate: '2026-10-01', form: '10-Q' }), 'An SEC filing matched a saved search, filed Oct 1, 2026'],
+    [sig({ type: 'bank_disclosed_sale', kind: 'event', rule: 'sale', date: '2026-06-01' }), 'Has sold before, on Jun 1, 2026'],
+    [sig({ type: 'enforcement_active', rule: 'enforcement', date: '2026-08-14' }), 'Under an enforcement order since Aug 14, 2026'],
+    [sig({ type: 'enforcement', kind: 'event', rule: 'enforcement', date: '2026-08-14' }), 'An enforcement action, effective Aug 14, 2026'],
+    [sig({ type: 'enforcement_terminated', kind: 'event', rule: 'enforcement', date: '2026-06-30' }), 'An enforcement order ended, effective Jun 30, 2026'],
+    [sig({ type: 'merger_pending', kind: 'event', rule: 'merger', date: '2026-10-24', role: 'target' }), 'In a pending merger application, filed the week ending Oct 24, 2026'],
+  ];
+  for (const [s, want] of cases) {
+    const h = headline([s]);
+    assert.equal(h, want, s.type);
+    assert.ok(h.length <= HEADLINE_MAX && /^[A-Z]/.test(h), h);
+  }
+  // A signal no template can state (no value, an unknown metric or rule, a bad date) is passed over; the next one is used.
+  const unusable = [sig({ rule: 'rising', metric: 'creNoncurrentRatio', value: null, quarters: 2 }), sig({ rule: 'above', metric: 'noSuchMetric', value: 0.1 }), sig({ rule: 'sale', date: 'last spring' }), sig({ rule: 'mystery' })];
+  assert.equal(headline([...unusable, cases[4][0]]), cases[4][1]);
+  assert.equal(headline(unusable), null);
+  // The first signal wins, in the order scoring lists them.
+  assert.equal(headline([cases[1][0], cases[0][0]]), cases[1][1]);
+});
+
+test('the headline is code\'s words only: no stored label, property or borrower reaches it, and a long one drops its closing figure', () => {
+  const { out } = world([{ cert: '1', name: 'Alpha Example Bank', fn: mfDistress }]);
+  const it = structuredClone(out.items[0]);
+  it.signals.forEach((s) => { s.label = 'Sunset Motor Inn foreclosure filed by Harbor View Plaza'; s.metros = [{ label: 'Phoenix', basis: ['Smith v Jones'] }]; });
+  it.components.forEach((c) => { c.label = 'Harbor View Plaza'; c.note = 'Sunset Motor Inn'; });
+  const h = buildCard(it, { scoring: scoring() }).headline;
+  assert.equal(h, out.items[0].card.headline);
+  for (const bad of ['Sunset', 'Harbor', 'Motor', 'Smith', 'Jones', 'foreclosure', 'filed']) assert.ok(!h.includes(bad), `"${bad}" leaked into the headline`);
+  // Each event template, with hostile text in every free-text field it could read.
+  const hostile = { label: 'Sunset Motor Inn', form: 'Harbor View Plaza', regulator: 'Smith', role: 'Jones' };
+  for (const s of [sig({ rule: 'filing', fileDate: '2026-10-01', ...hostile }), sig({ rule: 'sale', date: '2026-06-01', ...hostile }), sig({ rule: 'enforcement', type: 'enforcement_active', date: '2026-08-14', ...hostile }), sig({ rule: 'merger', date: '2026-10-24', ...hostile })]) {
+    const t = headline([s]);
+    for (const bad of ['Sunset', 'Harbor', 'Smith', 'Jones']) assert.ok(!t.includes(bad), `"${bad}" leaked: ${t}`);
+  }
+  // Every metric has a plain name, so a signal on any of them can be stated.
+  assert.deepEqual(Object.keys(HEADLINE_METRICS).sort(), Object.keys(METRICS).sort());
+  // A template that would run past the limit drops its closing figure instead of growing.
+  const long = headline([sig({ rule: 'changeAbove', metric: 'investorCreShare', value: 0.667, change: 0.125, over: 'qoq', threshold: 0.1 })]);
+  assert.equal(long, 'Investor-owned share of commercial property loans up 12.5 points since last quarter');
+  assert.ok(long.length <= HEADLINE_MAX);
 });

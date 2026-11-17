@@ -12,6 +12,17 @@
 //   - The loan-size fields, and the restructured split by type, are semiannual: a March or September value is never used, whatever it
 //     holds. The latest June or December report is used, and its date is shown (SEMIANNUAL_FIELDS in src/sources/fdic.mjs).
 //   - The in-box estimate is bounds only: never a product of separate breakdowns, and no base figure (5.Q7, D-P2).
+//
+// Beside Q1 to Q8, fields the web app reads by path:
+//   - `q1.nonfarmTotal.stages`: the nonfarm nonresidential total's 30-89, 90+ and nonaccrual stages, in a category's shape ({ amount,
+//     shareOfBalance } per stage id). From FDIC's totals (P3RENRES, P9RENRES, NARENRES); where a report lacks one, the sum of its two
+//     lines (other plus owner-occupied) stands in, and that value's sources, method and note say so (NONFARM_TOTAL_STAGES).
+//   - `trend.seriouslyLateShare`: the seriously-late share of the CRE book by quarter, oldest first, as [{ quarter, repdte, asOf, value }]:
+//     90 days or more past due plus nonaccrual on construction, multifamily and nonfarm nonresidential, over the CRE book (q1.creBook's
+//     fields). One point per quarter on file in the latest eight, so a bank with N quarters on file has N points; a quarter not on file
+//     has no point, and none is filled in. A point with no basis has `value: null` with `valueStatus` and `valueReason`, never 0, and a
+//     point that used the nonfarm lines lists its own `fields`. `trend.about.seriouslyLateShare` names its unit, tier, fields and file once.
+//   - fitCeilingOf(record): the could-fit ceilings the scoring run stores on each candidate as `fitCeiling` (src/score.mjs).
 import { join } from 'node:path';
 import { readJson, safeId } from './store.mjs';
 import { periodLabel, shiftQuarter, quarterIndex } from './metrics.mjs';
@@ -140,11 +151,63 @@ const LOAN_STAGE_IDS = STATUS_STAGE_IDS.filter((id) => STATUS_STAGES[id].loan);
 if (LOAN_STAGE_IDS.join() !== Object.keys(STAGE_LABELS).join() || Q1_CATEGORIES.some((c) => Object.keys(c.stages).join() !== LOAN_STAGE_IDS.join())) throw new Error('paper.mjs: the status stages and the Q1 stages disagree.');
 const INVESTOR_FIELDS = Q1_CATEGORIES.filter((c) => c.investor).map((c) => c.balance);   // LNRECONS + LNREMULT + LNRENROT + LNCOMRE
 const CRE_BOOK_FIELDS = ['LNRECONS', 'LNREMULT', 'LNRENRES'];
+// The nonfarm nonresidential total's stages: FDIC's own totals, and the two lines (other, then owner-occupied, as in Q1_CATEGORIES) that
+// add up to each on all 360 rows checked (src/sources/fdic.mjs). The lines stand in only where a report lacks the total.
+export const NONFARM_TOTAL_STAGES = Object.freeze({
+  pastDue30to89: Object.freeze({ total: 'P3RENRES', lines: Object.freeze(['P3RENROT', 'P3RENROW']) }),
+  pastDue90: Object.freeze({ total: 'P9RENRES', lines: Object.freeze(['P9RENROT', 'P9RENROW']) }),
+  nonaccrual: Object.freeze({ total: 'NARENRES', lines: Object.freeze(['NARENROT', 'NARENROW']) }),
+});
+if (Object.keys(NONFARM_TOTAL_STAGES).join() !== LOAN_STAGE_IDS.join()) throw new Error('paper.mjs: the nonfarm total stages and the Q1 stages disagree.');
+// Seriously late = 90 days or more past due (still accruing) plus nonaccrual: the glossary's "noncurrent" (docs/design-redesign.md 6).
+const SERIOUSLY_LATE_STAGES = Object.freeze(['pastDue90', 'nonaccrual']);
+const SERIOUSLY_LATE_LINES = Object.freeze(['construction', 'multifamily']);   // with the nonfarm nonresidential total: the CRE book's lines
 
 function stageValue(ctx, L, spec, balance, unit = 'usd') {
   if (typeof spec === 'string') { const amount = fromFields(ctx, L, [spec]); return { amount, shareOfBalance: share(amount, balance) }; }
   const g = gap(spec.status, spec.reason, { unit, asOf: L ? iso(L) : null });
   return { amount: g, shareOfBalance: gap(spec.status, spec.reason, { unit: 'pct', asOf: g.asOf }) };
+}
+
+// One stage of the nonfarm nonresidential total at `rep`: FDIC's total field; where the report is on file but lacks it, or FDIC sent no
+// value for it, the sum of its two lines, whose sources, method and note say it stands in for the total. Reported either way.
+function nonfarmTotalStage(ctx, rep, spec) {
+  const total = fromFields(ctx, rep, [spec.total]);
+  if (!isGap(total) || !rep || !ctx.quarters[rep]) return total;
+  const lines = fromFields(ctx, rep, spec.lines, { method: `sum-of-fields: its two lines, standing in for ${spec.total}`,
+    note: `${total.reason} So this is the sum of its two lines, other and owner-occupied (${spec.lines.join(' + ')}), which add up to ${spec.total} on all 360 rows checked.` });
+  if (!isGap(lines)) return lines;
+  return gap(total.status, `${total.reason} Its two lines (${spec.lines.join(' + ')}) cannot stand in: ${lines.reason}`, { asOf: total.asOf, sources: [...total.sources, ...lines.sources] });
+}
+
+// The seriously-late share of the CRE book at each quarter on file in the window (ctx.reps, oldest first). A quarter not on file has no
+// point; nothing is interpolated. The numerator is the Q1 stages 90+ and nonaccrual of construction, multifamily and the nonfarm
+// nonresidential total (as q1.nonfarmTotal takes them); the base is the CRE book Q7 measures shares against (q1.creBook).
+const quarterOf = (rep) => `${rep.slice(0, 4)}Q${Number(rep.slice(4, 6)) / 3}`;
+function seriouslyLateShare(ctx) {
+  const byId = Object.fromEntries(Q1_CATEGORIES.map((c) => [c.id, c]));
+  const numerator = [...SERIOUSLY_LATE_LINES.flatMap((id) => SERIOUSLY_LATE_STAGES.map((k) => byId[id].stages[k])), ...SERIOUSLY_LATE_STAGES.map((k) => NONFARM_TOTAL_STAGES[k].total)];
+  if (numerator.some((f) => typeof f !== 'string')) throw new Error('paper.mjs: a seriously-late stage has no FDIC field.');
+  const usual = [...numerator, ...CRE_BOOK_FIELDS].sort().join();
+  const points = ctx.reps.map((r) => {
+    const parts = [...SERIOUSLY_LATE_LINES.flatMap((id) => SERIOUSLY_LATE_STAGES.map((k) => fromFields(ctx, r, [byId[id].stages[k]]))), ...SERIOUSLY_LATE_STAGES.map((k) => nonfarmTotalStage(ctx, r, NONFARM_TOTAL_STAGES[k]))];
+    const missing = parts.filter(isGap);
+    const late = missing.length
+      ? gap('unknown', [...new Set(missing.map((p) => p.reason))].join(' '), { asOf: iso(r), sources: parts.flatMap((p) => p.sources) })
+      : { value: parts.reduce((s, p) => s + p.value, 0), unit: 'usd', kind: 'stock', asOf: iso(r), tier: 'reported', sources: parts.flatMap((p) => p.sources), method: 'sum-of-fields' };
+    const v = share(late, fromFields(ctx, r, CRE_BOOK_FIELDS), 'share: seriously late over the CRE book');
+    const fields = [...new Set(v.sources.map((s) => s.field))];
+    return { quarter: quarterOf(r), ...point(r, v), ...(!isGap(v) && [...fields].sort().join() !== usual ? { fields } : {}) };
+  });
+  return {
+    points,
+    about: {
+      label: 'Seriously late share of the CRE book: 90 days or more past due plus nonaccrual, over the CRE book', unit: 'pct', kind: 'stock', tier: 'reported',
+      numerator, denominator: [...CRE_BOOK_FIELDS], file: ctx.file,
+      method: `share at each report date: (${numerator.join(' + ')}) / (${CRE_BOOK_FIELDS.join(' + ')})`,
+      note: `One point per quarter on file, the latest ${PAPER_QUARTERS} at most, oldest first. A quarter not on file has no point, and none is filled in. A point with no basis is null with its status and reason, never 0. Where a report lacks a nonfarm nonresidential total, its two lines stand in (q1.nonfarmTotal), and that point lists its own fields. 90 days or more past due plus nonaccrual is FDIC's definition of noncurrent, the loans the score's CRE noncurrent ratio counts (NCRECONS + NCREMULT + NCRENRES); this series sums the Q1 stages instead, so it matches the stages shown in Q1.`,
+    },
+  };
 }
 
 // A flow for the quarter, and for the year to date as the sum of the year's quarterly fields. FDIC's own year-to-date fields are never
@@ -193,7 +256,9 @@ function q1Block(ctx, events) {
     return { id: c.id, label: c.label, investor: c.investor, balance, stages, chargeOffs: chargeOffs(ctx, L, c.chargeOffs),
       ...(c.split ? { split: c.split.map((s) => ({ id: s.id, label: s.label, balance: fromFields(ctx, L, [s.balance]) })) } : {}), ...(c.note ? { note: c.note } : {}) };
   });
-  const nonfarmTotal = { label: 'Nonfarm nonresidential in total (owner-occupied and other)', balance: fromFields(ctx, L, ['LNRENRES']), chargeOffs: chargeOffs(ctx, L, 'NTRENRSQ') };
+  const nfBalance = fromFields(ctx, L, ['LNRENRES']);
+  const nfStages = Object.fromEntries(Object.entries(NONFARM_TOTAL_STAGES).map(([k, spec]) => { const amount = nonfarmTotalStage(ctx, L, spec); return [k, { amount, shareOfBalance: share(amount, nfBalance) }]; }));
+  const nonfarmTotal = { label: 'Nonfarm nonresidential in total (owner-occupied and other)', balance: nfBalance, stages: nfStages, chargeOffs: chargeOffs(ctx, L, 'NTRENRSQ') };
   const S = latestSemiannual(ctx);
   const rsBasis = (rep) => (rep >= SERIES_BREAK_2023.repdte ? SERIES_BREAK_2023.after : SERIES_BREAK_2023.before);
   const semiannualOnly = (rep, field) => (S ? fromFields(ctx, rep, [field]) : gap('semiannual', 'No June or December report is on file, and most banks report the restructured split only then.', { asOf: rep ? iso(rep) : null }));
@@ -686,12 +751,14 @@ export function buildPaper({ cert, name = '', financials, footprint = {}, events
   const q5 = q5Block(ctx);
   const q6 = q6Block(ctx, mine, filings);
   const q7 = q7Block(ctx, q1, q3, q4, buybox, placeholders);
+  const late = seriouslyLateShare(ctx);
   const record = {
     schema: PAPER_SCHEMA, key: `fdic:${ctx.cert}`, cert: ctx.cert, name, scope: 'charter', layer: 'reported (E14-S1)', runId, scoredAt,
     latestRepdte: ctx.latest, asOf: ctx.latest ? iso(ctx.latest) : null, provisional: placeholders.length > 0, placeholders: [...placeholders],
     rules: ['An estimate from public reports, not the loan tape.', 'For the principals and the briefer only: it never appears in a message, and the drafter never sees it.', 'Every number names its fields, file, report date, tier and method; "unknown" is never a guess.'],
     units: UNITS, kinds: KINDS, tiers: { reported: 'reported to a regulator or the SEC', observed: 'built from individual loans we can see', inferred: 'a model or a proxy, and any bounds resting on one; always a range' },
     summary: [], q1, q2: { built: false, note: 'Property types inside nonfarm nonresidential are not reported apart. This layer does not estimate them; see the unknowns (E14-S3 adds public-bank breakdowns and peer priors).' }, q3, q4, q5, q6, q7,
+    trend: { seriouslyLateShare: late.points, about: { seriouslyLateShare: late.about } },
   };
   record.q8 = q8Block(record, ctx);
   // The summary points at values elsewhere in the record (paths for paperAt), so each number is stored once.
@@ -723,6 +790,15 @@ export function paperAt(record, ref) {
   let v = record;
   for (const part of String(ref ?? '').split(/[.[\]]+/).filter(Boolean)) { if (v === null || v === undefined) return undefined; v = v[/^\d+$/.test(part) ? Number(part) : part]; }
   return v;
+}
+
+// The could-fit ceilings for the candidate list (docs/design-redesign.md 5.2): one entry per buy-box sector whose Q7 bounds were
+// measured, taken as they are stored (dollars, the bounds' own tier and date). A sector whose bounds are a gap is left out. They are never
+// added up: hotel and retail sit in the same nonfarm nonresidential loans, and each sector's bounds hold on their own.
+export function fitCeilingOf(record) {
+  const measured = (b) => !!b && !('status' in b) && Number.isFinite(b.low) && Number.isFinite(b.high);
+  return (record?.q7?.sectors ?? []).filter((s) => measured(s.bounds))
+    .map((s) => ({ sector: s.sector, label: s.label, category: s.category, high: s.bounds.high, low: s.bounds.low, tier: s.bounds.tier, asOf: s.bounds.asOf }));
 }
 
 // What the briefer receives (fenced as data in src/research.mjs): the values, units, dates, tiers and gap statuses, without source lists,
@@ -772,13 +848,18 @@ export function renderPaper(record) {
     for (const s of c.split ?? []) line(s.label, s.balance, '    ');
     if (c.note) L.push(`    Note: ${c.note}`);
   }
-  L.push(`  ${q1.nonfarmTotal.label}`); line('Balance', q1.nonfarmTotal.balance, '    '); line('Charge-offs, net, this quarter (a flow)', q1.nonfarmTotal.chargeOffs.quarter, '    '); line('Charge-offs, net, year to date (a flow)', q1.nonfarmTotal.chargeOffs.yearToDate, '    ');
+  L.push(`  ${q1.nonfarmTotal.label}`); line('Balance', q1.nonfarmTotal.balance, '    ');
+  // A record written before the nonfarm total had stages, or the seriously-late trend, leaves those lines out.
+  for (const [k, s] of Object.entries(q1.nonfarmTotal.stages ?? {})) line(STAGE_LABELS[k], s.amount, '    ');
+  line('Charge-offs, net, this quarter (a flow)', q1.nonfarmTotal.chargeOffs.quarter, '    '); line('Charge-offs, net, year to date (a flow)', q1.nonfarmTotal.chargeOffs.yearToDate, '    ');
   L.push('  Foreclosed property (OREO)'); for (const o of q1.oreo) line(o.label, o.value, '    ');
   L.push(`  Restructured loans, basis: ${q1.restructured.basis ?? 'unknown'}. ${q1.restructured.note}`); for (const t of q1.restructured.byType) line(t.label, t.value, '    '); line('Total restructured (all loans)', q1.restructured.total, '    ');
   L.push(`    Series break: ${q1.restructured.seriesBreak.note}${q1.restructured.seriesBreak.spansTotal || q1.restructured.seriesBreak.spansByType ? ' THE SERIES ON FILE SPANS THIS BREAK.' : ' The series on file does not span it.'}`);
   L.push(`  Unused CRE commitments (${q1.commitments.level} level). ${q1.commitments.note}`); line('Secured', q1.commitments.secured, '    '); line('Unsecured', q1.commitments.unsecured, '    ');
   L.push(`  Trend: ${q1.trend.note}`);
   for (const s of q1.trend.series) L.push(`    ${s.label} [${s.tier}; ${s.fields.join(' + ')}]: ${s.points.map((p) => `${dateLabel(p.asOf)} ${p.balance === null ? STATUS[p.balanceStatus] : money(p.balance)} (net change ${p.netChange === null ? STATUS[p.netChangeStatus] : money(p.netChange)})`).join('; ')}`);
+  const late = record.trend?.about?.seriouslyLateShare;
+  if (late) L.push(`  ${late.label} [${late.tier}]: ${record.trend.seriouslyLateShare.map((p) => `${dateLabel(p.asOf)} ${p.value === null ? STATUS[p.valueStatus] : fmtUnit(p.value, 'pct')}`).join('; ') || 'no quarter on file'}`);
   L.push('', `Q2. PROPERTY TYPES. ${record.q2.note}`);
   const q3 = record.q3;
   L.push('', `Q3. ${q3.label.toUpperCase()}. ${q3.caveats.join(' ')}`); line('Total deposits', q3.totalDeposits); line('Share in the buy-box metros', q3.buyboxShare);

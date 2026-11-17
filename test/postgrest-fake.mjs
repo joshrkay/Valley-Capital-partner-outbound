@@ -1,5 +1,6 @@
 // A fake Supabase REST API (PostgREST), in memory, for testing src/platform/client.mjs without a server. It speaks only what the client
-// uses: GET on documents, log_lines and candidates with `or`, `eq`, `cs`, `order`, `limit`, `offset`; and the RPCs flush_uow,
+// uses: GET on documents, log_lines and candidates with `or`, `eq`, `cs`, `order`, `limit`, `offset` (and, on candidates, JSON-path
+// select items such as `headline:item->card->headline`); and the RPCs flush_uow,
 // enqueue_job, claim_job and finish_job. Their rules (versions, roles) mirror the SQL in supabase/migrations, which test/db.test.mjs
 // checks against a real Postgres. Keys and tokens are plain strings here: "service" is the worker's key; "user:<email>" is a signed-in
 // user's session token; any other key is the public anon key.
@@ -53,6 +54,19 @@ export function fakePostgrest({ principals = ['pat@example.test'] } = {}) {
     return (p) => preds.some((f) => f(p));
   }
   const page = (rows, s) => rows.slice(Number(s.get('offset') ?? 0), Number(s.get('offset') ?? 0) + Number(s.get('limit') ?? 1000));
+  // One select item: a column (`card`), or a JSON path into one with an optional alias (`headline:item->card->headline`), as PostgREST
+  // reads it: `->` gives the JSON value, `->>` its text, a missing key null, and the name is the alias or else the path's last key.
+  function selectItem(row, spec) {
+    const m = /^(?:([A-Za-z_]\w*):)?([A-Za-z_]\w*)((?:->>?[A-Za-z_]\w*)*)$/.exec(spec);
+    if (!m) throw new Error(`fake PostgREST: cannot parse select item ${spec}`);
+    const steps = [...m[3].matchAll(/(->>?)([A-Za-z_]\w*)/g)].map((x) => ({ text: x[1] === '->>', key: x[2] }));
+    let v = row[m[2]];
+    for (const st of steps) {
+      v = v !== null && typeof v === 'object' && !Array.isArray(v) && Object.prototype.hasOwnProperty.call(v, st.key) ? v[st.key] : null;
+      if (st.text && v !== null) v = typeof v === 'object' ? JSON.stringify(v) : String(v);
+    }
+    return [m[1] ?? steps.at(-1)?.key ?? m[2], steps.length ? v ?? null : v];
+  }
 
   function flush(plan, actor) {
     if (hooks.beforeFlush) { const h = hooks.beforeFlush; hooks.beforeFlush = null; h(); }
@@ -108,7 +122,7 @@ export function fakePostgrest({ principals = ['pat@example.test'] } = {}) {
         if (s.get('metros')) { const m = s.get('metros').replace(/^cs\.\{|\}$/g, ''); rows = rows.filter((r) => r.metros.includes(m)); }
         rows.sort((a, b) => (b.score ?? -Infinity) - (a.score ?? -Infinity) || (a.key < b.key ? -1 : 1));
         const cols = (s.get('select') ?? '*').split(',');
-        return json(200, page(rows, s).map((r) => (cols[0] === '*' ? r : Object.fromEntries(cols.map((c) => [c, r[c]])))));
+        return json(200, page(rows, s).map((r) => (cols[0] === '*' ? r : Object.fromEntries(cols.map((c) => selectItem(r, c))))));
       }
       return pgError(404, 'PGRST205', `Could not find the table public.${path}`);
     }

@@ -34,6 +34,16 @@ export const FLUSH_BATCH_BYTES = 4_000_000;
 // The documents whose write makes flush_uow rebuild a table the web app reads (public.project_candidates).
 export const PROJECTED_PATHS = Object.freeze(['candidates/latest.json']);
 
+// What candidates() reads: the projection's summary columns (supabase/migrations, public.candidates; `card` is the card's text). With
+// itemFields, also a few fields of the stored item by JSON path, so the Banks list needs no migration and never loads whole items;
+// callers that need only the summary (the Status page's coverage) leave it off. Each path is named by its alias: headline
+// (item.card.headline, a string or null), fitCeiling (item.fitCeiling, an array of { sector, label, category, high, low, tier, asOf }
+// in dollars, or null for an item scored before it existed), city and state (the FDIC institution's CITY and STALP) and assets (FDIC
+// ASSET at the latest report, in THOUSANDS of dollars, as stored).
+export const CANDIDATE_LIST_COLUMNS = Object.freeze(['key', 'tier', 'score', 'distress', 'fit', 'timing', 'name', 'metros', 'sectors', 'filtered', 'card', 'period', 'provisional']);
+export const CANDIDATE_LIST_PATHS = Object.freeze({ headline: 'item->card->headline', fitCeiling: 'item->fitCeiling', city: 'item->city', state: 'item->state', assets: 'item->assets' });
+export const candidateListSelect = ({ itemFields = false } = {}) => [...CANDIDATE_LIST_COLUMNS, ...(itemFields ? Object.entries(CANDIDATE_LIST_PATHS).map(([alias, path]) => `${alias}:${path}`) : [])].join(',');
+
 const bytes = (v) => Buffer.byteLength(JSON.stringify(v));
 const EMPTY_BATCH = bytes({ docs: [], lines: [] });
 
@@ -140,10 +150,11 @@ export function platformClient({ url, key, accessToken, fetchImpl = globalThis.f
     enqueue: (kind, params = {}) => call('POST', 'rpc/enqueue_job', { body: { kind, params } }),
     async claimJob() { const rows = await call('POST', 'rpc/claim_job', { body: {} }); return rows?.[0] ?? null; },
     finishJob: (id, ok, result = null) => call('POST', 'rpc/finish_job', { body: { job_id: id, ok, result } }),
-    // The candidate list for the web app: the projection's summary columns only, best first.
-    candidates({ tier, metro, limit = 200, offset = 0 } = {}) {
+    // The candidate list for the web app: the projection's summary columns, best first; with itemFields: true, also the item fields of
+    // CANDIDATE_LIST_PATHS (headline, fitCeiling, city, state, assets), which the Banks list shows.
+    candidates({ tier, metro, limit = 200, offset = 0, itemFields = false } = {}) {
       return call('GET', 'candidates', { query: {
-        select: 'key,tier,score,distress,fit,timing,name,metros,sectors,filtered,card,period,provisional',
+        select: candidateListSelect({ itemFields }),
         order: 'score.desc.nullslast,key', tier: tier ? `eq.${tier}` : undefined, metros: metro ? `cs.{${metro}}` : undefined, limit, offset,
       } });
     },
