@@ -469,7 +469,7 @@ The first runs of these checks found real defects, all now fixed and tested:
 
 ## The platform (PRD E12)
 
-**How it fits together.** The command line works on a data folder. The platform works on Postgres, through the same engine: every action loads the documents it needs, runs the engine in memory, and writes the changes back in one transaction with version checks (`src/uow.mjs`). The web app (`web/`) runs quick actions this way as the signed-in principal. Long jobs (FDIC pull, CMBS pull, scoring, research, drafting) are queued for the worker. Row-level security lets only active principals read. Nobody writes to a table directly. There is no send button anywhere.
+**How it fits together.** The command line works on a data folder. The platform works on Postgres, through the same engine: every action loads the documents it needs, runs the engine in memory, and writes the changes back in one transaction with version checks (`src/uow.mjs`). A very large write, such as a weekly scoring run of about 40 MB, goes in batches of about 4 MB with the candidate list last, so the Candidates page changes only once everything else is saved (`flushBatches` in `src/platform/client.mjs`). The web app (`web/`) runs quick actions this way as the signed-in principal. Long jobs (FDIC pull, CMBS pull, scoring, research, drafting) are queued for the worker. Row-level security lets only active principals read. Nobody writes to a table directly. There is no send button anywhere.
 
 ```bash
 # The database: apply supabase/migrations/ to the project (Supabase CLI or the SQL editor), then add principals with the service role.

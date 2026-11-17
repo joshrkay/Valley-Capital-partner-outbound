@@ -1,5 +1,6 @@
 // The engine's way into the platform database (PRD E12-S3): Supabase's REST API (PostgREST) over plain fetch, so the engine gains no
-// dependency. It loads what a unit of work needs, writes the plan back through flush_uow() in one transaction, and runs the job queue.
+// dependency. It loads what a unit of work needs, writes the plan back through flush_uow() in one transaction (a very large plan, such
+// as a scoring run, in a few: see flushBatches), and runs the job queue.
 // Who the caller is comes from the key and token it sends: a principal's session token in the web app, the service key in the worker.
 // The database enforces every rule (supabase/migrations); this client only speaks the protocol.
 import { withUnitOfWork } from '../uow.mjs';
@@ -25,7 +26,44 @@ export function pathFilter(prefixes) {
 
 export const isJwt = (k) => String(k ?? '').split('.').length === 3;
 
-export function platformClient({ url, key, accessToken, fetchImpl = globalThis.fetch, pageSize = 1000 } = {}) {
+// A plan is written in one flush_uow call, so in one transaction, unless its JSON is larger than this. A weekly scoring run is about
+// 41 MB (the candidate list, 8.7 MB, and 268 paper records of about 140 KB each); as one call it ran past the statement timeout, and
+// with a longer one it overwhelmed the smallest Supabase compute. 4 MB is about 28 paper records a call, so about ten calls a run, and
+// well under the candidate list, which cannot be split, so no batch weighs more than that one unavoidable call.
+export const FLUSH_BATCH_BYTES = 4_000_000;
+// The documents whose write makes flush_uow rebuild a table the web app reads (public.project_candidates).
+export const PROJECTED_PATHS = Object.freeze(['candidates/latest.json']);
+
+const bytes = (v) => Buffer.byteLength(JSON.stringify(v));
+const EMPTY_BATCH = bytes({ docs: [], lines: [] });
+
+// The flush_uow calls that write a plan, in order. A plan within `maxBytes` is one call, sent exactly as it is. A larger one is sent
+// as batches of whole documents (one larger than the limit goes alone; a document is never split), then one last call with the
+// projected documents (the candidate list), every log line and every redaction. So the Candidates page changes only once every other
+// document is saved, and the log records the run only once its writes are in.
+// The trade-off: each call is its own transaction, so a large plan is no longer all or nothing. When a call fails, the client stops
+// there and throws its error as it is (a conflict stays a ConflictError): the earlier batches stay written, and nothing after is sent.
+// That can leave documents the run would have written anyway (paper records), never a Candidates page or a log line ahead of them. A
+// re-run (unitOfWork retries a conflict once) loads again, so it sees the new versions, and recomputes from what is stored.
+export function flushBatches(plan, maxBytes = FLUSH_BATCH_BYTES) {
+  if (plan == null || bytes(plan) <= maxBytes) return [plan];
+  const projected = new Set(PROJECTED_PATHS);
+  const docs = plan.docs ?? [];
+  const batches = [];
+  let cur = [], size = EMPTY_BATCH;
+  for (const d of docs) {
+    if (projected.has(d.path)) continue;
+    const n = bytes(d) + 1;   // and its comma
+    if (cur.length && size + n > maxBytes) { batches.push({ docs: cur, lines: [] }); cur = []; size = EMPTY_BATCH; }
+    cur.push(d); size += n;
+  }
+  if (cur.length) batches.push({ docs: cur, lines: [] });
+  const last = { ...plan, docs: docs.filter((d) => projected.has(d.path)) };
+  if (last.docs.length || last.lines?.length || last.redactions?.length) batches.push(last);
+  return batches.length > 1 ? batches : [plan];
+}
+
+export function platformClient({ url, key, accessToken, fetchImpl = globalThis.fetch, pageSize = 1000, flushBatchBytes = FLUSH_BATCH_BYTES } = {}) {
   if (!url || !key) throw new Error('platformClient needs the project URL and a key (SUPABASE_URL, and the anon key with a user session or the service key).');
   const base = `${String(url).replace(/\/$/, '')}/rest/v1`;
   // Two kinds of Supabase key exist. Older projects issue JWTs (anon, service_role), which go in both apikey and Authorization. Newer
@@ -39,7 +77,9 @@ export function platformClient({ url, key, accessToken, fetchImpl = globalThis.f
     for (const [k, v] of Object.entries(query)) if (v !== undefined && v !== null) u.searchParams.set(k, String(v));
     const res = await fetchImpl(u.toString(), { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
     const text = await res.text();
-    const data = text ? JSON.parse(text) : null;
+    // A gateway error (Cloudflare 522, 504) comes back as an HTML page, not JSON: report its HTTP status, not a parse error.
+    let data = null;
+    if (text) { try { data = JSON.parse(text); } catch (e) { if (res.ok) throw e; } }
     if (!res.ok) {
       const msg = data?.message ?? `${method} ${path} failed with HTTP ${res.status}`;
       const Err = data?.code === '40001' ? ConflictError : PlatformError;
@@ -70,10 +110,21 @@ export function platformClient({ url, key, accessToken, fetchImpl = globalThis.f
 
   // A plan with redactions (a deletion request, PRD E7-S3) needs the redaction migration: a database without it would ignore them and
   // answer without a "redacted" count, leaving the person's lines in place. That is refused here, never reported as done.
-  async function flush(plan) {
+  async function flushOne(plan) {
     const res = await call('POST', 'rpc/flush_uow', { body: { plan } });
     if (plan?.redactions?.length && typeof res?.redacted !== 'number') throw new PlatformError('The platform database has not run the redaction migration (20261114200000_log_redaction.sql), so log lines that name the person were not redacted. Run the migration, then run the deletion request again.', { code: 'REDACTION_UNSUPPORTED' });
     return res;
+  }
+
+  // One call for a plan within flushBatchBytes, its answer returned as it is. A larger plan in batches (flushBatches: what is written
+  // first, and what a failure partway leaves), stopping at the first that fails; the answer adds up the counts and says how many calls.
+  async function flush(plan) {
+    const batches = flushBatches(plan, flushBatchBytes);
+    if (batches.length === 1) return flushOne(batches[0]);
+    const results = [];
+    for (const b of batches) results.push(await flushOne(b));
+    const total = (k) => (results.every((r) => typeof r?.[k] === 'number') ? { [k]: results.reduce((n, r) => n + r[k], 0) } : {});
+    return { ...total('written'), ...total('appended'), ...total('redacted'), batches: results.length };
   }
 
   return {
