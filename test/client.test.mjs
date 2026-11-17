@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { platformClient, pathFilter, ConflictError, PlatformError, isJwt, flushBatches, FLUSH_BATCH_BYTES } from '../src/platform/client.mjs';
+import { platformClient, pathFilter, ConflictError, PlatformError, isJwt, flushBatches, FLUSH_BATCH_BYTES, candidateListSelect, CANDIDATE_LIST_COLUMNS, CANDIDATE_LIST_PATHS } from '../src/platform/client.mjs';
 import { LOADS } from '../src/uow.mjs';
 import { readJson, writeJson, appendJsonl } from '../src/store.mjs';
 import { promote } from '../src/candidates.mjs';
@@ -87,6 +87,37 @@ test('promote runs through the platform exactly as it does on a folder', async (
   assert.ok(fake.lines.some((l) => l.path === 'audit.jsonl' && l.line.type === 'candidate_promoted' && l.by === 'pat@example.test'));
   assert.deepEqual((await c.candidates({ tier: 'A', metro: '31080' })).map((r) => r.key), ['fdic:1']);
   assert.equal((await c.candidate('fdic:1')).name, 'Example Bank');
+});
+
+test('with itemFields, the candidate list reads the headline, the could-fit ceilings, city, state and assets from the item by JSON path, with no migration', async () => {
+  const fake = fakePostgrest();
+  const fitCeiling = [{ sector: 'multifamily', label: 'Multifamily', category: 'multifamily', high: 11000000, low: 0, tier: 'inferred', asOf: '2026-06-30' }];
+  const items = [
+    { key: 'fdic:1', cert: '1', name: 'Example Bank', city: 'Anytown', state: 'AZ', assets: 3000000, tier: 'A', score: 70, axes: { distress: 30, fit: 30, timing: 10 }, metros: ['38060'], sectors: ['multifamily'], filtersFailed: [], latestRepdte: '20260630',
+      card: { text: 'Example Bank: Call Report data as of June 30, 2026.', sentences: [], period: 'June 30, 2026', headline: 'Seriously late CRE loans at 2.4%', headlineEvidence: ['fdic:1:20260630'] }, fitCeiling },
+    // An item scored before these fields existed.
+    { key: 'fdic:2', cert: '2', name: 'Other Example Bank', tier: 'B', score: 30, axes: { distress: 10, fit: 10, timing: 10 }, metros: [], sectors: [], filtersFailed: [], latestRepdte: '20260630', card: { text: 'card' } },
+  ];
+  await asWorker(fake).flush({ docs: [{ path: 'candidates/latest.json', kind: 'json', body: { runId: 'score-1', items }, baseVersion: 0 }], lines: [] });
+  const selectSent = () => fake.calls.filter((x) => x.path === 'candidates').at(-1).query.select;
+  // By default, the summary columns only, as before (the Status page's coverage reads this way).
+  const summary = await asPat(fake).candidates();
+  assert.equal(selectSent(), CANDIDATE_LIST_COLUMNS.join(','));
+  assert.equal(selectSent(), 'key,tier,score,distress,fit,timing,name,metros,sectors,filtered,card,period,provisional', 'unchanged');
+  assert.ok(summary.every((r) => !('headline' in r) && !('fitCeiling' in r)));
+  // itemFields: the same columns, and the item fields by JSON path, each under its alias.
+  const rows = await asPat(fake).candidates({ itemFields: true });
+  const sent = selectSent();
+  assert.equal(sent, candidateListSelect({ itemFields: true }));
+  assert.deepEqual(sent.split(',').slice(CANDIDATE_LIST_COLUMNS.length), ['headline:item->card->headline', 'fitCeiling:item->fitCeiling', 'city:item->city', 'state:item->state', 'assets:item->assets']);
+  assert.deepEqual(sent.split(',').slice(0, CANDIDATE_LIST_COLUMNS.length), [...CANDIDATE_LIST_COLUMNS], 'the summary columns are still read');
+  assert.deepEqual(rows.map((r) => [r.key, r.headline, r.fitCeiling, r.city, r.state, r.assets]), [
+    ['fdic:1', 'Seriously late CRE loans at 2.4%', fitCeiling, 'Anytown', 'AZ', 3000000],
+    ['fdic:2', null, null, null, null, null],
+  ]);
+  assert.equal(rows[0].card, items[0].card.text, '`card` stays the card\'s text');
+  assert.ok(!('item' in rows[0]), 'the whole item is not loaded');
+  assert.deepEqual(Object.keys(rows[0]).slice(CANDIDATE_LIST_COLUMNS.length), Object.keys(CANDIDATE_LIST_PATHS));
 });
 
 test('the job queue through the client: a principal queues, the worker claims and finishes', async () => {
