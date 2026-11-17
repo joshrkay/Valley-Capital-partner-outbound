@@ -5,7 +5,7 @@
 import { join } from 'node:path';
 import { readJson, writeJson, listFiles, exists, audit, safeId } from './store.mjs';
 import { norm } from './guard.mjs';
-import { METRICS, SIGNAL_TYPES, DENOMINATORS, periodLabel } from './metrics.mjs';
+import { METRICS, SIGNAL_TYPES, DENOMINATORS, CATEGORIES, PLAIN_METRICS, amountWords, countWord, periodLabel } from './metrics.mjs';
 
 const C = (dir, f) => join(dir, 'candidates', f);
 const ymd = (d) => new Date(d).toISOString().slice(0, 10);
@@ -63,10 +63,28 @@ export function suppressedBy(item, suppression = [], aliasTable = {}) {
 // Fixed templates, in a fixed order: the period, then fit (the paper the buy box buys, and where the bank is), then distress, then
 // timing (signals). Inputs are numbers computed in code, labels defined in code, metro labels from metros.json and the FDIC institution
 // name. Nothing free-text from a source or a config label reaches a sentence, so no property, borrower or filing can be named.
+// The words are the glossary's (docs/design-redesign.md 6, web/lib/glossary.mjs): seriously late, not accruing, 30 to 89 days late,
+// apartment, commercial property, foreclosed property, write-offs. Each metric's plain name is PLAIN_METRICS and each category's is
+// CATEGORIES[].plain (src/metrics.mjs). A regulators' term appears only inside a parenthesis that explains it.
 const pct = (v, d = 2) => `${(v * 100).toFixed(d)}%`;
 const pts = (v) => `${Math.abs(v * 100).toFixed(2)} percentage points`;
-const money = (k) => { const s = k < 0 ? 'minus ' : ''; const a = Math.abs(k); return a >= 1e6 ? `${s}$${(a / 1e6).toFixed(1)} billion` : a >= 1e3 ? `${s}$${(a / 1e3).toFixed(1)} million` : `${s}$${a} thousand`; };
+const money = amountWords;
 const fmtMetric = (metric, v) => (METRICS[metric]?.kind === 'amount' ? money(v) : pct(v));
+const categoryName = (c) => CATEGORIES.find((k) => k.id === c.id)?.plain ?? c.short;
+// The card's name for a score component: its metric's plain name, or the paper profile measure's. Never the label stored on the component.
+const CARD_MEASURES = Object.freeze({
+  buyboxNoncurrentRatio: 'Seriously late loans in the loan types we buy',
+  buyboxCreShare: 'Loan types we buy, as a share of its CRE book',
+  buyboxShareOfLoans: 'Loan types we buy, as a share of its loans',
+  footprint: 'Share of its deposits in our metros',
+});
+const componentName = (c) => CARD_MEASURES[c.metric] ?? PLAIN_METRICS[c.metric]?.noun ?? null;
+// The capital figure the concentration screen divides by (DENOMINATORS, src/metrics.mjs), in plain words. A bank on the community bank
+// leverage ratio reports no total capital, so the screen uses its tier 1 capital plus its loan-loss reserves; the parenthesis says so.
+const CAPITAL = Object.freeze({
+  totalRiskBasedCapital: 'its total capital',
+  tier1PlusAllowance: 'its capital (tier 1 plus loan-loss reserves, as it uses the community bank leverage ratio)',
+});
 
 export function buildCard(item, { scoring = {} } = {}) {
   const L = item.latestRepdte;
@@ -85,47 +103,50 @@ export function buildCard(item, { scoring = {} } = {}) {
   const cats = profile.categories.filter((c) => c.fit?.buys && c.balance?.value > 0 && c.shareOfCre?.value !== null)
     .sort((a, b) => (nc(b) - nc(a)) || (b.shareOfCre.value - a.shareOfCre.value) || (a.id < b.id ? -1 : 1)).slice(0, lim.maxCategories);
   for (const c of cats) {
-    let t = `${c.short} loans are ${pct(c.shareOfCre.value)} of its CRE book (${money(c.balance.value)})`;
+    let t = `${categoryName(c)} loans are ${pct(c.shareOfCre.value)} of its CRE book (${money(c.balance.value)})`;
     const ev = [rec(L)];
     if (c.noncurrentRatio !== null) {
       const d = c.direction4q;
-      t += `; their noncurrent ratio is ${pct(c.noncurrentRatio)}`;
-      if (d.direction === 'rising' || d.direction === 'falling') { t += `, ${d.direction === 'rising' ? 'up' : 'down'} from ${pct(d.from.value)} four quarters earlier`; ev.push(rec(d.from.repdte)); }
-      else if (d.direction === 'flat') { t += ', about the same as four quarters earlier'; ev.push(rec(d.from.repdte)); }
+      t += `; ${pct(c.noncurrentRatio)} of them are seriously late`;
+      if (d.direction === 'rising' || d.direction === 'falling') { t += `, ${d.direction === 'rising' ? 'up' : 'down'} from ${pct(d.from.value)} a year earlier`; ev.push(rec(d.from.repdte)); }
+      else if (d.direction === 'flat') { t += ', about the same as a year earlier'; ev.push(rec(d.from.repdte)); }
     }
     t += '.';
-    if (c.sectors.length > 1) t += ' This category also holds office and other commercial loans, and the data cannot separate hotel or retail loans.';
+    if (c.sectors.length > 1) t += ' These include office and other commercial loans, and public reports do not split out hotel or retail loans.';
     add(t, ev);
   }
-  if (!cats.length) add('None of its CRE categories is one the buy box buys in its metros.', [rec(L)]);
+  if (!cats.length) add('None of its CRE loan types is one we buy in its metros.', [rec(L)]);
   const fm = (profile.footprint?.metros ?? []).filter((m) => m.inBuybox && m.branches?.value > 0);
   if (fm.length) {
     const share = profile.footprint.buyboxDepositShare;
     const yr = profile.footprint.sodYear;
-    add(`Branches in the buy-box metros: ${fm.map((m) => `${m.branches.value} in ${m.label}`).join(', ')}${share !== null && share !== undefined ? `; ${pct(share, 0)} of its deposits are there (Summary of Deposits, June 30, ${yr})` : ''}.`,
+    add(`Branches in our metros: ${fm.map((m) => `${m.branches.value} in ${m.label}`).join(', ')}${share !== null && share !== undefined ? `; ${pct(share, 0)} of its deposits are there (FDIC Summary of Deposits, June 30, ${yr})` : ''}.`,
       [`fdic-locations:${item.cert}`, ...(share !== null && share !== undefined ? [`fdic-sod:${item.cert}:${yr}`] : [])]);
   }
 
-  // Distress: the strongest distress components.
+  // Distress: the strongest distress components, each by its plain name. A component with no plain name is passed over.
   const dist = (item.components ?? []).filter((c) => c.axis === 'distress' && c.value !== null && c.points > 0)
     .sort((a, b) => (b.points - a.points) || (a.id < b.id ? -1 : 1)).slice(0, lim.maxDistress);
   const statedLevels = new Set();
   for (const c of dist) {
+    const name = componentName(c);
+    if (!name) continue;
     const change = !!c.change;
     if (!change) statedLevels.add(c.metric);
-    add(`${c.label}: ${change ? `${c.value < 0 ? 'down' : 'up'} ${pts(c.value)}` : pct(c.value)}.`, [...new Set(c.inputs.map((x) => x.repdte).filter(Boolean))].map(rec));
+    const of = PLAIN_METRICS[c.metric]?.of;
+    add(`${name}: ${change ? `${c.value < 0 ? 'down' : 'up'} ${pts(c.value)} ${c.change === 'yoy' ? 'in a year' : 'since last quarter'}` : `${fmtMetric(c.metric, c.value)}${of ? ` ${of}` : ''}`}.`, [...new Set(c.inputs.map((x) => x.repdte).filter(Boolean))].map(rec));
   }
 
   // Pressure: the concentration screen (state signals), each naming the capital figure it divided by. The denominator's words come
-  // from code (DENOMINATORS), never from the stored signal.
+  // from code (CAPITAL, by the basis DENOMINATORS defines), never from the stored signal.
   const conc = (item.signals ?? []).filter((x) => x.rule === 'concentration' && x.value !== null && x.value !== undefined);
   for (const s of conc) {
-    const den = DENOMINATORS[s.denominator?.basis]?.label;
+    const den = CAPITAL[s.denominator?.basis];
     if (!den) continue;
-    if (s.test === 'construction') add(`Construction and land loans are ${pct(s.value, 0)} of ${den}, at or above the ${pct(s.threshold, 0)} concentration screen (${period}).`, [s.id, ...s.evidence]);
-    else if (s.test === 'cre' && s.growth !== null && s.growth !== undefined) add(`CRE loans as the 2006 interagency guidance counts them are ${pct(s.value, 0)} of ${den}, at or above ${pct(s.threshold, 0)}, and grew ${pct(s.growth, 0)} from ${periodLabel(s.baseRepdte)} to ${period}, at or above ${pct(s.growthThreshold, 0)}.`, [s.id, ...s.evidence]);
+    if (s.test === 'construction') add(`At ${period}, its construction and land loans are ${pct(s.value, 0)} of ${den}, at or above the ${pct(s.threshold, 0)} level that flags a bank for a closer look.`, [s.id, ...s.evidence]);
+    else if (s.test === 'cre' && s.growth !== null && s.growth !== undefined) add(`Its CRE loans, as regulators count them, are ${pct(s.value, 0)} of ${den}, at or above the ${pct(s.threshold, 0)} level that flags a bank for a closer look, and grew ${pct(s.growth, 0)} from ${periodLabel(s.baseRepdte)} to ${period} (the flag starts at ${pct(s.growthThreshold, 0)}).`, [s.id, ...s.evidence]);
   }
-  if (conc.length) add('The screen is the 2006 interagency guidance on CRE concentrations: it marks a bank for closer supervisory review, not a limit on its lending.', conc.map((s) => s.id));
+  if (conc.length) add('Regulators set these levels in their 2006 guidance on CRE concentrations, as a prompt for a closer look, not a limit on its lending.', conc.map((s) => s.id));
 
   // Structure events (event signals): an acquisition of a bank with a presence in the metros, dated, with the target's FDIC cert.
   for (const s of (item.signals ?? []).filter((x) => x.rule === 'acquisition').slice(0, lim.maxEvents)) {
@@ -172,13 +193,14 @@ export function buildCard(item, { scoring = {} } = {}) {
 
   // Timing: the metric signals that fired at this quarter, each from its rule type's template. A threshold signal for a level already stated adds nothing.
   for (const s of (item.signals ?? []).filter((x) => SIGNAL_TYPES.includes(x.rule) && !(x.rule === 'above' && statedLevels.has(x.metric))).slice(0, lim.maxSignals)) {
-    const label = METRICS[s.metric]?.label;
-    if (!label || s.value === null || s.value === undefined) continue;
+    const m = PLAIN_METRICS[s.metric];
+    if (!m || !METRICS[s.metric] || s.value === null || s.value === undefined) continue;
+    const at = `${fmtMetric(s.metric, s.value)}${m.of ? ` ${m.of}` : ''}`;
     let t;
-    if (s.rule === 'rising') t = s.quarters > 1 ? `${label} rose in each of the last ${s.quarters} quarters, to ${fmtMetric(s.metric, s.value)}.` : `${label} rose from the prior quarter, to ${fmtMetric(s.metric, s.value)}.`;
-    else if (s.rule === 'firstPositive') t = `${label}: above zero for the first time in ${s.lookback} quarters (${fmtMetric(s.metric, s.value)}).`;
-    else if (s.rule === 'above') t = `${label}: ${fmtMetric(s.metric, s.value)}, at or above ${fmtMetric(s.metric, s.threshold)}.`;
-    else if (s.rule === 'changeAbove') t = `${label} rose ${pts(s.change)} from ${s.over === 'yoy' ? 'four quarters earlier' : 'the prior quarter'}, to ${fmtMetric(s.metric, s.value)}.`;
+    if (s.rule === 'rising') t = s.quarters > 1 ? `${m.noun} rose in each of the last ${s.quarters} quarters, to ${at}.` : `${m.noun} rose from last quarter, to ${at}.`;
+    else if (s.rule === 'firstPositive') t = m.first ? `${m.first} ${s.lookback} quarters (${at}).` : `${m.noun} above zero for the first time in ${s.lookback} quarters (${at}).`;
+    else if (s.rule === 'above') t = `${m.noun}: ${at}, at or above ${fmtMetric(s.metric, s.threshold)}.`;
+    else if (s.rule === 'changeAbove') t = `${m.noun} rose ${pts(s.change)} ${s.over === 'yoy' ? 'in a year' : 'since last quarter'}, to ${at}.`;
     else continue;
     add(t, [s.id, ...s.evidence]);
   }
@@ -193,21 +215,8 @@ export function buildCard(item, { scoring = {} } = {}) {
 // it carries the ids it states (headlineEvidence). It is at most HEADLINE_MAX characters: a template whose closing figure would run
 // over drops that figure. The card's sentences are not changed by it.
 export const HEADLINE_MAX = 90;
-export const HEADLINE_METRICS = Object.freeze({
-  creLoans: { noun: 'CRE loans' },
-  creNoncurrentRatio: { noun: 'Seriously late CRE loans' },
-  creNonaccrualRatio: { noun: 'CRE loans not accruing' },
-  earlyStageDelinquency: { noun: 'CRE loans 30 to 89 days late' },
-  creOreo: { noun: 'Foreclosed commercial property', first: 'First foreclosed commercial property in' },
-  creOreoRatio: { noun: 'Foreclosed commercial property', of: 'of CRE loans' },
-  creNetChargeOffs: { noun: 'CRE write-offs this quarter', first: 'First CRE write-off in' },
-  creNetChargeOffRate: { noun: 'CRE write-offs this quarter', of: 'of CRE loans' },
-  investorCreShare: { noun: 'Investor-owned share of commercial property loans' },
-  creShareOfLoans: { noun: 'CRE share of all loans' },
-  mfNoncurrentRatio: { noun: 'Seriously late apartment loans' },
-  mfNonaccrualRatio: { noun: 'Apartment loans not accruing' },
-  mfEarlyStageDelinquency: { noun: 'Apartment loans 30 to 89 days late' },
-});
+// The plain name of each metric: the same words as the card and the signal titles (PLAIN_METRICS, src/metrics.mjs).
+export const HEADLINE_METRICS = PLAIN_METRICS;
 // Score components that are not a metric: the paper profile's measures and the deposit footprint.
 const HEADLINE_MEASURES = Object.freeze({
   buyboxNoncurrentRatio: (v) => `Seriously late loans at ${shortPct(v)} in the loan types we buy`,
@@ -215,8 +224,6 @@ const HEADLINE_MEASURES = Object.freeze({
   buyboxShareOfLoans: (v) => `Loan types we buy are ${shortPct(v)} of its loans`,
   footprint: (v) => `${shortPct(v)} of its deposits are in our metros`,
 });
-const COUNT_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
-const countWord = (n) => COUNT_WORDS[n] ?? String(n);
 const SHORT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const isDay = (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d));
 const shortDate = (d) => `${SHORT_MONTHS[Number(d.slice(5, 7)) - 1]} ${Number(d.slice(8, 10))}, ${d.slice(0, 4)}`;

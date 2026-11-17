@@ -28,16 +28,37 @@ export const METRICS = {
   mfEarlyStageDelinquency: { label: 'Multifamily early-stage delinquency (30 to 89 days past due)', kind: 'ratio', num: ['P3REMULT'], den: ['LNREMULT'], sector: 'multifamily' },
 };
 
+// Plain names for each metric, in the glossary's words (docs/design-redesign.md 6, web/lib/glossary.mjs), for every line a principal
+// reads that the engine writes: the "why now" card and its headline (src/candidates.mjs) and each signal's title. `of` says what a share
+// is of where the name alone does not; `first` opens a line saying the value is above zero for the first time. The labels above keep the
+// Call Report's terms, for the score's record and the CLI.
+export const PLAIN_METRICS = Object.freeze({
+  creLoans: Object.freeze({ noun: 'CRE loans' }),
+  creNoncurrentRatio: Object.freeze({ noun: 'Seriously late CRE loans' }),
+  creNonaccrualRatio: Object.freeze({ noun: 'CRE loans not accruing' }),
+  earlyStageDelinquency: Object.freeze({ noun: 'CRE loans 30 to 89 days late' }),
+  creOreo: Object.freeze({ noun: 'Foreclosed commercial property', first: 'First foreclosed commercial property in' }),
+  creOreoRatio: Object.freeze({ noun: 'Foreclosed commercial property', of: 'of CRE loans' }),
+  creNetChargeOffs: Object.freeze({ noun: 'CRE write-offs this quarter', first: 'First CRE write-off in' }),
+  creNetChargeOffRate: Object.freeze({ noun: 'CRE write-offs this quarter', of: 'of CRE loans' }),
+  investorCreShare: Object.freeze({ noun: 'Investor-owned share of commercial property loans' }),
+  creShareOfLoans: Object.freeze({ noun: 'CRE share of all loans' }),
+  mfNoncurrentRatio: Object.freeze({ noun: 'Seriously late apartment loans' }),
+  mfNonaccrualRatio: Object.freeze({ noun: 'Apartment loans not accruing' }),
+  mfEarlyStageDelinquency: Object.freeze({ noun: 'Apartment loans 30 to 89 days late' }),
+});
+
 // The CRE categories of the paper profile (PRD E6-S6), with the Call Report field for each balance and stage of distress.
 // `null` = no field for that stage in the set pulled (PRD Appendix A). The construction 30-89 and 90+ fields (P3RECONS, P9RECONS) are pulled
 // since E14-S1 and were checked live as filled (2026-11-14). `sectors` = the buy-box sectors that category can contain:
 // nonfarm nonresidential holds hotel AND retail (and office, industrial and other commercial property), which the data cannot separate.
+// `plain` is the glossary's name for the card ("Apartment loans are ..."); `label` and `short` keep the Call Report's, for the record.
 export const CATEGORIES = [
-  { id: 'construction', label: 'Construction and land development', short: 'Construction and land', balance: 'LNRECONS', sectors: [],
+  { id: 'construction', label: 'Construction and land development', short: 'Construction and land', plain: 'Construction and land', balance: 'LNRECONS', sectors: [],
     stages: { pastDue30to89: 'P3RECONS', pastDue90: 'P9RECONS', nonaccrual: 'NARECONS', noncurrent: 'NCRECONS', oreo: 'ORECONS', chargeOffsQuarter: 'NTRECONQ' } },
-  { id: 'multifamily', label: 'Multifamily', short: 'Multifamily', balance: 'LNREMULT', sectors: ['multifamily'],
+  { id: 'multifamily', label: 'Multifamily', short: 'Multifamily', plain: 'Apartment', balance: 'LNREMULT', sectors: ['multifamily'],
     stages: { pastDue30to89: 'P3REMULT', pastDue90: 'P9REMULT', nonaccrual: 'NAREMULT', noncurrent: 'NCREMULT', oreo: 'OREMULT', chargeOffsQuarter: 'NTREMULQ' } },
-  { id: 'nonfarmNonresidential', label: 'Nonfarm nonresidential (hotel, retail, office and other commercial property, not separable)', short: 'Nonfarm nonresidential', balance: 'LNRENRES', sectors: ['hospitality', 'retail'],
+  { id: 'nonfarmNonresidential', label: 'Nonfarm nonresidential (hotel, retail, office and other commercial property, not separable)', short: 'Nonfarm nonresidential', plain: 'Commercial property', balance: 'LNRENRES', sectors: ['hospitality', 'retail'],
     stages: { pastDue30to89: 'P3RENRES', pastDue90: 'P9RENRES', nonaccrual: 'NARENRES', noncurrent: 'NCRENRES', oreo: 'ORENRES', chargeOffsQuarter: 'NTRENRSQ' },
     split: [{ id: 'ownerOccupied', label: 'Owner-occupied', balance: 'LNRENROW', noncurrent: 'NCRENROW' }, { id: 'other', label: 'Other (non-owner-occupied)', balance: 'LNRENROT', noncurrent: 'NCRENROT' }] },
 ];
@@ -113,6 +134,40 @@ export const SIGNAL_KINDS = ['state', 'event'];
 //   changeAbove:   the metric's change (`over`: qoq or yoy) is at or above `threshold`
 export const SIGNAL_TYPES = ['rising', 'firstPositive', 'above', 'changeAbove'];
 
+// An amount in thousands of dollars, as the FDIC reports it, in words: "$4.0 million".
+export const amountWords = (k) => { const s = k < 0 ? 'minus ' : ''; const a = Math.abs(k); return a >= 1e6 ? `${s}$${(a / 1e6).toFixed(1)} billion` : a >= 1e3 ? `${s}$${(a / 1e3).toFixed(1)} million` : `${s}$${a} thousand`; };
+const COUNT_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
+export const countWord = (n) => COUNT_WORDS[n] ?? String(n);
+const isFiniteNum = (v) => typeof v === 'number' && Number.isFinite(v);
+const levelWords = (metric, v) => (METRICS[metric].kind === 'amount' ? amountWords(v) : `${Number((v * 100).toFixed(2))}%`);
+const pointWords = (v) => { const x = Number((v * 100).toFixed(2)); return `${x} point${x === 1 ? '' : 's'}`; };
+
+// A signal's title, as the bank page's Signals list and the weekly triage show it: built in code from the rule's own type, metric and
+// thresholds in the glossary's words, so it always matches what the rule tests. The rule's `label` in scoring.json is the fallback, for a
+// rule these templates cannot state; scoring.json itself is left as it is, so its hash, which the calibration's holdout record keys on,
+// does not move for a change of words. Concentration rules (`test`) and metric rules (`type`) both come here.
+export function signalTitle(rule) {
+  if (!rule || typeof rule !== 'object') return null;
+  if (rule.test !== undefined) {
+    if (!isFiniteNum(rule.threshold)) return null;
+    const of = `${(rule.threshold * 100).toFixed(0)}% of capital`;
+    if (rule.test === 'construction') return `Construction and land loans at or above ${of} (regulators' flag)`;
+    if (rule.test === 'cre' && isFiniteNum(rule.growthThreshold)) return `CRE loans at or above ${of} and up ${(rule.growthThreshold * 100).toFixed(0)}% or more in ${countWord(CONCENTRATION.growthQuarters / 4)} years (regulators' flag)`;
+    return null;
+  }
+  const m = PLAIN_METRICS[rule.metric];
+  if (!m || !METRICS[rule.metric]) return null;
+  if (rule.type === 'rising') { const n = rule.quarters ?? 1; return Number.isInteger(n) && n > 1 ? `${m.noun} up ${countWord(n)} quarters running` : `${m.noun} up from last quarter`; }
+  if (rule.type === 'firstPositive') { const k = rule.lookback ?? 8; return !Number.isInteger(k) ? null : m.first ? `${m.first} ${countWord(k)} quarters` : `${m.noun} above zero for the first time in ${countWord(k)} quarters`; }
+  if (rule.type === 'above') return isFiniteNum(rule.threshold) ? `${m.noun} at or above ${levelWords(rule.metric, rule.threshold)}${m.of ? ` ${m.of}` : ''}` : null;
+  if (rule.type === 'changeAbove') {
+    if (!isFiniteNum(rule.threshold)) return null;
+    const by = METRICS[rule.metric].kind === 'amount' ? amountWords(rule.threshold) : pointWords(rule.threshold);
+    return `${m.noun} up ${by} or more ${rule.over === 'yoy' ? 'in a year' : 'since last quarter'}`;
+  }
+  return null;
+}
+
 export function detectSignals(series, rules = []) {
   const out = [];
   const L = series?.latest;
@@ -142,7 +197,7 @@ export function detectSignals(series, rules = []) {
       if (c !== null && c !== undefined && c >= rule.threshold) { fired = [shiftQuarter(L, over === 'yoy' ? -4 : -1), L]; extra = { over, change: c, threshold: rule.threshold }; }
     } else throw new Error(`Signal rule "${rule.id}" has unknown type "${rule.type}". Types: ${SIGNAL_TYPES.join(', ')}.`);
     // `rule`, `metric`, `value` and the extras let the card state the signal from a fixed template, without the rule's free-text label.
-    if (fired) out.push({ id: `fdic:${series.cert}:${rule.id}:${L}`, type: rule.id, kind: 'state', label: rule.label, period: L, evidence: ev(fired), rule: rule.type, metric: rule.metric, value: val(L, rule.metric), ...extra });
+    if (fired) out.push({ id: `fdic:${series.cert}:${rule.id}:${L}`, type: rule.id, kind: 'state', label: signalTitle(rule) ?? rule.label, period: L, evidence: ev(fired), rule: rule.type, metric: rule.metric, value: val(L, rule.metric), ...extra });
   }
   return out;
 }
@@ -249,7 +304,7 @@ export function detectConcentrationSignals(conc, rules = [], cert) {
       extra = { growth: g, growthThreshold: rule.growthThreshold, baseRepdte: conc.baseRepdte };
       evidence = [rec(conc.baseRepdte), rec(L)];
     }
-    if (fired) out.push({ id: `fdic:${cert}:${rule.id}:${L}`, type: rule.id, kind: 'state', label: rule.label, period: L, evidence, rule: 'concentration', test: rule.test,
+    if (fired) out.push({ id: `fdic:${cert}:${rule.id}:${L}`, type: rule.id, kind: 'state', label: signalTitle(rule) ?? rule.label, period: L, evidence, rule: 'concentration', test: rule.test,
       value: r.value, threshold: rule.threshold, denominator: { basis: conc.denominator.basis, label: conc.denominator.label }, ...extra });
   }
   return out;

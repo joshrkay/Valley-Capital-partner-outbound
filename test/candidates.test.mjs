@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { makeDir, put, loadJson } from './kit.mjs';
 import { runScoring } from '../src/score.mjs';
 import { buildCard, listCandidates, promote, dismiss, snooze, matchInstitution, addAlias, suppressedBy, leadSectorFor, getCandidate, HEADLINE_METRICS, HEADLINE_MAX } from '../src/candidates.mjs';
-import { MONTH_NAMES, METRICS } from '../src/metrics.mjs';
+import { MONTH_NAMES, METRICS, signalTitle } from '../src/metrics.mjs';
 
 const metros = loadJson('metros.json');
 const scoring = () => structuredClone(loadJson('scoring.json'));
@@ -48,8 +48,8 @@ test('the card: every sentence carries evidence, it states the period, it leads 
   for (const s of card.sentences) assert.ok(s.evidence.length > 0, `no evidence: ${s.text}`);
   assert.equal(card.period, 'June 30, 2026');
   assert.match(card.sentences[0].text, /as of June 30, 2026/);
-  assert.match(card.sentences[1].text, /^Multifamily loans are 30\.00% of its CRE book \(\$300\.0 million\); their noncurrent ratio is 7\.50%, up from 4\.17% four quarters earlier\.$/, 'leads with the most distressed category the buy box buys');
-  assert.ok(card.sentences.some((s) => /^Branches in the buy-box metros: 12 in Phoenix, 3 in Las Vegas; 60% of its deposits are there/.test(s.text)));
+  assert.match(card.sentences[1].text, /^Apartment loans are 30\.00% of its CRE book \(\$300\.0 million\); 7\.50% of them are seriously late, up from 4\.17% a year earlier\.$/, 'leads with the most distressed category the buy box buys');
+  assert.ok(card.sentences.some((s) => /^Branches in our metros: 12 in Phoenix, 3 in Las Vegas; 60% of its deposits are there \(FDIC Summary of Deposits, June 30, 2026\)\.$/.test(s.text)));
   assert.ok(card.sentences[1].evidence.includes('fdic:1:20260630') && card.sentences[1].evidence.includes('fdic:1:20250630'));
   const sig = card.sentences.find((s) => s.evidence.some((e) => /:cre-noncurrent-rising:/.test(e)));
   assert.ok(sig, 'a signal sentence cites its signal id');
@@ -58,11 +58,11 @@ test('the card: every sentence carries evidence, it states the period, it leads 
   assert.deepEqual(buildCard(it, { scoring: scoring() }), card);
 });
 
-test('the card for nonfarm nonresidential paper says hotel and retail cannot be separated', () => {
+test('the card for commercial property (nonfarm nonresidential) paper says hotel and retail cannot be separated', () => {
   const { out } = world([{ cert: '1', name: 'Alpha Example Bank', fn: nfDistress }]);
   const first = out.items[0].card.sentences[1].text;
-  assert.match(first, /^Nonfarm nonresidential loans are 60\.00% of its CRE book/);
-  assert.match(first, /cannot separate hotel or retail loans/);
+  assert.match(first, /^Commercial property loans are 60\.00% of its CRE book/);
+  assert.match(first, /These include office and other commercial loans, and public reports do not split out hotel or retail loans\.$/);
 });
 
 test('no template can emit a property, borrower, filing or free-text label: only code-defined words, numbers, the bank and metro names', () => {
@@ -71,11 +71,11 @@ test('no template can emit a property, borrower, filing or free-text label: only
   // Plant hostile text everywhere a careless template might read it.
   it.borrower = 'Sunset Motor Inn LLC'; it.property = 'Harbor View Plaza'; it.filing = 'Case 2026-CV-1234 Smith v Jones';
   it.signals.forEach((s) => { s.label = 'Sunset Motor Inn foreclosure filed by Harbor View Plaza'; });
-  it.components.forEach((c) => { c.note = 'Harbor View Plaza'; c.inputs.forEach((x) => { x.note = 'Sunset Motor Inn'; }); });
+  it.components.forEach((c) => { c.label = 'Harbor View Plaza'; c.note = 'Harbor View Plaza'; c.inputs.forEach((x) => { x.note = 'Sunset Motor Inn'; }); });
   it.profile.categories.forEach((c) => { c.fit.reason = 'Sunset Motor Inn LLC'; });
   const card = buildCard(it, { scoring: scoring() });
   for (const bad of ['Sunset', 'Harbor', 'Motor', 'Smith', 'Jones', 'CV', 'foreclosure', 'filed']) assert.ok(!card.text.includes(bad), `"${bad}" leaked into the card`);
-  const allowed = new Set(['Alpha', 'Example', 'Bank', 'Call', 'Report', 'CRE', 'OREO', 'Multifamily', 'Nonfarm', 'Construction', 'Branches', 'Summary', 'Deposits', 'June', 'None', 'This', 'Noncurrent', 'Early-stage', 'Commercial', 'Share', 'Phoenix', 'Las', 'Vegas', ...MONTH_NAMES, ...metros.metros.flatMap((m) => m.label.split(' '))]);
+  const allowed = new Set(['Alpha', 'Example', 'Bank', 'Call', 'Report', 'CRE', 'FDIC', 'Apartment', 'Commercial', 'Construction', 'These', 'Branches', 'Summary', 'Deposits', 'None', 'Seriously', 'Foreclosed', 'First', 'Loan', 'Share', ...MONTH_NAMES, ...metros.metros.flatMap((m) => m.label.split(' '))]);
   for (const w of card.text.match(/\b[A-Z][A-Za-z-]*\b/g) ?? []) assert.ok(allowed.has(w), `unexpected capitalized word "${w}"`);
 });
 
@@ -86,16 +86,17 @@ test('the concentration and acquisition sentences come from fixed templates: the
   put(dir, 'sources/fdic/events.json', { 2026000777: { transnum: '2026000777', code: 211, kind: 'failure', effective: '2026-09-25', acquirerCert: '1', targetCert: '777', targetInMetros: true, targetMetros: [{ cbsa: '29820', branches: null, basis: ['main office'] }], targetLastCre: null, _source: src } });
   const it = structuredClone(runScoring({ dir, buybox: buybox(), scoring: scoring(), metros, now: NOW }).items[0]);
   const card = buildCard(it, { scoring: scoring() });
-  assert.match(card.text, /Construction and land loans are 182% of tier 1 capital plus the allowance for credit losses \(the bank uses the community bank leverage ratio, so it reports no total risk-based capital\), at or above the 100% concentration screen/);
-  assert.match(card.text, /CRE loans as the 2006 interagency guidance counts them are 514% of tier 1 capital plus the allowance/);
-  assert.match(card.text, /grew 105% from June 30, 2023 to June 30, 2026, at or above 50%\./);   // 1,130,000 against 550,000
+  assert.match(card.text, /At June 30, 2026, its construction and land loans are 182% of its capital \(tier 1 plus loan-loss reserves, as it uses the community bank leverage ratio\), at or above the 100% level that flags a bank for a closer look\./);
+  assert.match(card.text, /Its CRE loans, as regulators count them, are 514% of its capital \(tier 1 plus loan-loss reserves, as it uses the community bank leverage ratio\), at or above the 300% level that flags a bank for a closer look/);
+  assert.match(card.text, /and grew 105% from June 30, 2023 to June 30, 2026 \(the flag starts at 50%\)\./);   // 1,130,000 against 550,000
+  assert.match(card.text, /Regulators set these levels in their 2006 guidance on CRE concentrations, as a prompt for a closer look, not a limit on its lending\./);
   assert.match(card.text, /It took over a failed bank \(FDIC cert 777\) with its main office in Las Vegas, effective September 25, 2026\./);
   for (const s of card.sentences) assert.ok(s.evidence.length > 0, s.text);
   // Plant hostile text where a careless template might read it.
   it.signals.forEach((s) => { s.label = 'Sunset Motor Inn foreclosure'; if (s.denominator) s.denominator.label = 'Harbor View Plaza'; (s.metros ?? []).forEach((m) => { m.basis = ['Smith v Jones']; }); });
   const hostile = buildCard(it, { scoring: scoring() });
   for (const bad of ['Sunset', 'Harbor', 'Smith', 'Jones', 'foreclosure']) assert.ok(!hostile.text.includes(bad), `"${bad}" leaked into the card`);
-  const allowed = new Set(['Alpha', 'Example', 'Bank', 'Call', 'Report', 'CRE', 'Construction', 'Multifamily', 'Nonfarm', 'None', 'This', 'Branches', 'Summary', 'Deposits', 'It', 'FDIC', 'That', 'The', 'Noncurrent', 'Early-stage', 'Commercial', 'Share', ...MONTH_NAMES, ...metros.metros.flatMap((m) => m.label.split(' '))]);
+  const allowed = new Set(['Alpha', 'Example', 'Bank', 'Call', 'Report', 'CRE', 'FDIC', 'Apartment', 'Commercial', 'Construction', 'These', 'Branches', 'Summary', 'Deposits', 'None', 'Seriously', 'Foreclosed', 'First', 'Loan', 'Share', 'It', 'Its', 'At', 'That', 'Regulators', ...MONTH_NAMES, ...metros.metros.flatMap((m) => m.label.split(' '))]);
   for (const w of hostile.text.match(/\b[A-Z][A-Za-z-]*\b/g) ?? []) assert.ok(allowed.has(w), `unexpected capitalized word "${w}"`);
 });
 
@@ -295,4 +296,46 @@ test('the headline is code\'s words only: no stored label, property or borrower 
   const long = headline([sig({ rule: 'changeAbove', metric: 'investorCreShare', value: 0.667, change: 0.125, over: 'qoq', threshold: 0.1 })]);
   assert.equal(long, 'Investor-owned share of commercial property loans up 12.5 points since last quarter');
   assert.ok(long.length <= HEADLINE_MAX);
+});
+
+// The regulators' terms the glossary replaces (docs/design-redesign.md 6). A principal-facing line may use one only inside a parenthesis
+// that explains it, as the glossary does ("seriously late (the FDIC calls these noncurrent)").
+const JARGON = /noncurrent ratio|nonfarm nonresidential|\bOREO\b|charge-off|delinquency|interagency|\bnoncurrent\b|\bnonaccrual\b|multifamily|past due/i;
+const outsideParens = (t) => { let s = String(t); for (let prev = null; prev !== s;) { prev = s; s = s.replace(/\([^()]*\)/g, ''); } return s; };
+
+test('the card, its headline and every signal title speak plain English: no regulators\' term outside a parenthesis that explains it', () => {
+  const texts = [];
+  const take = (card) => { texts.push(card.text, card.headline ?? '', ...card.sentences.map((s) => s.text)); };
+  // Whole cards: apartment and commercial property paper, then a bank on the community bank leverage ratio that meets both concentration
+  // tests and took over a failed bank.
+  for (const fn of [mfDistress, nfDistress]) take(world([{ cert: '1', name: 'Alpha Example Bank', fn }]).out.items[0].card);
+  const { dir } = world([{ cert: '1', name: 'Alpha Example Bank' }]);
+  put(dir, 'sources/fdic/financials/1.json', { CERT: '1', quarters: quarters(() => ({ RBC: 0, RBCT1J: 200000, LNATRES: 20000, CBLRIND: 1, LNCOMRE: 30000, LNRECONS: 400000 })), growthBase: { 20230630: { REPDTE: '20230630', LNRECONS: 100000, LNREMULT: 200000, LNRENROT: 250000, LNCOMRE: 0, _source: src } } });
+  put(dir, 'sources/fdic/events.json', { 2026000777: { transnum: '2026000777', code: 211, kind: 'failure', effective: '2026-09-25', acquirerCert: '1', targetCert: '777', targetInMetros: true, targetMetros: [{ cbsa: '29820', branches: null, basis: ['main office'] }], targetLastCre: null, _source: src } });
+  const cblr = runScoring({ dir, buybox: buybox(), scoring: scoring(), metros, now: NOW }).items[0];
+  assert.ok(cblr.signals.some((s) => s.test === 'cre') && cblr.signals.some((s) => s.test === 'construction'), 'both concentration tests fired');
+  take(cblr.card);
+  // Every template on every metric: each signal rule type, and each distress component as a level and as a change.
+  for (const metric of Object.keys(METRICS)) {
+    const amount = METRICS[metric].kind === 'amount';
+    const signals = [
+      sig({ type: 'r1', rule: 'rising', metric, value: 0.04, quarters: 1 }), sig({ type: 'r2', rule: 'rising', metric, value: 0.04, quarters: 2 }),
+      sig({ type: 'fp', rule: 'firstPositive', metric, value: 300, lookback: 8 }), sig({ type: 'ab', rule: 'above', metric, value: 0.05, threshold: amount ? 1000 : 0.03 }),
+      sig({ type: 'ca', rule: 'changeAbove', metric, value: 0.05, change: 0.012, over: 'yoy', threshold: 0.01 }), sig({ type: 'cq', rule: 'changeAbove', metric, value: 0.05, change: 0.012, over: 'qoq', threshold: 0.01 }),
+    ];
+    const comps = [null, 'qoq', 'yoy'].map((change, i) => ({ id: `${metric}-${i}`, axis: 'distress', metric, change, value: 0.02, points: 3 - i, inputs: [] }));
+    take(buildCard(bare(signals, comps), { scoring: { card: { maxSignals: 10, maxDistress: 10 } } }));
+    for (const s of signals) take(buildCard(bare([s]), { scoring: scoring() }));
+  }
+  for (const measure of ['buyboxNoncurrentRatio', 'buyboxCreShare', 'buyboxShareOfLoans', 'footprint']) take(buildCard(bare([], [{ id: measure, axis: 'distress', metric: measure, change: null, value: 0.3, points: 5, inputs: [] }]), { scoring: scoring() }));
+  // The signal titles the bank page lists: every rule in scoring.json, and every rule type on every metric.
+  const rules = [...scoring().signals, ...scoring().concentration.signals, ...Object.keys(METRICS).flatMap((metric) => ['rising', 'firstPositive', 'above', 'changeAbove'].flatMap((type) => [{ type, metric, quarters: 2, lookback: 8, threshold: 0.01, over: 'yoy' }, { type, metric, quarters: 1, threshold: 0.02, over: 'qoq' }]))];
+  for (const r of rules) { const t = signalTitle(r); assert.ok(t, `no title for ${JSON.stringify(r)}`); texts.push(t); }
+  for (const s of [...cblr.signals]) texts.push(s.label);
+  assert.ok(texts.length > 200, `${texts.length}`);
+  for (const t of texts) assert.doesNotMatch(outsideParens(t), JARGON, t);
+  // The check itself: it catches the old wording, and lets a term stand inside a parenthesis that explains it.
+  assert.match(outsideParens('Multifamily loans are 30.00% of its CRE book; their noncurrent ratio is 7.50%.'), JARGON);
+  assert.match(outsideParens('Commercial OREO up from last quarter'), JARGON);
+  assert.doesNotMatch(outsideParens('4.85% are seriously late (the FDIC calls these noncurrent).'), JARGON);
 });

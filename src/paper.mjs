@@ -123,15 +123,15 @@ const NOT_PULLED = (reason) => ({ status: 'not-pulled', reason });
 const CO_SPLIT = 'Charge-offs are reported each quarter for nonfarm nonresidential as a whole (see its total); the owner-occupied and other split exists only year to date (NTRENROW, NTRENROT), not pulled.';
 // The categories of Q1, with the stages FDIC reports for each (docs/paper-estimate.md 5.Q1, checked against FDIC's definitions).
 export const Q1_CATEGORIES = Object.freeze([
-  { id: 'construction', label: 'Construction and land development', investor: true, balance: 'LNRECONS',
+  { id: 'construction', label: 'Construction and land', investor: true, balance: 'LNRECONS',
     stages: { pastDue30to89: 'P3RECONS', pastDue90: 'P9RECONS', nonaccrual: 'NARECONS' }, chargeOffs: 'NTRECONQ',
     split: [{ id: 'otherConstruction', label: 'Other construction and land', balance: 'LNRECNOT' }, { id: 'oneToFourFamilyConstruction', label: '1-4 family construction', balance: 'LNRECNFM' }] },
-  { id: 'multifamily', label: 'Multifamily', investor: true, balance: 'LNREMULT', stages: { pastDue30to89: 'P3REMULT', pastDue90: 'P9REMULT', nonaccrual: 'NAREMULT' }, chargeOffs: 'NTREMULQ' },
-  { id: 'nonfarmNonresidentialOther', label: 'Nonfarm nonresidential, other (not owner-occupied)', investor: true, balance: 'LNRENROT',
+  { id: 'multifamily', label: 'Apartments', investor: true, balance: 'LNREMULT', stages: { pastDue30to89: 'P3REMULT', pastDue90: 'P9REMULT', nonaccrual: 'NAREMULT' }, chargeOffs: 'NTREMULQ' },
+  { id: 'nonfarmNonresidentialOther', label: 'Commercial property, investor-owned', investor: true, balance: 'LNRENROT',
     stages: { pastDue30to89: 'P3RENROT', pastDue90: 'P9RENROT', nonaccrual: 'NARENROT' }, chargeOffs: NOT_PULLED(CO_SPLIT) },
-  { id: 'nonfarmNonresidentialOwnerOccupied', label: 'Nonfarm nonresidential, owner-occupied', investor: false, balance: 'LNRENROW',
+  { id: 'nonfarmNonresidentialOwnerOccupied', label: 'Commercial property, owner-occupied', investor: false, balance: 'LNRENROW',
     stages: { pastDue30to89: 'P3RENROW', pastDue90: 'P9RENROW', nonaccrual: 'NARENROW' }, chargeOffs: NOT_PULLED(CO_SPLIT) },
-  { id: 'notSecuredByRealEstate', label: 'CRE loans not secured by real estate', investor: true, balance: 'LNCOMRE',
+  { id: 'notSecuredByRealEstate', label: 'CRE loans without a property lien', investor: true, balance: 'LNCOMRE',
     stages: { pastDue30to89: 'P3COMRE', pastDue90: NOT_REPORTED('FDIC reports no 90+ days past due field for CRE loans not secured by real estate.'), nonaccrual: NOT_REPORTED('FDIC reports no nonaccrual field for CRE loans not secured by real estate.') },
     chargeOffs: NOT_PULLED('FDIC reports charge-offs on this line only year to date (NTCOMRE), which is not pulled.'),
     note: 'P3COMRE is titled only "30-89 days past due, commercial RE" by FDIC. It is taken as this line\'s 30-89 stage because, checked live on every bank on November 14, 2026, it was never above LNCOMRE and never above 0 where LNCOMRE is 0.' },
@@ -141,10 +141,10 @@ export const STAGE_LABELS = Object.freeze({ pastDue30to89: '30-89 days past due'
 // three loan stages are the disjoint buckets FDIC reports per CRE line (the stages above); `oreo` is foreclosed property the bank owns, by
 // property type (q1.oreo): property, not loans, so it never enters a loan share. validateBuybox (src/score.mjs) checks the mapping.
 export const STATUS_STAGES = Object.freeze({
-  pastDue30to89: Object.freeze({ label: '30-89 days past due', loan: true }),
-  pastDue90: Object.freeze({ label: '90 days or more past due (still accruing)', loan: true }),
-  nonaccrual: Object.freeze({ label: 'nonaccrual', loan: true }),
-  oreo: Object.freeze({ label: 'foreclosed property the bank owns (OREO)', loan: false }),
+  pastDue30to89: Object.freeze({ label: '30 to 89 days late', loan: true }),
+  pastDue90: Object.freeze({ label: '90+ days late and still accruing', loan: true }),
+  nonaccrual: Object.freeze({ label: 'not accruing', loan: true }),
+  oreo: Object.freeze({ label: 'foreclosed property the bank owns', loan: false }),
 });
 export const STATUS_STAGE_IDS = Object.freeze(Object.keys(STATUS_STAGES));
 const LOAN_STAGE_IDS = STATUS_STAGE_IDS.filter((id) => STATUS_STAGES[id].loan);
@@ -265,7 +265,7 @@ function q1Block(ctx, events) {
   const byTypeAt = (rep) => [
     { id: 'construction', label: 'Construction and land development', field: 'RSCONS' }, { id: 'multifamily', label: 'Multifamily', field: 'RSMULT' },
     { id: 'nonfarmNonresidential', label: 'Nonfarm nonresidential (owner-occupied and other together)', field: 'RSNRES' },
-    { id: 'nonaccrualNonfarmNonresidential', label: 'Of which nonaccrual, nonfarm nonresidential', field: 'NARSNRES' },
+    { id: 'nonaccrualNonfarmNonresidential', label: 'Of which not accruing, commercial property', field: 'NARSNRES' },
     { id: 'allOther', label: 'All other loans (not CRE)', field: 'RSOTHER' },
   ].map((t) => ({ ...t, value: { ...semiannualOnly(rep, t.field), basis: rep ? rsBasis(rep) : null } }));
   const semiReps = ctx.reps.filter(isSemiannualReport);
@@ -417,7 +417,7 @@ function q6Block(ctx, events, filings) {
   // Earlier quarters in the window with distressed loans held for sale: the strongest seller signal when present.
   for (const r of ctx.reps.filter((x) => x !== L)) {
     const na = fromFields(ctx, r, ['NALNSALE']), p9 = fromFields(ctx, r, ['P9LNSALE']);
-    if ((na.value ?? 0) > 0 || (p9.value ?? 0) > 0) items.push({ type: 'distressed-held-for-sale', date: iso(r), label: 'Distressed loans held for sale (nonaccrual or 90+ days past due)', values: { nonaccrual: na, pastDue90: p9 }, tier: 'reported', sources: [...na.sources, ...p9.sources], method: 'fdic-field' });
+    if ((na.value ?? 0) > 0 || (p9.value ?? 0) > 0) items.push({ type: 'distressed-held-for-sale', date: iso(r), label: 'Distressed loans held for sale (not accruing or 90+ days late)', values: { nonaccrual: na, pastDue90: p9 }, tier: 'reported', sources: [...na.sources, ...p9.sources], method: 'fdic-field' });
   }
   for (const f of filings ?? []) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(f.fileDate))) continue;
@@ -565,7 +565,7 @@ export function statusEligible(lines, stageIds) {
 
 // The Q1 lines inside each sector's category, whose stages give its status, and its foreclosed property (OREO) field.
 const CATEGORY_LINES = Object.freeze({ multifamily: ['multifamily'], nonfarmNonresidential: ['nonfarmNonresidentialOther', 'nonfarmNonresidentialOwnerOccupied'] });
-const CATEGORY_LABEL = Object.freeze({ multifamily: 'Multifamily', nonfarmNonresidential: 'Nonfarm nonresidential' });
+const CATEGORY_LABEL = Object.freeze({ multifamily: 'Apartment', nonfarmNonresidential: 'Commercial property' });
 const CATEGORY_OREO = Object.freeze({ multifamily: 'OREMULT', nonfarmNonresidential: 'ORENRES' });
 
 // The sector's foreclosed property (OREO) as its own in-box figure: a stock at the report date, never added to a loan share or the loan
@@ -620,17 +620,17 @@ function q7Block(ctx, q1, q3, q4, buybox, placeholders) {
     if (cat === 'multifamily') {
       const s = share(fromFields(ctx, L, ['LNREMULT']), book);
       if (isGap(s)) notUsed.push({ id: 'category', reason: s.reason });
-      else cond('category', 'Multifamily share of the CRE book', s.value, s.value, 'Multifamily has its own Call Report line.', s.sources, s.asOf, s.tier);
+      else cond('category', 'Apartments as a share of the CRE book', s.value, s.value, 'Multifamily has its own Call Report line.', s.sources, s.asOf, s.tier);
     } else {
       const s = share(nfnr, book);
       why = `${SECTOR_LABEL[sector]} loans are inside nonfarm nonresidential, together with office, industrial and other commercial property, and Call Report data cannot split them. Their share is unknown: anywhere from none to all of nonfarm nonresidential. So the upper bound takes all of nonfarm nonresidential as the category's share, and the lower bound is 0.`;
       if (isGap(s)) notUsed.push({ id: 'category', reason: s.reason });
-      else cond('category', `${SECTOR_LABEL[sector]} share of the CRE book: unknown, between 0 and the nonfarm nonresidential share`, 0, s.value, why, s.sources, s.asOf, 'inferred');
+      else cond('category', `${SECTOR_LABEL[sector]} share of the CRE book: unknown, between 0 and the commercial property share`, 0, s.value, why, s.sources, s.asOf, 'inferred');
     }
     // 2. The metro, by the deposit proxy.
     const m = q3.buyboxShare;
-    if (isGap(m)) unknownCond('metro', 'metro', 'Share in the buy-box metros: unknown (no usable deposit data), so between 0 and all', `${m.reason} A loan's location is unknown without it.`);
-    else cond('metro', 'Share in the buy-box metros, by the deposit proxy', m.value, m.value, 'Deposits in the buy-box metros as a share of all deposits (Summary of Deposits), applied to the CRE book: a proxy, not loans.', m.sources, m.asOf, 'inferred');
+    if (isGap(m)) unknownCond('metro', 'metro', 'Share in our metros: unknown (no usable deposit data), so between 0 and all', `${m.reason} A loan's location is unknown without it.`);
+    else cond('metro', 'Share in our metros, with deposits standing in for loans', m.value, m.value, 'Deposits in the buy-box metros as a share of all deposits (Summary of Deposits), applied to the CRE book: a proxy, not loans.', m.sources, m.asOf, 'inferred');
     // 3. Size: measured for nonfarm nonresidential, from the size buckets; unknown for multifamily, which has no size data.
     const size = buyboxRestricts(buybox, 'size');
     const sizeUnknown = (reason) => unknownCond('size', 'loan size', 'Share in the buy box\'s loan size range: unknown, so between 0 and all', `${reason}${also(size)}`);
@@ -646,7 +646,7 @@ function q7Block(ctx, q1, q3, q4, buybox, placeholders) {
       // later quarter's balance, that mix is an assumption: inferred.
       const scale = nfnr.value / S.value / book.value;
       const sameDate = S.asOf === nfnr.asOf;
-      cond('size', `Nonfarm nonresidential loans that can be in the buy box's size range ($${loanSize.minUsd.toLocaleString('en-US')} to $${loanSize.maxUsd.toLocaleString('en-US')})`, iv.lowDollars * scale, iv.highDollars * scale,
+      cond('size', `Commercial property loans that can be in the buy box's size range ($${loanSize.minUsd.toLocaleString('en-US')} to $${loanSize.maxUsd.toLocaleString('en-US')})`, iv.lowDollars * scale, iv.highDollars * scale,
         `From the size buckets (original amounts; a current balance is at most its original amount). Buckets that may hold loans in range: ${iv.may.join(', ') || 'none'}; wholly in range: ${iv.surely.join(', ') || 'none'}.${sameDate ? '' : ` The ${periodLabel(compact(S.asOf))} size mix is applied to the ${periodLabel(compact(nfnr.asOf))} balance.`}`,
         [...q4.buckets.flatMap((b) => b.dollars.sources), ...q4.over1m.dollars.sources, ...nfnr.sources, ...book.sources], q4.asOf, sameDate ? 'reported' : 'inferred');
     }
