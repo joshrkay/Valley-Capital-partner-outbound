@@ -13,7 +13,7 @@ import { saleSignals } from './sales.mjs';
 import { enforcementSignals } from './sources/enforcement.mjs';
 import { mergerSignals } from './sources/mergerapps.mjs';
 import { buildRegulatory, writeRegulatory } from './regulatory.mjs';
-import { buildPaper, paperPath, STATUS_STAGE_IDS } from './paper.mjs';
+import { buildPaper, paperPath, fitCeilingOf, STATUS_STAGE_IDS } from './paper.mjs';
 
 const PLACEHOLDER = /\[confirm/i;
 const SECTORS = ['hospitality', 'multifamily', 'retail'];
@@ -461,19 +461,23 @@ export function runScoring({ dir, buybox, scoring, metros, now = new Date(), all
   const failedBanks = listFailedBanks({ failed: readJson(join(base, 'failed.json'), {}), scoring, metros, asOf });
   const runId = `score-${now.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')}`;
   const out = { runId, scoredAt: now.toISOString(), asOf, latestRepdte, buyboxHash: contentHash(buybox), scoringHash: contentHash(scoring), provisional: vb.placeholders.length > 0, placeholders: vb.placeholders, items, failedBanks };
-  writeJson(join(dir, 'candidates', 'latest.json'), out);
   // The paper estimate (E14-S1): one record per scored bank, paper/fdic-<CERT>.json, built from the same inputs. A record is for the
   // principals and the briefer only; the drafter's load list (src/uow.mjs, LOADS.draft) does not include paper/.
   // A record whose content is unchanged since the last run is not rewritten (its runId then names the run that last changed it), so a
   // routine re-score does not send every record to the platform again.
+  // Each candidate carries its record's could-fit ceilings, `fitCeiling` (fitCeilingOf: one entry per buy-box sector with measured Q7
+  // bounds, in dollars, never added across sectors), so the list shows them without loading paper/. The records are built first, then
+  // the list is written. A candidate whose record is not built (scoreBank alone, as the backtest runs it) has no `fitCeiling`.
   const sameContent = (a, b) => { const c = (r) => contentHash({ ...r, runId: null, scoredAt: null }); return !!a && c(a) === c(b); };
   let paperWritten = 0;
   for (const it of items) {
     const path = paperPath(dir, it.key);
     const rec = buildPaper({ cert: it.cert, name: it.name, financials: fin.get(it.cert) ?? null, footprint: footprints[it.cert] ?? {}, events: eventsBy.get(it.cert) ?? [],
       filings: filingsBy[it.key] ?? [], buybox, placeholders: vb.placeholders, metros, runId, scoredAt: out.scoredAt });
+    it.fitCeiling = fitCeilingOf(rec);
     if (!sameContent(readJson(path, null), rec)) { writeJson(path, rec); paperWritten++; }
   }
+  writeJson(join(dir, 'candidates', 'latest.json'), out);
   // The regulatory record (next-five E18-S4): each bank's orders and open merger applications, for the briefer and the call brief only.
   const regulatoryWritten = writeRegulatory({ dir, records: buildRegulatory({ dir, institutions, asOf, activeWithinDays: scoring.enforcement?.activeWithinDays ?? 3650 }) });
   audit(dir, { type: 'scoring_run', runId, banks: items.length, tierA: items.filter((i) => i.tier === 'A').length, tierB: items.filter((i) => i.tier === 'B').length, provisional: out.provisional, latestRepdte, paperRecords: items.length, paperWritten, regulatoryWritten });

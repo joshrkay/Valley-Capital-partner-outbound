@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { makeDir, put, loadJson, placeholderBuybox } from './kit.mjs';
 import { validateBuybox, validateScoring, runScoring, scoreBank, tierFor, buildProfile, findPlaceholders, contentHash, AXES } from '../src/score.mjs';
 import { confirmFiler, rejectFiler } from '../src/sources/filers.mjs';
+import { readPaper, fitCeilingOf } from '../src/paper.mjs';
 
 const metros = loadJson('metros.json');
 const scoring = () => structuredClone(loadJson('scoring.json'));
@@ -345,4 +346,30 @@ test('sales: a disclosed sale is an EVENT signal on the seller, shown within its
   assert.deepEqual([it.score, it.axes], [before.score, before.axes], 'sale signals add no points until a principal weights them');
   assert.match(it.card.text, /It has sold before: An SEC filing disclosed a completed sale or disposition \(8-K, filed 2026-06-01\)\./);
   assert.match(validateScoring({ ...scoring(), sales: { windowDays: 0 } }).errors.join('\n'), /sales\.windowDays/);
+});
+
+// ---- The could-fit ceilings on each candidate (docs/design-redesign.md 5.2) -----------------------------------------------------------
+test('the scoring run stores each candidate\'s could-fit ceilings: its paper record\'s measured Q7 bounds, per sector, never added up', () => {
+  const dir = world([{ cert: '1', name: 'Alpha Example Bank', quarters: quarters(rising) }, { cert: '2', name: 'Beta Example Bank' }, { cert: '3', name: 'Gamma Example Bank', quarters: null }]);
+  const out = score(dir);
+  const saved = JSON.parse(readFileSync(join(dir, 'candidates', 'latest.json'), 'utf8'));
+  for (const it of out.items) {
+    const rec = readPaper({ dir, key: it.key });
+    assert.deepEqual(it.fitCeiling, fitCeilingOf(rec), `${it.key}: straight from its paper record`);
+    assert.deepEqual(saved.items.find((x) => x.key === it.key).fitCeiling, it.fitCeiling, `${it.key}: in the saved list`);
+    for (const c of it.fitCeiling) {
+      const s = rec.q7.sectors.find((x) => x.sector === c.sector);
+      assert.deepEqual([c.high, c.low, c.tier, c.asOf, c.label, c.category], [s.bounds.high, s.bounds.low, s.bounds.tier, s.bounds.asOf, s.label, s.category], `${it.key} ${c.sector}: dollars, as stored`);
+    }
+  }
+  const alpha = out.items.find((i) => i.key === 'fdic:1');
+  assert.deepEqual(alpha.fitCeiling.map((c) => c.sector), ['hospitality', 'multifamily', 'retail'], 'one per buy-box sector');
+  assert.ok(alpha.fitCeiling.every((c) => Number.isFinite(c.high) && c.high >= c.low && c.low >= 0));
+  assert.ok(!JSON.stringify(alpha.fitCeiling).includes('total'), 'no combined figure');
+  // A bank with no financial data has a paper record whose bounds are all gaps: an empty list, not a zero.
+  assert.deepEqual(out.items.find((i) => i.key === 'fdic:3').fitCeiling, []);
+  // scoreBank alone builds no paper record, so its candidate has no fitCeiling (the backtest scores this way).
+  const fin = JSON.parse(readFileSync(join(dir, 'sources', 'fdic', 'financials', '1.json'), 'utf8'));
+  const bare = scoreBank({ cert: '1', institution: { CERT: '1', NAME: 'Alpha Example Bank', ACTIVE: 1, status: 'active' }, footprint: { branchesByMetro: { 38060: 4 } }, financials: fin, scoring: scoring(), buybox: filledBuybox(), metros, latestRepdte: '20260630' });
+  assert.equal('fitCeiling' in bare, false);
 });
