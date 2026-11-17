@@ -1,7 +1,8 @@
 // A unit of work (PRD E12-S1): the platform's way of running the engine. It loads only the documents an action needs, mounts them in
 // memory where the data folder would be, runs the same synchronous engine code, and hands back a plan of what changed: documents to
 // write (each with the version it was loaded at, so a concurrent change is caught) and log lines to append. The platform writes that
-// plan to Postgres in one transaction. Reading or writing a path the action did not load fails loudly instead of acting on nothing.
+// plan to Postgres in one transaction (a very large plan, such as a scoring run, in a few: flushBatches in src/platform/client.mjs).
+// Reading or writing a path the action did not load fails loudly instead of acting on nothing.
 import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
