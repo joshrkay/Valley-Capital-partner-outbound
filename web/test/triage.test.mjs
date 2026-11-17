@@ -8,7 +8,7 @@ import { fakePostgrest } from '../../test/postgrest-fake.mjs';
 import { makeDir, put, loadJson } from '../../test/kit.mjs';
 import { platformClient } from '../../src/platform/client.mjs';
 import { runTriage } from '../../src/triage.mjs';
-import { primaryHref, otherPages, externalLinks, moreFindings, SECTIONS } from '../lib/triage-view.mjs';
+import { primaryHref, otherPages, externalLinks, moreFindings, SECTIONS, cardOf, leftOutLine, healthLine } from '../lib/triage-view.mjs';
 import * as ops from '../lib/ops.mjs';
 
 const URL_ = 'https://example-project.supabase.test';
@@ -56,4 +56,25 @@ test('each item links to its account, else its candidate page, else its servicer
   assert.deepEqual(moreFindings({ ...item, category: 'inConversation' }).map((f) => f.reason), ['a', 'b']);
   assert.equal(primaryHref({ links: { candidate: 'https://elsewhere.test/' } }), null);
   assert.deepEqual(SECTIONS.map(([k]) => k), ['actNow', 'watch'], 'act now first, then watch; in conversation is shown apart');
+});
+
+test('This week as home: act-now cards from the triage item and the bank\'s candidate item; left out and health in one line each', () => {
+  const { t } = triageOf(new Date('2026-11-16T14:00:00Z'));
+  const failed = cardOf(t.actNow.find((i) => i.key === 'fdic:77'));
+  assert.deepEqual([failed.name, failed.href, failed.ranked, failed.ceiling, failed.place], ['Golf Example Bank', null, false, null, ''], 'a failed bank: no candidate, no priority, no ceiling');
+  assert.match(failed.reason, /^It failed on November 16, 2026/);
+  assert.deepEqual(failed.external.map((l) => l.label), ['FDIC loan sales']);
+  const item = { key: 'fdic:1', name: 'Alpha Example Bank', category: 'actNow', reason: 'a', findings: [{ reason: 'a' }, { reason: 'b' }], ids: ['fdic:1:x'], links: { candidate: '/candidates/fdic%3A1' } };
+  const candidate = { key: 'fdic:1', tier: 'A', city: 'Phoenix', state: 'AZ', fitCeiling: [{ sector: 'hospitality', category: 'nonfarmNonresidential', high: 9e6, tier: 'inferred' }, { sector: 'retail', category: 'nonfarmNonresidential', high: 9e6, tier: 'inferred' }, { sector: 'multifamily', category: 'multifamily', high: 4e6, tier: 'reported' }] };
+  const c = cardOf(item, candidate);
+  assert.deepEqual([c.tier, c.place, c.ceiling.high, c.ceiling.label, c.more, c.href, c.hasCandidate], ['A', 'Phoenix, AZ', 9e6, 'hotel or retail', ['b'], '/candidates/fdic%3A1', true]);
+  assert.equal(cardOf(item, { ...candidate, fitCeiling: null }).ceiling, null, 'before a scoring run stores it: none, and the card links to the bank');
+  assert.equal(leftOutLine({ snoozed: 2, dismissed: 1, heldBack: 0, optedOut: 1, suppressed: 3 }), 'Left off this week: 2 snoozed, 1 dismissed. Never listed: 1 opt-out, 3 do not contact.');
+  assert.equal(leftOutLine({}), 'Nobody left off this week.');
+  const h = healthLine(t);
+  assert.deepEqual([h.ok, h.text], [true, 'Data is current.']);
+  assert.equal(h.detail, 'scored today · no failed runs');
+  assert.deepEqual(healthLine({ counts: { healthIssues: 2 }, health: { scoring: { status: 'stale' }, runs: [{}] } }), { ok: false, text: '2 issues with the data or the runs.', detail: 'scoring is stale · 1 failed run' });
+  assert.match(SECTIONS[0][2], /Call first/, 'plain words: no "Tier A"');
+  assert.doesNotMatch(SECTIONS.map((s) => s[2]).join(' '), /Tier [AB]/);
 });

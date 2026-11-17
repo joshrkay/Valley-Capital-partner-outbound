@@ -80,8 +80,8 @@ test('removing: refused while a recorded touch names the sender; an unused sende
 });
 
 test('the nav links the Senders page; the page has add, edit and remove forms and states the readiness', () => {
-  const layout = readFileSync(join(WEB, 'app', 'layout.jsx'), 'utf8');
-  assert.match(layout, /<a href="\/senders">Senders<\/a>/);
+  // The "More" menu's Setup and checks group lists it (docs/design-redesign.md, 4); the tab bar renders the menu from lib/nav.mjs.
+  assert.match(readFileSync(join(WEB, 'lib', 'nav.mjs'), 'utf8'), /href: '\/senders', label: 'Senders'/);
   const page = readFileSync(join(WEB, 'app', 'senders', 'page.jsx'), 'utf8');
   for (const a of ['addSenderAction', 'editSenderAction', 'removeSenderAction']) assert.match(page, new RegExp(`action=\\{${a}\\}`));
   assert.match(page, /Ready to send/);

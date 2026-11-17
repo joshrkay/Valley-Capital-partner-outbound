@@ -73,7 +73,7 @@ test('forgetting a person from the web: the account\'s name typed to confirm; ev
 
 test('the only form that names the person is the contact section\'s, which carries its source fields; the older one is gone', () => {
   const src = (f) => readFileSync(join(WEB, 'app', 'accounts', f), 'utf8');
-  const page = src('[id]/page.jsx'), contact = src('[id]/contact.jsx'), actions = src('actions.js');
+  const page = src('[id]/page.jsx') + src('[id]/account-record.jsx'), contact = src('[id]/contact.jsx'), actions = src('actions.js');
   assert.doesNotMatch(page, /setPersonAction|Set person/, 'the account page has no form of its own to name the person');
   const forms = [...contact.matchAll(/<form action=\{setPersonAction\}[\s\S]*?<\/form>/g)].map((m) => m[0]);
   assert.equal(forms.length, 1);

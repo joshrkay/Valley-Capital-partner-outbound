@@ -6,7 +6,8 @@
 import { when } from './format.mjs';
 
 export const PAGE = Object.freeze({
-  title: 'Calibration',
+  title: 'Score check',
+  was: 'Calibration',
   sub: 'The backtest of the score (PRD E17): whether the score, run on the data known at each past quarter-end, ranked banks under pressure before a dated public event. Read from the stored report. Read-only: this page runs nothing and writes nothing; the backtest runs from the command line.',
   loadError: 'The backtest report could not be loaded',
   sections: Object.freeze({ provenance: 'The run and its inputs', labelKinds: 'Label kinds', notes: 'Notes', words: 'Words', limits: 'Known limits', reports: 'Stored reports' }),
@@ -129,7 +130,10 @@ function resultView(res, r) {
   const hs = res.horizonSample ?? {};
   const rolling = r.mode === 'rolling' ? (bank ? ' Pooled over every as-of quarter, training banks only; the folds below are the test windows.' : ' Pooled over every as-of quarter, the holdout included; the folds below are the test windows.') : '';
   const yieldHead = `Top ${K}: observed-label yield`;
+  const t = h.all.groups.topK;
   return {
+    // The headline in one sentence, from the report's own figures: the first thing the page says.
+    sentence: `${whole}: the top ${K} by distress and timing had an observed-label yield of ${pct(t.yield)}, ${times(t.lift)} the base rate of ${pct(h.all.baseRate)}, and held ${pct(t.captured)} of the observed labels. Read: ${readOf(h.all, min)}.`,
     title: `Headline: ${res.scoring.path} (hash ${res.scoring.hash})`, scoringPath: res.scoring.path, scoringHash: res.scoring.hash,
     headline: {
       intro: `Banks ranked by their distress and timing points only: fit is left out, since the buy box has no history to test. The groups are the top ${K} by that rank and the banks at or above the Tier A distress threshold (${thr} distress points). Each figure is split by whether the bank has a confirmed SEC filer, and repeated for the metro subset.${rolling}`,

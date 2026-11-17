@@ -16,11 +16,60 @@ const mods = async () => {
 const suppressionIn = (store, dir) => store.readJson(join(dir, 'suppression.json'), { entries: [] }).entries ?? [];
 
 // ---- Candidates ---------------------------------------------------------------------------------------------------------------
-// tier: 'A' | 'B' | 'all'; anything else means A and B, like the command line's default.
-export async function listCandidates(client, { tier, metro } = {}) {
+// The Banks list (docs/design-redesign.md, 5.2). The rows carry the item fields the engine's client reads by JSON path when asked
+// (itemFields: headline, fitCeiling, city, state, assets in thousands; null for an item scored before they existed). Two more are read
+// here the same way, so no migration is needed: the card's sentences, whose second is the reason when there is no headline, and the hard
+// filters an excluded bank failed.
+export const LIST_EXTRAS = 'key,sentences:item->card->sentences,filtersFailed:item->filtersFailed';
+
+// The extras by key, with the list's filter and order. One read with the principal's token. A failure gives an empty map: the page
+// shows what it has.
+export async function candidateExtras(rest, { metro } = {}) {
+  if (!rest) return new Map();
+  try {
+    const rows = await rest.get('candidates', { select: LIST_EXTRAS, order: 'score.desc.nullslast,key', limit: 1000, metros: metro ? `cs.{${metro}}` : undefined });
+    return new Map((rows ?? []).filter((r) => r && r.key).map((r) => [r.key, r]));
+  } catch { return new Map(); }
+}
+
+// "New this week": the keys in the latest triage's act now and watch. Read once per page; no triage yet means none is new.
+export async function newThisWeek(client) {
+  try {
+    const t = await latestTriage(client);
+    return new Set([...(t?.actNow ?? []), ...(t?.watch ?? [])].map((i) => i.key));
+  } catch { return new Set(); }
+}
+
+// For one bank page: whether the latest triage lists the bank as new this week (act now or watch) or as already in conversation.
+export async function triageFlags(client, key) {
+  try {
+    const t = await latestTriage(client);
+    const has = (list) => (list ?? []).some((i) => i.key === key);
+    return { isNew: has(t?.actNow) || has(t?.watch), inConversation: has(t?.inConversation) };
+  } catch { return { isNew: false, inConversation: false }; }
+}
+
+// tier: 'A' | 'B' | 'all'; anything else means A and B, like the command line's default. With `rest`, each row also carries the card's
+// sentences and failed filters, and whether it is new this week.
+export async function listCandidates(client, { tier, metro } = {}, { rest = null } = {}) {
+  const rows = await listCandidateRows(client, { tier, metro });
+  if (!rest) return rows;
+  const [extras, fresh] = await Promise.all([candidateExtras(rest, { metro }), newThisWeek(client)]);
+  return rows.map((r) => ({ ...r, sentences: extras.get(r.key)?.sentences ?? null, filtersFailed: extras.get(r.key)?.filtersFailed ?? null, isNew: fresh.has(r.key) }));
+}
+
+// The candidate items behind This week's act now cards (priority, place, fit ceiling), by key, read one by one as the principal. Only bank
+// keys, and a handful: act now is short by design.
+export async function candidateItems(client, keys, { max = 24 } = {}) {
+  const list = [...new Set((keys ?? []).filter((k) => /^fdic:\d+$/.test(String(k))))].slice(0, max);
+  const items = await Promise.all(list.map((k) => client.candidate(k).catch(() => null)));
+  return new Map(items.filter(Boolean).map((i) => [i.key, i]));
+}
+
+async function listCandidateRows(client, { tier, metro } = {}) {
   const { candidates } = await mods();
   const one = tier === 'A' || tier === 'B' ? tier : undefined;
-  let rows = await client.candidates({ tier: one, metro: metro || undefined, limit: 1000 });
+  let rows = await client.candidates({ tier: one, metro: metro || undefined, limit: 1000, itemFields: true });
   if (!one && tier !== 'all') rows = rows.filter((r) => r.tier === 'A' || r.tier === 'B');
   const snap = await client.load(['suppression.json', 'candidates/decisions.json', 'candidates/aliases.json']);
   const decisions = snap.docs['candidates/decisions.json'] ?? {};
@@ -67,6 +116,32 @@ export async function listAccounts(client, rest) {
   const researched = new Map((await rest.get('documents', { select: 'path,updated_at', path: 'like.research/*', limit: 1000 })).map((d) => [d.path, d.updated_at]));
   return Object.values(snap.docs).filter((a) => a && a.id).sort((a, b) => (a.name ?? a.id).localeCompare(b.name ?? b.id))
     .map((a) => ({ id: a.id, name: a.name, tier: a.tier ?? null, person: a.person?.name || null, roleConfirmed: !!a.contact?.roleConfirmed, fromPipeline: Array.isArray(a.originSignals) && a.originSignals.length > 0, researchedAt: researched.get(`research/${a.id}.json`) ?? null }));
+}
+
+// What Outreach needs besides the accounts: each account's drafts (path and status only, never their text) and the touch log (type,
+// date and account only). Two reads with the principal's token; a failure leaves them empty and the page shows the account's own record.
+export async function outreachSignals(rest) {
+  const [docs, lines] = await Promise.all([
+    rest.get('documents', { select: 'path,status:body->>status', or: '(path.like."drafts/*")', limit: 5000 }).catch(() => []),
+    rest.get('log_lines', { select: 'line', or: '(path.eq."touches.jsonl")', limit: 20000 }).catch(() => []),
+  ]);
+  const drafts = new Map();
+  for (const d of docs ?? []) {
+    const m = /^drafts\/([^/]+)\/[^/]+\.json$/.exec(String(d?.path ?? ''));
+    if (!m) continue;
+    if (!drafts.has(m[1])) drafts.set(m[1], []);
+    drafts.get(m[1]).push({ status: d.status ?? d.body?.status ?? null });
+  }
+  const touches = (lines ?? []).map((l) => l?.line).filter((t) => t && typeof t === 'object').map((t) => ({ accountId: t.accountId ?? null, type: t.type, date: t.date ?? null }));
+  return { drafts, touches };
+}
+
+// The account's name alone, for the page title: one document, read as the principal.
+export async function accountName(client, id) {
+  const { store } = await mods();
+  store.safeId(need(id, 'An account id'));
+  const a = (await client.load([`accounts/${id}.json`])).docs[`accounts/${id}.json`];
+  return a ? (a.name ?? a.id ?? null) : null;
 }
 
 export async function accountDetail(client, id) {
@@ -273,6 +348,13 @@ export async function listDrafts(client) {
   return result;
 }
 
+// The Approvals count in the navigation: drafts with status "draft". One read of the paths only, filtered on the server by the draft's
+// status, so no draft text leaves the database for it. Read with the principal's token; anyone else counts nothing.
+export async function countDrafts(rest) {
+  const rows = await rest.get('documents', { select: 'path', path: 'like.drafts/*', 'body->>status': 'eq.draft', limit: 1000 });
+  return Array.isArray(rows) ? rows.length : 0;
+}
+
 // Approving re-runs the linter and the guard on the saved draft (src/draft.mjs). It never sends: a principal sends from their mailbox.
 export async function approve(client, { id, channel, step, by }) {
   const { LOADS, store, guard, draft } = await mods();
@@ -317,7 +399,7 @@ export async function statusOverview(rest, client) {
   const rules = await loadRules();
   const [runs, jobs, killDoc, snap] = await Promise.all([rest.runs(50), rest.jobs(25), rest.killDocument(), client ? client.load(['sources/edgar/state.json']) : { docs: {} }]);
   const lines = runs.map((r) => r.line);
-  return { runs: lines.slice(0, 20), jobs, kill: { config: !!rules.config.killSwitch, document: killDoc }, edgar: edgarStatus({ state: snap.docs['sources/edgar/state.json'] ?? null, runs: lines, jobs }) };
+  return { runs: lines.slice(0, 20), recentRuns: lines, staleDays: rules.triage?.health?.staleDays ?? {}, jobs, kill: { config: !!rules.config.killSwitch, document: killDoc }, edgar: edgarStatus({ state: snap.docs['sources/edgar/state.json'] ?? null, runs: lines, jobs }) };
 }
 
 // Signal coverage (PRD next-five E18-S1): the engine's own report (src/coverage.mjs), from stored data. The candidates come from their

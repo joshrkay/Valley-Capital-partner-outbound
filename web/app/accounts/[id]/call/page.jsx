@@ -4,7 +4,8 @@
 import { requirePrincipal } from '../../../../lib/session.mjs';
 import { callDesk } from '../../../../lib/calldesk-ops.mjs';
 import { readTime, telHref, TARGET_SECONDS, LONG_SECONDS } from '../../../../lib/calldesk-view.mjs';
-import { NotAuthorized, Problem } from '../../../ui.jsx';
+import { NotAuthorized, Problem, RuleCodes } from '../../../ui.jsx';
+import { guardSentence } from '../../../../lib/account-view.mjs';
 import { Prompter, Stopwatch } from './prompter.jsx';
 
 export const metadata = { title: 'Call desk · Valley Capital outbound' };
@@ -37,7 +38,7 @@ function Waiting({ d, id }) {
     <>
       <div className="banner error" role="alert">
         <strong>Do not call. The guard refuses this call now, so the call sheet is hidden.</strong>
-        <ul>{d.errors.map((e) => <li key={e.code}>{e.code}: {e.message}</li>)}</ul>
+        <ul>{d.errors.map((e) => <li key={e.code}>{guardSentence(e)}</li>)}</ul><RuleCodes codes={d.errors.map((e) => e.code)} />
         <span className="small">Come back when the reason no longer holds. Nothing on this page changes the guard.</span>
       </div>
       {back}
@@ -50,23 +51,23 @@ function Sheet({ d }) {
   const t = readTime(s.voicemail);
   return (
     <>
-      {d.warnings.length ? <div className="banner warn small"><ul>{d.warnings.map((w) => <li key={w.code}>{w.code}: {w.message}</li>)}</ul></div> : null}
+      {d.warnings.length ? <div className="banner warn small"><ul>{d.warnings.map((w) => <li key={w.code}>{guardSentence(w)}</li>)}</ul><RuleCodes codes={d.warnings.map((w) => w.code)} /></div> : null}
       <div className="banner ok small">The guard allows this call now. The sheet was approved by {d.approvedBy || 'a principal'}{d.approvedAt ? ` on ${d.approvedAt.slice(0, 10)}` : ''}.</div>
 
       <div className="grid2">
         <div className="panel">
-          <h3 style={{ marginTop: 0 }}>If you get voicemail</h3>
+          <h3>If you get voicemail</h3>
           <p className="small muted">About {t.seconds} seconds at a placeholder pace ({t.words} words). The target is {TARGET_SECONDS}. {t.verdict === 'too_long' ? `Over ${LONG_SECONDS}: shorten it before you leave it.` : t.verdict === 'long' ? 'A little long.' : ''}</p>
           <Prompter>
-            {s.voicemail ? <p style={{ margin: 0 }}>{s.voicemail}</p> : <p className="muted" style={{ margin: 0 }}>This sheet has no voicemail script.</p>}
+            {s.voicemail ? <p className="m0">{s.voicemail}</p> : <p className="muted m0">This sheet has no voicemail script.</p>}
           </Prompter>
           <p className="small">Say your name and number clearly: <strong>{d.sender.name}{d.sender.title ? `, ${d.sender.title}` : ''}</strong>, <strong className="mono">{d.sender.phone}</strong>. This number comes from the sender settings, not from the draft.</p>
           <Stopwatch target={TARGET_SECONDS} limit={LONG_SECONDS} />
         </div>
         <div className="panel">
-          <h3 style={{ marginTop: 0 }}>If they answer</h3>
+          <h3>If they answer</h3>
           <p className="small muted">The first ten seconds.</p>
-          <Prompter>{s.openingLine ? <p style={{ margin: 0 }}>{s.openingLine}</p> : <p className="muted" style={{ margin: 0 }}>No opening line.</p>}</Prompter>
+          <Prompter>{s.openingLine ? <p className="m0">{s.openingLine}</p> : <p className="muted m0">No opening line.</p>}</Prompter>
         </div>
       </div>
 
