@@ -91,6 +91,25 @@ What already works and stays: dark mode, no third-party scripts, server componen
 - **Decisions without clutter.** Start outreach, Snooze and Not now are buttons. Each opens its small form in place, says what will happen ("Nothing is sent"; "It comes back only if something new happens"), and offers Undo.
 - **A persistent glossary.** Dotted-underlined terms open it at the right entry.
 
+### 4.1 Visual direction: a CRM-style workspace
+
+A principal asked on November 17, 2026 for the app to "look more like Salesforce". The prototype now follows the layout patterns principals know from CRM tools. It uses no product's name, logo or fonts.
+
+- **Global header:** the firm's mark, one search box for banks, then Glossary, Theme, an Approvals bell with its count, and the account menu.
+- **Tab bar:** an app launcher (every page, grouped and searchable), then This week, Banks, Outreach and Approvals. "More" holds Market and Setup and checks.
+- **List view (Banks):**
+  - an object header with a list-view picker: Call first, Call first and worth a look, All banks, each with its count;
+  - a meta line: items, sort, filters, data date;
+  - "Search this list" and a dense table with row numbers.
+- **Record page (a bank):**
+  - **Highlights panel:** name and chips, Start outreach, Snooze and Not now as one button group, and six key fields (priority, score, could fit, seriously late, deposits in our metros, how it sells).
+  - **Stage path:** Ranked → Outreach → In conversation → NDA signed → Loan tape → Bid, with a "Next step" line under it. The path records where a bank stands; nothing on it sends anything.
+  - **Tabs:** Overview (the short answer, why now, the trend), What it holds, How much could fit, Details.
+  - **Sidebar of related lists:** Score, Signals, Where it lends, Loan sales and filings.
+- **Look:** system font at a 13px base, 4px corners, a blue accent, a light blue band behind the top of each page, white cards with a thin shadow. Dark mode stays.
+
+In the app, the tabs can be links (`?tab=holdings`) rendered on the server, so the bank page keeps its no-`'use client'` rule. The app launcher and the menus need one small client component for the dialog; it holds no data.
+
 ## 5. Page-by-page changes, mapped to the code
 
 ### 5.1 The shell: `app/layout.jsx`, `app/globals.css`, `app/ui.jsx`
@@ -250,9 +269,12 @@ Code changes:
 |---|---|---|
 | D-UI1 | Mark only estimates, leave reported figures unmarked with one page-level note, and date a figure only where its date differs from the page's. This changes the wording of `docs/paper-estimate.md` section 6 ("each number with its tier and date"); the record keeps every tier and date. | Yes |
 | D-UI2 | Rename Tier A and B to "Call first" and "Worth a look", keeping the small letter. | Yes |
-| D-UI3 | A self-hosted web font (`next/font`, no runtime third-party request), or the system font. | Self-hosted Public Sans |
+| D-UI3 | A self-hosted web font (`next/font`, no runtime third-party request), or the system font. | System font, for the CRM look (4.1) |
 | D-UI4 | Home is This week. | Yes |
 | D-UI5 | The list's "could fit" shows the largest single-type ceiling. A combined figure appears only if the engine adds one (apartments and commercial property are separate lines, so their ceilings could be added there, with its own tier). | Largest single type |
+| D-UI6 | The CRM-style shell (4.1): global header, app launcher, list views, highlights panel, tabs and related lists. | Yes |
+| D-UI7 | The stage path's stages and names, and whether a bank's stage is stored on its account. Today the app stores decisions and account stages separately. | Ranked → Outreach → In conversation → NDA signed → Loan tape → Bid, derived from existing records |
+| D-UI8 | Write our own CSS in the CRM style, or adopt an existing CRM design-system package. | Our own CSS: no new dependency, no licence question |
 
 ## 8. Phased plan
 
@@ -260,7 +282,7 @@ Effort is for one engineer who knows the codebase, in working days. Each phase s
 
 | Phase | What | Files | Effort |
 |---|---|---|---|
-| 0. Foundation | Tokens, type, components; navigation with "More" and `aria-current`; home redirect; glossary page; page titles. | `app/globals.css`, `app/layout.jsx`, new `app/nav-links.jsx`, `app/ui.jsx`, `app/page.jsx`, new `app/glossary/page.jsx`, new `lib/glossary.mjs`, `generateMetadata` in two pages; test for `glossary.mjs` | 2–3 |
+| 0. Foundation | Tokens, type, components; the CRM-style shell (global header, tab bar with "More" and `aria-current`, app launcher); home redirect; glossary page; page titles. | `app/globals.css`, `app/layout.jsx`, new `app/nav-links.jsx`, new `app/launcher.jsx`, `app/ui.jsx`, `app/page.jsx`, new `app/glossary/page.jsx`, new `lib/glossary.mjs`, `generateMetadata` in two pages; test for `glossary.mjs` | 3–4 |
 | 1. Banks list | The new list, filters and rows; `headline` and `fitCeiling` from the engine; JSON-path selects. | `app/candidates/page.jsx`, `lib/candidates-view.mjs`, `lib/ops.mjs`, `src/platform/client.mjs`, `src/candidates.mjs`, `src/score.mjs`; new `test/candidates.test.mjs`, engine tests in `../test/` | 2–3 |
 | 2. Bank page | The new order; one holdings table; range bars; the answer; disclosures; the codes switch; SVG charts. | `app/candidates/[key]/page.jsx`, split of `paper-estimate.jsx`, new `lib/bank-view.mjs`, `lib/paper-view.mjs`, new `app/charts.jsx`; `test/paper.test.mjs` updated; engine: `q1.nonfarmTotal` stages and the trend series in `src/paper.mjs` | 4–6 |
 | 3. This week as home | Cards and rows; collapsed counts and health. | `app/triage/page.jsx`, `lib/triage-view.mjs`, `test/triage.test.mjs` | 1–2 |
@@ -268,7 +290,7 @@ Effort is for one engineer who knows the codebase, in working days. Each phase s
 | 5. Status and senders | Health line, plain job results, sending paused or allowed; senders' readiness first. | `app/status/page.jsx`, new `lib/status-view.mjs` with tests, `app/senders/page.jsx` | 1–2 |
 | 6. The rest, and a check | Advisors and servicers merged; restyle Sales, Market, Network, Pilot, Score check. Then a pass on a phone, in dark mode, with the keyboard and with an automated accessibility checker. | `app/intermediaries/*`, `app/servicers/*`, `app/sales`, `app/market`, `app/network`, `app/pilot`, `app/calibration`; `web/README.md` screens table | 2 |
 
-**Total: about 15 to 22 working days.** Phases 0 to 2 (8 to 12 days) deliver most of what the founder asked for: the navigation, the list and the bank page.
+**Total: about 16 to 23 working days.** Phases 0 to 2 (9 to 13 days) deliver most of what the founder asked for: the navigation, the list and the bank page.
 
 Notes for whoever builds it:
 
