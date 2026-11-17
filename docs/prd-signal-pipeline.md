@@ -1435,7 +1435,9 @@ Record shapes:
     profile: { categories: [...], footprint: {...}, limits: [string] },   // E6-S6, the paper profile
     components: [{ id, axis, label, value, weight, points, inputs: [{ field, repdte, value }] }],
     signals: [{ id, type, label, period, evidence: ["fdic:<CERT>:<REPDTE>"] }],
-    card: { text, checked } | null, latestRepdte }
+    card: { text, sentences, period, headline, headlineEvidence } | null, latestRepdte,
+    fitCeiling: [{ sector, label, category, high, low, tier, asOf }] }   // headline: one template line for the list, or null.
+    // fitCeiling: the paper record's measured Q7 bounds per buy-box sector, in dollars, never added up; absent when no record was built.
   ```
 - **Account `pipeline` block** (E6-S8), written on promotion:
   ```
