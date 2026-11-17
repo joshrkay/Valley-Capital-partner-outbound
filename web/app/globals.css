@@ -227,6 +227,8 @@ body:has(#codes:checked) .code { display: block; }
 .panel-form p { flex: 1 1 100%; color: var(--muted); }
 .panel-form label { display: flex; flex-direction: column; gap: 4px; font-size: .75rem; color: var(--muted); }
 .panel-form input[type="text"] { width: min(320px, 72vw); }
+.mt8 { margin-top: 8px; }
+.mt12 { margin-top: 12px; }
 .empty { padding: 32px 16px; text-align: center; color: var(--muted); }
 details.explain { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px; }
 details.explain > summary { cursor: pointer; color: var(--accent); }
@@ -356,6 +358,12 @@ svg.chart .ln { fill: none; stroke: var(--sna); stroke-width: 2.25; stroke-linej
 svg.chart .area { fill: var(--sna); opacity: .12; }
 svg.chart .end { fill: var(--sna); stroke: var(--surface); stroke-width: 2; }
 svg.chart text.endlabel { fill: var(--ink); font-weight: 700; font-size: 12px; }
+svg.chart text.gaplabel { fill: var(--faint); font-size: 10px; }
+svg.rangebar { display: block; overflow: visible; }
+.rb-base { fill: var(--line); }
+.rb-fill { fill: var(--accent); }
+.rb-est { stroke: var(--accent); stroke-width: 1.5; }
+.rb-floor { fill: var(--ink); opacity: .6; }
 .about { padding: 12px 16px; display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center; justify-content: space-between; font-size: .75rem; color: var(--muted); box-shadow: none; }
 .about p { max-width: 90ch; }
 
@@ -587,6 +595,7 @@ details.panel summary { cursor: pointer; }
 @media (max-width: 600px) {
   body { font-size: .875rem; }
   .logoname, .appname { display: none; }
+  .navtabs a, .more-btn { padding: 0 9px; }
   .gh .wrap { gap: 8px; }
   .btn-group { gap: 6px; }
   .btn-group > * + * { margin-left: 0; }
@@ -600,6 +609,8 @@ details.panel summary { cursor: pointer; }
   .internal { font-size: .6875rem; }
   .answer-text { font-size: .9375rem; }
   th, td { padding: 6px 7px; }
-  .decide .menu-panel { position: fixed; left: 16px; right: 16px; top: auto; width: auto; margin-top: 4px; }
+  .decide { position: relative; width: 100%; }
+  .decide > .menu { position: static; }
+  .decide .menu-panel { left: 0; right: 0; width: auto; top: calc(100% + 6px); }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } }

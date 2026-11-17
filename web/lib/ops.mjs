@@ -40,6 +40,15 @@ export async function newThisWeek(client) {
   } catch { return new Set(); }
 }
 
+// For one bank page: whether the latest triage lists the bank as new this week (act now or watch) or as already in conversation.
+export async function triageFlags(client, key) {
+  try {
+    const t = await latestTriage(client);
+    const has = (list) => (list ?? []).some((i) => i.key === key);
+    return { isNew: has(t?.actNow) || has(t?.watch), inConversation: has(t?.inConversation) };
+  } catch { return { isNew: false, inConversation: false }; }
+}
+
 // tier: 'A' | 'B' | 'all'; anything else means A and B, like the command line's default. With `rest`, each row also carries the card's
 // sentences and failed filters, and whether it is new this week.
 export async function listCandidates(client, { tier, metro } = {}, { rest = null } = {}) {
