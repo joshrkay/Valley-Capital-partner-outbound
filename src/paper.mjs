@@ -126,6 +126,18 @@ export const Q1_CATEGORIES = Object.freeze([
     note: 'P3COMRE is titled only "30-89 days past due, commercial RE" by FDIC. It is taken as this line\'s 30-89 stage because, checked live on every bank on November 14, 2026, it was never above LNCOMRE and never above 0 where LNCOMRE is 0.' },
 ]);
 export const STAGE_LABELS = Object.freeze({ pastDue30to89: '30-89 days past due', pastDue90: '90 days or more past due', nonaccrual: 'Nonaccrual' });
+// D-P3 (docs/paper-estimate.md section 9): the stage ids a principal maps the buy box's statuses to, in buybox.json `statusStages`. The
+// three loan stages are the disjoint buckets FDIC reports per CRE line (the stages above); `oreo` is foreclosed property the bank owns, by
+// property type (q1.oreo): property, not loans, so it never enters a loan share. validateBuybox (src/score.mjs) checks the mapping.
+export const STATUS_STAGES = Object.freeze({
+  pastDue30to89: Object.freeze({ label: '30-89 days past due', loan: true }),
+  pastDue90: Object.freeze({ label: '90 days or more past due (still accruing)', loan: true }),
+  nonaccrual: Object.freeze({ label: 'nonaccrual', loan: true }),
+  oreo: Object.freeze({ label: 'foreclosed property the bank owns (OREO)', loan: false }),
+});
+export const STATUS_STAGE_IDS = Object.freeze(Object.keys(STATUS_STAGES));
+const LOAN_STAGE_IDS = STATUS_STAGE_IDS.filter((id) => STATUS_STAGES[id].loan);
+if (LOAN_STAGE_IDS.join() !== Object.keys(STAGE_LABELS).join() || Q1_CATEGORIES.some((c) => Object.keys(c.stages).join() !== LOAN_STAGE_IDS.join())) throw new Error('paper.mjs: the status stages and the Q1 stages disagree.');
 const INVESTOR_FIELDS = Q1_CATEGORIES.filter((c) => c.investor).map((c) => c.balance);   // LNRECONS + LNREMULT + LNRENROT + LNCOMRE
 const CRE_BOOK_FIELDS = ['LNRECONS', 'LNREMULT', 'LNRENRES'];
 
@@ -417,6 +429,94 @@ export function buyboxRestricts(buybox, id) {
   return dim.allowsAll(v) ? { restricts: false, why: null } : { restricts: true, why: null };
 }
 
+// D-P3, decided: the fit rule. The sector (its Call Report line) and the metro are conditions every in-box loan must meet; size and status
+// narrow the range further. All of them enter the same bounds.
+export const FIT_RULE = 'D-P3: sector and metro must match; size and status narrow the range.';
+const uniqSources = (list) => [...new Map(list.map((s) => [`${s.field}|${s.file}|${s.repdte}`, s])).values()];
+
+// The buy box's statuses as Call Report stages (D-P3, buybox.json statusStages). `state` is "all" (every status: not a condition, and
+// foreclosed property is in the box), "unknown" (a placeholder, not stated, or a status with no usable mapping: the share is unknown) or
+// "mapped". `oreo` says whether foreclosed property is in the box (null when that is not known).
+function statusPlan(buybox) {
+  const r = buyboxRestricts(buybox, 'status');
+  if (!r.restricts) return { decision: 'D-P3', state: 'all', oreo: true, text: `The buy box allows ${BUYBOX_DIMENSIONS.status.everything}, so status is not a condition, and foreclosed property is in the box.` };
+  if (r.why) {
+    const reason = `Which statuses the buy box buys is not settled, so the Call Report stages D-P3 maps to them (buybox.json statusStages) cannot be applied. ${r.why}`;
+    return { decision: 'D-P3', state: 'unknown', oreo: null, reason, text: `Status: unknown. ${reason}` };
+  }
+  const list = (Array.isArray(buybox.statuses) ? buybox.statuses : [buybox.statuses]).map(String);
+  const map = buybox.statusStages && typeof buybox.statusStages === 'object' && !Array.isArray(buybox.statusStages) ? buybox.statusStages : {};
+  const usable = (s) => has(map, s) && Array.isArray(map[s]) && map[s].length > 0 && map[s].every((id) => has(STATUS_STAGES, id));
+  const unmapped = list.filter((s) => !usable(s));
+  if (unmapped.length) {
+    const reason = `The buy box lists ${unmapped.map((s) => `"${s}"`).join(', ')}, which buybox.json statusStages does not map to known Call Report stages (D-P3), so the share is unknown.`;
+    return { decision: 'D-P3', state: 'unknown', oreo: null, reason, text: `Status: unknown. ${reason}` };
+  }
+  const statuses = list.map((s) => ({ status: s, stages: STATUS_STAGE_IDS.filter((id) => map[s].includes(id)) }));
+  const ids = new Set(statuses.flatMap((s) => s.stages));
+  const oreo = ids.has('oreo');
+  const text = `Status, by D-P3 (buybox.json statusStages): ${statuses.map((s) => `${s.status} = ${s.stages.map((id) => STATUS_STAGES[id].label).join(' + ')}`).join('; ')}. `
+    + 'FDIC reports the loan stages for each CRE line as disjoint buckets at the report date, so they add without double counting; a loan in any other stage is not in the box (current loans are performing).'
+    + `${oreo ? ' Foreclosed property (OREO) is property the bank owns, not loans: it is shown on its own beside the loan bounds and never added to them.' : ''}`
+    + ' Modifications and lien position are not in these stages.';
+  return { decision: 'D-P3', state: 'mapped', statuses, loanStages: LOAN_STAGE_IDS.filter((id) => ids.has(id)), oreo, text };
+}
+
+// The loans on some Q1 lines (q1.categories entries; `ref`, if given, is the line's path in the record) in the given loan stages: the
+// status-eligible balance (D-P3). The stages are disjoint buckets of each line, so they add. A stage FDIC does not report, or reports no
+// value for, is never 0: it holds anywhere from none to the rest of its line (the line's balance less every stage reported on it), so the
+// sum becomes a range [low, high] whose top can only be higher. With a line balance unknown too, the top is unbounded (high: Infinity).
+export function statusEligible(lines, stageIds) {
+  const sources = [], notReported = [], gapReasons = [];
+  let known = 0, room = 0, unbounded = false;
+  const asOf = lines.map((l) => l.balance?.asOf).find(Boolean) ?? null;
+  const byLine = lines.map((l) => {
+    const parts = [];
+    let missing = 0;
+    for (const k of stageIds) {
+      const v = l.stages?.[k]?.amount;
+      const part = { stage: k, label: STATUS_STAGES[k].label, ...(l.ref ? { ref: `${l.ref}.stages.${k}.amount` } : {}), reported: !isGap(v) };
+      parts.push(part);
+      if (isGap(v)) { missing++; notReported.push({ line: l.id, lineLabel: l.label, stage: k, stageLabel: STATUS_STAGES[k].label, status: v?.status ?? 'unknown', reason: v?.reason ?? 'No value is on file.' }); continue; }
+      known += v.value; sources.push(...v.sources);
+    }
+    if (missing) {
+      const reported = Object.values(l.stages ?? {}).map((s) => s?.amount).filter((v) => !isGap(v));
+      if (isGap(l.balance)) { unbounded = true; gapReasons.push(l.balance?.reason ?? `The ${l.label} balance is not on file.`); }
+      else { room += Math.max(0, l.balance.value - reported.reduce((s, v) => s + v.value, 0)); sources.push(...l.balance.sources, ...reported.flatMap((v) => v.sources)); }
+    }
+    return { line: l.id, label: l.label, parts };
+  });
+  if (!stageIds.length) sources.push(...lines.flatMap((l) => (isGap(l.balance) ? [] : l.balance.sources)));
+  const src = uniqSources(sources);
+  const base = { unit: 'usd', kind: 'stock', asOf, sources: src };
+  let amount;
+  if (!stageIds.length) amount = src.length ? { value: 0, ...base, tier: 'reported', method: 'no-loan-stage: the buy box\'s statuses map to no loan stage' } : gap('unknown', 'No line balance is on file.', base);
+  else if (unbounded) amount = gap('unknown', `${[...new Set(gapReasons)].join(' ')} So a stage FDIC does not report cannot be bounded.`, base);
+  else if (notReported.length) amount = { low: known, high: known + room, ...base, tier: 'inferred', method: 'stage-sum-range: a stage not reported enters as 0 to the rest of its line' };
+  else amount = { value: known, ...base, tier: 'reported', method: 'sum-of-fields: the loan stages the buy box buys (D-P3)' };
+  return { amount, low: known, high: !stageIds.length ? 0 : unbounded ? Infinity : known + room, sources: src, byLine, notReported };
+}
+
+// The Q1 lines inside each sector's category, whose stages give its status, and its foreclosed property (OREO) field.
+const CATEGORY_LINES = Object.freeze({ multifamily: ['multifamily'], nonfarmNonresidential: ['nonfarmNonresidentialOther', 'nonfarmNonresidentialOwnerOccupied'] });
+const CATEGORY_LABEL = Object.freeze({ multifamily: 'Multifamily', nonfarmNonresidential: 'Nonfarm nonresidential' });
+const CATEGORY_OREO = Object.freeze({ multifamily: 'OREMULT', nonfarmNonresidential: 'ORENRES' });
+
+// The sector's foreclosed property (OREO) as its own in-box figure: a stock at the report date, never added to a loan share or the loan
+// bounds. Multifamily OREO has its own field; hotel and retail OREO is an unknown part of nonfarm nonresidential OREO.
+const OREO_NOTE = 'OREO is foreclosed property the bank owns, not loans: a stock at the report date, shown on its own and never added to a loan share or the loan bounds. The Call Report does not say where the property is, so the metro is not applied.';
+function sectorOreo(ctx, L, sector, cat, plan) {
+  const field = CATEGORY_OREO[cat];
+  const label = `${SECTOR_LABEL[sector]} foreclosed property (OREO)`;
+  if (plan.oreo === false) return { inBox: false, label, note: 'The buy box\'s statuses do not include foreclosed property (D-P3), so OREO is not in the box.' };
+  if (plan.oreo === null) return { inBox: null, label, figure: gap('unknown', `Whether the buy box buys foreclosed property is not known. ${plan.reason}`, { asOf: L ? iso(L) : null }), note: OREO_NOTE };
+  const v = fromFields(ctx, L, [field]);
+  if (cat === 'multifamily' || isGap(v)) return { inBox: true, label, figure: v, note: OREO_NOTE };
+  return { inBox: true, label, figure: { low: 0, high: v.value, unit: 'usd', kind: 'stock', asOf: v.asOf, tier: 'inferred', sources: v.sources, method: 'share-interval: an unknown part of nonfarm nonresidential OREO' },
+    note: `${OREO_NOTE} ${SECTOR_LABEL[sector]} property is inside nonfarm nonresidential OREO (${field}), with office, industrial and other commercial property, and the Call Report cannot split it: anywhere from none to all of it.` };
+}
+
 function q7Block(ctx, q1, q3, q4, buybox, placeholders) {
   const L = ctx.latest;
   const book = q1.creBook;
@@ -424,9 +524,18 @@ function q7Block(ctx, q1, q3, q4, buybox, placeholders) {
   const sectors = (buybox?.sectors?.include ?? []).filter((s) => SECTOR_CATEGORY[s]);
   const loanSize = buybox?.loanSize ?? {};
   const sizeUsable = typeof loanSize.minUsd === 'number' && typeof loanSize.maxUsd === 'number' && loanSize.minUsd <= loanSize.maxUsd;
+  const plan = statusPlan(buybox);
+  const lineAt = (id) => { const i = q1.categories.findIndex((c) => c.id === id); return { ...q1.categories[i], ref: `q1.categories[${i}]` }; };
   const out = sectors.map((sector) => {
     const cat = SECTOR_CATEGORY[sector];
     const conditions = [], notUsed = [], unknownConditions = [];
+    // The status-eligible loans on the sector's lines, and its foreclosed property: both what the bank reports, whatever the book.
+    const lines = CATEGORY_LINES[cat].map(lineAt);
+    const se = plan.state === 'mapped' ? statusEligible(lines, plan.loanStages) : null;
+    const stageList = se ? plan.loanStages.map((id) => STATUS_STAGES[id].label).join(', ') || 'no loan stage' : null;
+    const statusLoans = se ? { label: `${CATEGORY_LABEL[cat]} loans in a stage the buy box buys (${stageList})`, stages: [...plan.loanStages], amount: se.amount, byLine: se.byLine, notReported: se.notReported } : null;
+    const oreo = sectorOreo(ctx, L, sector, cat, plan);
+    const extra = { ...(statusLoans ? { statusLoans } : {}), oreo };
     // A measured condition names its tier: "reported" only for a direct, same-period Call Report share; "inferred" for a proxy, an
     // interval standing in for a share the data cannot split, or a mix from another report date.
     const cond = (id, label, low, high, basis, sources, asOf, tier) => conditions.push({ id, label, share: { low: clamp01(low), high: clamp01(high), unit: 'pct', kind: 'stock', asOf, tier, sources, method: low === high ? 'share' : 'share-interval' }, basis });
@@ -440,7 +549,7 @@ function q7Block(ctx, q1, q3, q4, buybox, placeholders) {
     const also = (r) => (r.why ? ` ${r.why}` : '');
     let why = null;
     if (isGap(book) || book.value === 0) {
-      return { sector, label: SECTOR_LABEL[sector], category: cat, book, conditions, unknownConditions, notUsed, bounds: gap(isGap(book) ? 'unknown' : 'zero-denominator', isGap(book) ? book.reason : 'The CRE book is 0.', { asOf: book.asOf, sources: book.sources }) };
+      return { sector, label: SECTOR_LABEL[sector], category: cat, book, conditions, unknownConditions, notUsed, bounds: gap(isGap(book) ? 'unknown' : 'zero-denominator', isGap(book) ? book.reason : 'The CRE book is 0.', { asOf: book.asOf, sources: book.sources }), ...extra };
     }
     // 1. The category.
     if (cat === 'multifamily') {
@@ -476,9 +585,25 @@ function q7Block(ctx, q1, q3, q4, buybox, placeholders) {
         `From the size buckets (original amounts; a current balance is at most its original amount). Buckets that may hold loans in range: ${iv.may.join(', ') || 'none'}; wholly in range: ${iv.surely.join(', ') || 'none'}.${sameDate ? '' : ` The ${periodLabel(compact(S.asOf))} size mix is applied to the ${periodLabel(compact(nfnr.asOf))} balance.`}`,
         [...q4.buckets.flatMap((b) => b.dollars.sources), ...q4.over1m.dollars.sources, ...nfnr.sources, ...book.sources], q4.asOf, sameDate ? 'reported' : 'inferred');
     }
-    // 4-6. Status, lien and exclusions: the Call Report measures none of them, so each one the buy box restricts is unknown.
+    // 4. Status, by D-P3: the loans on the sector's own lines in a stage the buy box buys, as a share of the book. It is a subset of the
+    // category's line, as the size condition is, so it enters the bounds as one more condition: never multiplied by another share. A stage
+    // FDIC does not report widens it to a range (statusEligible). Foreclosed property is not loans: it is the sector's `oreo`, never here.
+    const status = buyboxRestricts(buybox, 'status');
+    if (!status.restricts) allowsAll('status');
+    else if (!se) unknownCond('status', BUYBOX_DIMENSIONS.status.label, 'Share with a status the buy box buys: unknown, so between 0 and all', plan.reason);
+    else {
+      const lineNames = lines.map((l) => l.label.toLowerCase()).join(' and ');
+      const nr = se.notReported;
+      const basis = (plan.loanStages.length
+        ? `The ${stageList} balances FDIC reports for ${lineNames} at ${dateLabel(se.amount.asOf ?? book.asOf)}, as a share of the CRE book. The stages are disjoint buckets of each line, so they add without double counting.`
+        : `The buy box's statuses map to no loan stage, so it buys none of the ${lineNames} loans.`)
+        + (cat === 'nonfarmNonresidential' ? ` ${SECTOR_LABEL[sector]} loans are an unknown part of these; the category condition carries that.` : '')
+        + (nr.length ? ` Not reported: ${nr.map((n) => `${n.stageLabel}, ${n.lineLabel.toLowerCase()} (${STATUS[n.status] ?? 'unknown'})`).join('; ')}. Each enters as anywhere from none to the rest of its line's balance (the balance less the stages reported on it), never as zero, so the share is a range and its top can only be higher.` : '')
+        + (plan.oreo ? ' Foreclosed property (OREO) is not loans and is not in this share; it is shown on its own.' : '');
+      cond('status', statusLoans.label, se.low / book.value, Number.isFinite(se.high) ? se.high / book.value : 1, basis, uniqSources([...se.sources, ...book.sources]), se.amount.asOf ?? book.asOf, nr.length ? 'inferred' : 'reported');
+    }
+    // 5-6. Lien and exclusions: the Call Report measures neither, so each one the buy box restricts is unknown.
     for (const [id, label, reason] of [
-      ['status', 'Share with a status the buy box buys', 'Which Call Report stages count as the buy box\'s statuses is a principal\'s decision (D-P3); until then the share is unknown.'],
       ['lien', 'Share with a lien position the buy box buys', 'The Call Report does not report lien position for these loans.'],
       ['exclusions', 'Share outside the buy box\'s exclusions', 'The Call Report cannot tell which loans the buy box excludes.'],
     ]) {
@@ -492,14 +617,14 @@ function q7Block(ctx, q1, q3, q4, buybox, placeholders) {
       ? `The lower bound is 0 because these buy-box conditions cannot be measured: ${unknownConditions.map((u) => u.label).join(', ')}. Each may hold for none of the book.`
       : 'The lower bound is 0: the measured shares are consistent with none of the book meeting every condition at once.') : null;
     const bounds = b ? { low: Math.round(b.low * book.value), high: Math.round(b.high * book.value), lowShare: b.low, highShare: b.high, k: b.k, unit: 'usd', kind: 'stock', asOf: book.asOf, tier: weakest(measured.map((c) => c.share.tier)),
-      sources: [...new Map(measured.flatMap((c) => c.share.sources).concat(book.sources).map((s) => [`${s.field}|${s.file}|${s.repdte}`, s])).values()], method: BOUNDS_METHOD,
+      sources: uniqSources(measured.flatMap((c) => c.share.sources).concat(book.sources)), method: BOUNDS_METHOD,
       ...(lowNote ? { lowNote } : {}) } : gap('unknown', 'No condition could be measured.');
-    return { sector, label: SECTOR_LABEL[sector], category: cat, book, conditions, unknownConditions, notUsed, bounds, ...(why ? { why } : {}) };
+    return { sector, label: SECTOR_LABEL[sector], category: cat, book, conditions, unknownConditions, notUsed, bounds, ...extra, ...(why ? { why } : {}) };
   });
   return {
     provisional: placeholders.length > 0, placeholders: [...placeholders],
-    method: BOUNDS_METHOD, formula: BOUNDS_FORMULA,
-    note: 'Bounds only, from Call Report shares and the deposit proxy. Each condition names its tier, and the bounds take the weakest. Separate breakdowns are never multiplied: knowing half the book is in one metro and half is in one category says nothing about how much is both. A buy-box condition the data cannot measure enters as anywhere from none to all of the book, so while one is unmeasured the lower bound is 0. No base figure until a dependence model is calibrated against real tapes (E14-S6).',
+    method: BOUNDS_METHOD, formula: BOUNDS_FORMULA, fitRule: FIT_RULE, statusRule: plan,
+    note: 'Bounds only, from Call Report shares and the deposit proxy. Each condition names its tier, and the bounds take the weakest. Separate breakdowns are never multiplied: knowing half the book is in one metro and half is in one category says nothing about how much is both. A status is measured from the Call Report stages D-P3 maps it to (buybox.json statusStages), on the sector\'s own lines. Foreclosed property (OREO) is property, not loans, so it is shown on its own beside the loan bounds and never added to them. A buy-box condition the data cannot measure enters as anywhere from none to all of the book, so while one is unmeasured the lower bound is 0. No base figure until a dependence model is calibrated against real tapes (E14-S6).',
     observed: gap('unknown', 'The observed layer (loans seen one by one) is not built yet (E14-S4).', { asOf: null }),
     sectors: out,
   };
@@ -574,7 +699,11 @@ export function buildPaper({ cert, name = '', financials, footprint = {}, events
   record.summary = [
     { id: 'investorCre', label: 'Investor CRE (2006 guidance definition)', ref: 'q1.investorCre' },
     { id: 'ownerOccupied', label: 'Owner-occupied nonfarm nonresidential', ref: 'q1.ownerOccupied' },
-    ...q7.sectors.map((s, i) => ({ id: `inBox:${s.sector}`, label: `${s.label} loans in the buy box: bounds${q7.provisional ? ' (provisional)' : ''}`, ref: `q7.sectors[${i}].bounds` })),
+    // Each sector's loan bounds, and beside them its foreclosed property (OREO), its own figure: property, never added to the loans.
+    ...q7.sectors.flatMap((s, i) => [
+      { id: `inBox:${s.sector}`, label: `${s.label} loans in the buy box: bounds${q7.provisional ? ' (provisional)' : ''}`, ref: `q7.sectors[${i}].bounds` },
+      ...(s.oreo?.figure ? [{ id: `inBoxOreo:${s.sector}`, label: `${s.oreo.label} in the buy box's property type: property the bank owns, not loans, wherever it is${q7.provisional ? ' (provisional)' : ''}`, ref: `q7.sectors[${i}].oreo.figure` }] : []),
+    ]),
     { id: 'smallLoans', label: 'Nonfarm nonresidential loans under $1 million (number of loans)', ref: 'q4.under1m.count' },
     ...(hfsAt >= 0 ? [{ id: 'heldForSale', label: 'Loans held for sale (all types)', ref: `q6.items[${hfsAt}].values.total` }] : []),
     { id: 'buyboxDepositShare', label: 'Deposits in the buy-box metros (a proxy, not loans)', ref: 'q3.buyboxShare' },
@@ -598,7 +727,7 @@ export function paperAt(record, ref) {
 
 // What the briefer receives (fenced as data in src/research.mjs): the values, units, dates, tiers and gap statuses, without source lists,
 // series, methods or the longer notes, to keep the prompt short. The unknowns carry what the gaps say.
-const BRIEFER_DROPS = new Set(['sources', 'series', 'rules', 'units', 'kinds', 'tiers', 'trend', 'method', 'kind', 'reason', 'caveats', 'definition', 'formula', 'note', 'lowNote', 'basis', 'why', 'notUsed', 'link']);
+const BRIEFER_DROPS = new Set(['sources', 'series', 'rules', 'units', 'kinds', 'tiers', 'trend', 'method', 'kind', 'reason', 'caveats', 'definition', 'formula', 'note', 'lowNote', 'basis', 'why', 'notUsed', 'link', 'byLine']);
 export function paperForBriefer(record) {
   if (!record) return null;
   const strip = (v) => {
@@ -670,8 +799,19 @@ export function renderPaper(record) {
   }
   const q7 = record.q7;
   L.push('', `Q7. FIT: BOUNDS ONLY${q7.provisional ? ' (PROVISIONAL)' : ''}. ${q7.note} Method: ${q7.formula}.`);
+  // A record written before D-P3 was decided has no fit rule, status rule, status-eligible loans or OREO figure: those lines are left out.
+  if (q7.fitRule) L.push(`  Fit rule, ${q7.fitRule}`);
+  if (q7.statusRule?.text) L.push(`  ${q7.statusRule.text}`);
   for (const s of q7.sectors) {
     L.push(`  ${s.label} (inside ${s.category})`); line('In the buy box', s.bounds, '    ');
+    if (s.oreo) {
+      if (s.oreo.figure) line(`${s.oreo.label}, its own figure (property, not loans; never added to the loan bounds)`, s.oreo.figure, '    ');
+      else L.push(`    ${s.oreo.label}: ${s.oreo.note}`);
+    }
+    if (s.statusLoans) {
+      line(s.statusLoans.label, s.statusLoans.amount, '    ');
+      for (const l of s.statusLoans.byLine) L.push(`      ${l.label}: ${l.parts.map((p) => `${p.label}: ${formatValue(paperAt(record, p.ref))}`).join('; ')}`);
+    }
     for (const c of s.conditions) L.push(`    ${c.share.tier ? 'Condition' : 'Unknown condition'} ${c.id}: ${c.label} [${c.share.tier ?? 'unknown'}]: ${c.share.low === c.share.high ? fmtUnit(c.share.low, 'pct') : `${fmtUnit(c.share.low, 'pct')} to ${fmtUnit(c.share.high, 'pct')}`}. ${c.basis}`);
     for (const n of s.notUsed) L.push(`    Not used, ${n.id}: ${n.reason}`);
     if (s.bounds.lowNote) L.push(`    ${s.bounds.lowNote}`);

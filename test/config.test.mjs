@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { loadJson, placeholderBuybox } from './kit.mjs';
 import { validateBuybox, validateScoring, AXES } from '../src/score.mjs';
 import { METRICS } from '../src/metrics.mjs';
+import { STATUS_STAGE_IDS } from '../src/paper.mjs';
 
 const metros = loadJson('metros.json');
 const buybox = loadJson('buybox.json');
@@ -37,6 +38,15 @@ test('buybox.json: valid shape, metros all in metros.json, the direct-sale asset
   assert.ok(['in', 'out'].includes(buybox.sectors.shortTermRentalPortfolios), 'a principal decided whether short-term rental portfolios are in (PRD Q1)');
   // Until a principal decides, short-term rental portfolios stay an open question: a placeholder the check names.
   assert.ok(validateBuybox(placeholderBuybox(), { metros }).placeholders.includes('sectors.shortTermRentalPortfolios'), 'an unanswered Q1 is a placeholder');
+});
+
+test('buybox.json statusStages: D-P3 as a principal decided it on 2026-11-17, every status mapped to known Call Report stages', () => {
+  const map = buybox.statusStages;
+  assert.deepEqual(Object.fromEntries(Object.entries(map).filter(([k]) => !k.startsWith('_'))),
+    { 'non-performing': ['pastDue90', 'nonaccrual'], 'sub-performing': ['pastDue30to89'], 'foreclosed (REO/OREO)': ['oreo'] });
+  for (const s of buybox.statuses) assert.ok(Array.isArray(map[s]) && map[s].length, `no mapping for ${s}`);
+  for (const ids of Object.entries(map).filter(([k]) => !k.startsWith('_')).map(([, v]) => v)) for (const id of ids) assert.ok(STATUS_STAGE_IDS.includes(id), id);
+  for (const re of [/D-P3/, /2026-11-17/, /[Mm]odifications/, /lien/]) assert.match(map._note, re);
 });
 
 test('scoring.json: valid, every component on an axis, every axis used, every metric known, placeholders declared', () => {
