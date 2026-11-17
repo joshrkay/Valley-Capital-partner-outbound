@@ -227,6 +227,7 @@ body:has(#codes:checked) .code { display: block; }
 .panel-form p { flex: 1 1 100%; color: var(--muted); }
 .panel-form label { display: flex; flex-direction: column; gap: 4px; font-size: .75rem; color: var(--muted); }
 .panel-form input[type="text"] { width: min(320px, 72vw); }
+.contents { display: contents; }
 .mt8 { margin-top: 8px; }
 .mt12 { margin-top: 12px; }
 .empty { padding: 32px 16px; text-align: center; color: var(--muted); }
