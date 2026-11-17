@@ -8,8 +8,30 @@ export const STATUS_LABELS = Object.freeze({
   'not-reported': 'not reported', 'not-pulled': 'not pulled', semiannual: 'not reported this quarter (semiannual)', 'not-on-file': 'not on file',
   null: 'no value from FDIC', unknown: 'unknown', 'structure-event': 'withheld (structure event)', 'zero-denominator': 'no ratio (zero base)', unclear: 'unclear',
 });
-export const STAGES = Object.freeze([['pastDue30to89', '30–89 days'], ['pastDue90', '90+ days'], ['nonaccrual', 'Nonaccrual']]);
+// The three loan stages, in plain words (the glossary's labels), in the order a loan moves through them.
+export const STAGES = Object.freeze([['pastDue30to89', '30 to 89 days late'], ['pastDue90', '90+ days late'], ['nonaccrual', 'Not accruing']]);
 export const PAPER_CONTEXT = 'The paper estimate is for principals and the briefer only. It is an estimate from public reports, not the loan tape, and it never goes in a message.';
+
+// A figure's basis, as the page marks it (D-UI1): reported figures carry no mark (the page says so once), observed ones are "Seen loan by
+// loan", inferred ones are "Estimate". The record keeps every tier; this is only the label.
+export function basisLabel(tier) {
+  const t = String(tier ?? '').replace(/ bounds$/, '');
+  return t === 'observed' ? 'Seen loan by loan' : t === 'inferred' ? 'Estimate' : '';
+}
+// The tier of a condition in the buy-box table, in plain words; a condition with no tier could not be measured.
+export const tierName = (tier) => ({ reported: 'Reported', observed: 'Seen loan by loan', inferred: 'Estimate' }[tier] ?? 'Not measured: anywhere from none to all');
+
+// The FDIC field codes behind a value, and its report date: "P3REMULT + P9REMULT · June 30, 2026". Shown only when the codes switch is on.
+export function fieldCodes(v) {
+  const src = v?.sources ?? [];
+  const fields = [...new Set(src.map((s) => s.field).filter(Boolean))];
+  if (!fields.length) return '';
+  const reps = src.map((s) => String(s.repdte ?? '')).filter((r) => /^\d{8}$/.test(r)).sort();
+  return [fields.join(' + '), reps.length ? period(reps.at(-1)) : ''].filter(Boolean).join(' · ');
+}
+
+// A gap's status as a short phrase that starts a sentence: "Not reported", "Not on file".
+export const gapText = (v) => { const t = show(v).text; return t.charAt(0).toUpperCase() + t.slice(1); };
 
 const isoToRep = (d) => String(d ?? '').replace(/-/g, '');
 export const dateOf = (isoDate) => (/^\d{4}-\d{2}-\d{2}$/.test(String(isoDate ?? '')) ? period(isoToRep(isoDate)) : '');

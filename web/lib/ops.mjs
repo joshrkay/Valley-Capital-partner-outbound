@@ -69,6 +69,14 @@ export async function listAccounts(client, rest) {
     .map((a) => ({ id: a.id, name: a.name, tier: a.tier ?? null, person: a.person?.name || null, roleConfirmed: !!a.contact?.roleConfirmed, fromPipeline: Array.isArray(a.originSignals) && a.originSignals.length > 0, researchedAt: researched.get(`research/${a.id}.json`) ?? null }));
 }
 
+// The account's name alone, for the page title: one document, read as the principal.
+export async function accountName(client, id) {
+  const { store } = await mods();
+  store.safeId(need(id, 'An account id'));
+  const a = (await client.load([`accounts/${id}.json`])).docs[`accounts/${id}.json`];
+  return a ? (a.name ?? a.id ?? null) : null;
+}
+
 export async function accountDetail(client, id) {
   const { LOADS, store, pilot } = await mods();
   const rules = await loadRules();
@@ -271,6 +279,13 @@ export async function listDrafts(client) {
     return out.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
   });
   return result;
+}
+
+// The Approvals count in the navigation: drafts with status "draft". One read of the paths only, filtered on the server by the draft's
+// status, so no draft text leaves the database for it. Read with the principal's token; anyone else counts nothing.
+export async function countDrafts(rest) {
+  const rows = await rest.get('documents', { select: 'path', path: 'like.drafts/*', 'body->>status': 'eq.draft', limit: 1000 });
+  return Array.isArray(rows) ? rows.length : 0;
 }
 
 // Approving re-runs the linter and the guard on the saved draft (src/draft.mjs). It never sends: a principal sends from their mailbox.

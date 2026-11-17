@@ -1,4 +1,5 @@
-import { requirePrincipal } from '../../../lib/session.mjs';
+import { cache } from 'react';
+import { requirePrincipal as signedIn } from '../../../lib/session.mjs';
 import { candidateDetail, routeOf } from '../../../lib/ops.mjs';
 import { period, moneyThousands, pct, num, source } from '../../../lib/format.mjs';
 import { NotAuthorized, Problem, Sourced } from '../../ui.jsx';
@@ -9,13 +10,28 @@ const STAGES = [['pastDue30to89', '30–89 days'], ['pastDue90', '90+ days'], ['
 const AXES = [['distress', 'Distress: is the bank under pressure?'], ['fit', 'Fit: is its paper what we buy, where we buy it?'], ['timing', 'Timing: why now?']];
 const fmtValue = (c) => (c.value === null || c.value === undefined ? '–' : /share|ratio|rate|delinquency/i.test(`${c.metric ?? ''} ${c.id}`) ? pct(c.value) : Math.abs(c.value) >= 1 ? moneyThousands(c.value) : pct(c.value));
 
+// Once per request, shared by the title and the page.
+const requirePrincipal = cache(signedIn);
+const detail = cache(async (client, key) => candidateDetail(client, key));
+
+// The tab's title is the bank's name, so several open banks can be told apart.
+export async function generateMetadata({ params }) {
+  const fallback = { title: 'Bank · Valley Capital outbound' };
+  try {
+    const ctx = await requirePrincipal();
+    if (ctx.denied) return fallback;
+    const d = await detail(ctx.client, decodeURIComponent((await params).key));
+    return d?.item?.name ? { title: `${d.item.name} · Valley Capital outbound` } : fallback;
+  } catch { return fallback; }
+}
+
 export default async function Candidate({ params }) {
   const ctx = await requirePrincipal();
   if (ctx.denied) return <NotAuthorized email={ctx.email} />;
   const { key: raw } = await params;
   const key = decodeURIComponent(raw);
   let d;
-  try { d = await candidateDetail(ctx.client, key); } catch (e) { return <Problem text={`This candidate could not be loaded: ${e.message}`} />; }
+  try { d = await detail(ctx.client, key); } catch (e) { return <Problem text={`This candidate could not be loaded: ${e.message}`} />; }
   if (!d) return <Problem text={`There is no candidate ${key} in the latest scoring run.`} />;
   const { item, decision, suppressed, paper } = d;
   // How this bank sells (next-five E19-S4): unknown unless a source or a principal shows it. Its own load; a failure hides only this line.

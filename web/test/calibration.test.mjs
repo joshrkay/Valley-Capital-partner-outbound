@@ -277,7 +277,9 @@ test('WORDS: the rendered page never says "precision" or "recall", whatever the 
 test('the page is linked from Status with one line, and from the main navigation', () => {
   const status = readFileSync(join(WEB, 'app/status/page.jsx'), 'utf8');
   assert.equal(status.split('\n').filter((l) => l.includes('href="/calibration"')).length, 1);
-  assert.match(readFileSync(join(WEB, 'app/layout.jsx'), 'utf8'), /<a href="\/calibration">Calibration<\/a>/);
+  // The main navigation's "More" menu lists it as "Score check" (docs/design-redesign.md, 4); the tab bar renders the menu from lib/nav.mjs.
+  assert.match(readFileSync(join(WEB, 'lib/nav.mjs'), 'utf8'), /href: '\/calibration', label: 'Score check'/);
+  assert.match(readFileSync(join(WEB, 'app/shell.jsx'), 'utf8'), /<NavLinks /);
   const page = readFileSync(join(WEB, 'app/calibration/page.jsx'), 'utf8');
   assert.doesNotMatch(page, /enqueue|unitOfWork|action=|'use server'/, 'the page runs nothing and offers no action');
 });

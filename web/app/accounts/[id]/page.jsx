@@ -1,5 +1,6 @@
-import { requirePrincipal } from '../../../lib/session.mjs';
-import { accountDetail } from '../../../lib/ops.mjs';
+import { cache } from 'react';
+import { requirePrincipal as signedIn } from '../../../lib/session.mjs';
+import { accountDetail, accountName } from '../../../lib/ops.mjs';
 import { loadRules } from '../../../lib/engine.mjs';
 import { period, num } from '../../../lib/format.mjs';
 import { NotAuthorized, Problem, Markdown } from '../../ui.jsx';
@@ -8,6 +9,20 @@ import { Calls } from './calls.jsx';
 import { Routes } from './routes.jsx';
 import { Contact } from './contact.jsx';
 import { Touches } from './touches.jsx';
+
+// Once per request, shared by the title and the page.
+const requirePrincipal = cache(signedIn);
+
+// The tab's title is the account's name, so several open accounts can be told apart.
+export async function generateMetadata({ params }) {
+  const fallback = { title: 'Account · Valley Capital outbound' };
+  try {
+    const ctx = await requirePrincipal();
+    if (ctx.denied) return fallback;
+    const name = await accountName(ctx.client, decodeURIComponent((await params).id));
+    return name ? { title: `${name} · Valley Capital outbound` } : fallback;
+  } catch { return fallback; }
+}
 
 export default async function Account({ params }) {
   const ctx = await requirePrincipal();
