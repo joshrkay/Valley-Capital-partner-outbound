@@ -102,7 +102,7 @@ test('the paper estimate reaches the briefer as fenced data; the drafter receive
   // The briefer: fenced, as data, read from paper/ by the account's institution key.
   const b = await runBriefer({ client: null, dir, account: a, models: models(), playbooks: rules.playbooks, now: NOW, dryRun: true });
   assert.match(b.user, /<paper_estimate source="FDIC Call Report data[^"]*" as_of="2026-06-30">/);
-  for (const want of ['4242', '314159000', '161803000', 'not CRE-specific', 'bounds']) assert.ok(b.user.includes(want), `briefer lacks "${want}"`);
+  for (const want of ['4242', '314159000', '161803000', 'not CRE-specific', 'bounds', 'Status, by D-P3', 'a stage the buy box buys']) assert.ok(b.user.includes(want), `briefer lacks "${want}"`);
   assert.match(b.user, /Do not copy its figures into findings/);
   assert.equal(b.user.match(/<\/paper_estimate>/g).length, 1, 'the record cannot close its own fence');
   assert.ok(LOADS.research.includes('paper/'));
@@ -122,7 +122,9 @@ test('the paper estimate reaches the briefer as fenced data; the drafter receive
   });
   assert.equal(d.dryRun, true, JSON.stringify(d));
   const both = d.system + d.user;
-  for (const leak of ['4242', '314159', '161803', '271001', 'paper_estimate', 'paper estimate', 'LNRENR', 'held for sale', 'bounds', 'tape', 'fdic:101', 'not CRE-specific'])
+  // D-P3 (2026-11-17) added the status-eligible loans, the status rule and each sector's OREO figure to the record: none of it either.
+  for (const leak of ['4242', '314159', '161803', '271001', 'paper_estimate', 'paper estimate', 'LNRENR', 'held for sale', 'bounds', 'tape', 'fdic:101', 'not CRE-specific',
+    'D-P3', 'statusStages', 'a stage the buy box buys', 'its own figure', 'never added to the loan bounds'])
     assert.ok(!both.includes(leak), `drafter input leaked "${leak}"`);
 });
 

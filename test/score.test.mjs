@@ -52,6 +52,33 @@ test('the shipped buy box is filled, with no placeholders and no errors; one wit
   assert.deepEqual(findPlaceholders({ _note: '[CONFIRM: ignored]', a: ['ok', '[CONFIRM]'] }), ['a[1]']);
 });
 
+test('D-P3: every status the buy box lists needs a mapping to known Call Report stages, or the buy box has errors and scoring refuses it', () => {
+  const shipped = shippedBuybox();
+  assert.deepEqual(validateBuybox(shipped, { metros }).errors, []);
+  const errs = (over) => validateBuybox({ ...shipped, ...over }, { metros }).errors.join('\n');
+  // A status with no mapping.
+  const { 'sub-performing': _sub, ...partial } = shipped.statusStages;
+  assert.match(errs({ statusStages: partial }), /statusStages has no mapping for status "sub-performing"/);
+  const { statusStages: _all, ...none } = shipped;
+  assert.equal(validateBuybox(none, { metros }).errors.filter((e) => /no mapping for status/.test(e)).length, 3, 'one error per status, with no statusStages at all');
+  assert.match(errs({ statuses: ['non-performing', 'performing'] }), /no mapping for status "performing"/);
+  // A stage id that is not one of pastDue30to89, pastDue90, nonaccrual, oreo; an empty list; a mapping that is not an object.
+  assert.match(errs({ statusStages: { ...shipped.statusStages, 'non-performing': ['pastDue90', 'chargedOff'] } }), /statusStages\."non-performing": unknown stage id "chargedOff" \(known: pastDue30to89, pastDue90, nonaccrual, oreo\)/);
+  assert.match(errs({ statusStages: { ...shipped.statusStages, 'sub-performing': [] } }), /statusStages\."sub-performing" must list one or more stage ids/);
+  assert.match(errs({ statusStages: ['pastDue90'] }), /statusStages must be an object/);
+  // The _note is not a status, and a mapping for a status the buy box does not list is allowed.
+  assert.deepEqual(validateBuybox({ ...shipped, statuses: ['non-performing'] }, { metros }).errors, []);
+  // A placeholder statuses keeps behaving as before: a placeholder, not an error, with or without a mapping.
+  const pb = placeholderBuybox();
+  const { statusStages: _pb, ...pbNone } = pb;
+  for (const b of [pb, pbNone]) { const v = validateBuybox(b, { metros }); assert.deepEqual(v.errors, []); assert.ok(v.placeholders.includes('statuses')); }
+  // Scoring refuses a buy box whose mapping has errors. The run's buy-box hash covers the whole file, mapping included, as before.
+  const dir = world([{ cert: '1', name: 'Alpha Example Bank' }]);
+  assert.throws(() => score(dir, { buybox: { ...shipped, statusStages: partial } }), /buybox\.json has errors:[\s\S]*no mapping for status "sub-performing"/);
+  assert.equal(score(dir, { buybox: shipped }).buyboxHash, contentHash(shipped));
+  assert.notEqual(contentHash(shipped), contentHash({ ...shipped, statusStages: { ...shipped.statusStages, 'sub-performing': ['pastDue30to89', 'pastDue90'] } }));
+});
+
 test('the shipped scoring config is valid; every component has an axis; Tier A needs distress and fit thresholds', () => {
   const s = scoring();
   assert.deepEqual(validateScoring(s).errors, []);

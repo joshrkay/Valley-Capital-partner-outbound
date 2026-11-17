@@ -9,6 +9,12 @@
     "maxUsd": 25000000
   },
   "statuses": ["non-performing", "sub-performing", "foreclosed (REO/OREO)"],
+  "statusStages": {
+    "_note": "D-P3, decided by a principal on 2026-11-17 (docs/paper-estimate.md section 9): the Call Report stages that count as each status. Stage ids: pastDue30to89, pastDue90 (90+ days past due, still accruing), nonaccrual, oreo (foreclosed property the bank owns, by property type; property, not loans). Current loans are performing, which this buy box does not buy. Modifications and lien position are not in the Call Report's stages, so neither decides a status. validateBuybox checks that every status above is mapped and every stage id is known.",
+    "non-performing": ["pastDue90", "nonaccrual"],
+    "sub-performing": ["pastDue30to89"],
+    "foreclosed (REO/OREO)": ["oreo"]
+  },
   "lien": "first",
   "metros": ["12420", "19740", "31080", "38060", "29820", "41740"],
   "exclusions": [],

@@ -1,7 +1,7 @@
 // The paper estimate on the candidate page (PRD E14-S1), rendered from the record the scoring run wrote (paper/fdic-<CERT>.json). A server
 // component: every value is rendered as text, each with its tier and as-of date, and its sources on hover. Nothing is computed here.
 import { Fragment } from 'react';
-import { show, at, STAGES, PAPER_CONTEXT, dateOf, shareText, pointText } from '../../../lib/paper-view.mjs';
+import { show, at, STAGES, STATUS_LABELS, PAPER_CONTEXT, dateOf, shareText, pointText } from '../../../lib/paper-view.mjs';
 
 // A value: the number with its tier and date beneath, or the gap's status (with its reason beneath when `full`, else on hover).
 function V({ v, full = false }) {
@@ -154,10 +154,27 @@ export default function PaperEstimate({ paper }) {
 
       <h3>Q7. How much fits the buy box: bounds only{q7.provisional ? ' (provisional)' : ''}</h3>
       <p className="small muted">{q7.note} Method: {q7.formula}.</p>
+      {q7.fitRule ? <p className="small">Fit rule, {q7.fitRule}</p> : null}
+      {q7.statusRule?.text ? <p className="small">{q7.statusRule.text}</p> : null}
       {q7.sectors.map((s) => (
         <div key={s.sector} className="panel">
           <h3 style={{ marginTop: 0 }}>{s.label} <span className="muted small">inside {s.category}</span></h3>
           <p>In the buy box: <V v={s.bounds} full /></p>
+          {s.oreo ? (
+            <p>{s.oreo.label}, its own figure (property, not loans; never added to the loan bounds): {s.oreo.figure ? <V v={s.oreo.figure} full /> : <span className="muted">not in the buy box</span>}<span className="src">{s.oreo.note}</span></p>
+          ) : null}
+          {s.statusLoans ? (
+            <>
+              <p>{s.statusLoans.label}: <V v={s.statusLoans.amount} full /></p>
+              <div className="scroll">
+                <table>
+                  <thead><tr><th>Line</th>{(s.statusLoans.byLine[0]?.parts ?? []).map((p) => <th key={p.stage} className="num">{p.label}</th>)}</tr></thead>
+                  <tbody>{s.statusLoans.byLine.map((l) => <tr key={l.line}><td>{l.label}</td>{l.parts.map((p) => <td key={p.stage} className="num"><V v={at(paper, p.ref)} /></td>)}</tr>)}</tbody>
+                </table>
+              </div>
+              {s.statusLoans.notReported?.length ? <Notes items={s.statusLoans.notReported.map((n) => `${n.stageLabel}, ${n.lineLabel.toLowerCase()}: ${STATUS_LABELS[n.status] ?? 'unknown'}. ${n.reason} It enters as anywhere from none to the rest of the line's balance, never as zero, so the amount is a range.`)} /> : null}
+            </>
+          ) : null}
           {s.bounds?.lowNote ? <p className="small muted">{s.bounds.lowNote}</p> : null}
           {s.unknownConditions?.length ? <Notes items={s.unknownConditions.map((u) => `Cannot be measured, ${u.label}: ${u.reason}`)} /> : null}
           {s.why ? <p className="small">{s.why}</p> : null}

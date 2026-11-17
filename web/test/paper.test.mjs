@@ -19,10 +19,10 @@ const Q = (over = {}) => ({
   LNLSSALE: 2500, NALNSALE: 0, P9LNSALE: 0, P3LNSALE: 0, NETGNSLN: 75, NTGLLNQ: 40,
   LNOT3LES: 400000, LNOT3T12: 300000, LNOT1T3: 500000, LNOT3T5: 350000, LNOT5T15: 250000, LNOTOV15: 50000, ...over,
 });
-const record = () => buildPaper({ cert: '1', name: 'Alpha Example Bank', financials: { CERT: '1', quarters: { 20260331: { REPDTE: '20260331', ...Q() }, 20260630: { REPDTE: '20260630', ...Q() } } },
+const record = ({ buybox = { sectors: { include: ['hospitality', 'multifamily', 'retail'] }, metros: ['38060'], loanSize: { minUsd: '[CONFIRM]', maxUsd: '[CONFIRM]' } }, placeholders = ['loanSize.minUsd', 'loanSize.maxUsd'] } = {}) => buildPaper({
+  cert: '1', name: 'Alpha Example Bank', financials: { CERT: '1', quarters: { 20260331: { REPDTE: '20260331', ...Q() }, 20260630: { REPDTE: '20260630', ...Q() } } },
   footprint: { branchesByMetro: { 38060: 4 }, sod: { year: 2026, depositsByMetro: { 38060: 600000 }, totalDeposits: 1000000 }, _source: { fetchedAt: '2026-11-13T12:00:00Z' } },
-  buybox: { sectors: { include: ['hospitality', 'multifamily', 'retail'] }, metros: ['38060'], loanSize: { minUsd: '[CONFIRM]', maxUsd: '[CONFIRM]' } }, placeholders: ['loanSize.minUsd', 'loanSize.maxUsd'],
-  metros: { metros: [{ cbsa: '38060', label: 'Phoenix' }] }, runId: 'score-1' });
+  buybox, placeholders, metros: { metros: [{ cbsa: '38060', label: 'Phoenix' }] }, runId: 'score-1' });
 
 test('every number shows its tier and as-of date; a gap shows its status, never a zero', () => {
   const r = record();
@@ -78,6 +78,21 @@ test('the candidate page reads its paper record through the PostgREST document r
   // Someone signed in who is not a principal reads nothing.
   const stranger = platformClient({ url: URL_, key: 'anon-key', accessToken: 'user:stranger@example.test', fetchImpl: fake.fetchImpl });
   assert.equal(await ops.candidateDetail(stranger, 'fdic:1'), null);
+});
+
+test('Q7 on the page, with the shipped buy box: the status rule (D-P3), each sector\'s status-eligible loans by line, and its OREO as its own figure', () => {
+  const src = readFileSync(new URL('../app/candidates/[key]/paper-estimate.jsx', import.meta.url), 'utf8');
+  for (const s of ['q7.statusRule', 'q7.fitRule', 's.statusLoans', 's.oreo', 'notReported']) assert.ok(src.includes(s), s);
+  const buybox = JSON.parse(readFileSync(new URL('../../buybox.json', import.meta.url), 'utf8'));
+  const r = record({ buybox, placeholders: [] });
+  assert.match(r.q7.statusRule.text, /non-performing = 90 days or more past due \(still accruing\) \+ nonaccrual; sub-performing = 30-89 days past due; foreclosed \(REO\/OREO\) = foreclosed property the bank owns \(OREO\)/);
+  const mf = r.q7.sectors.find((s) => s.sector === 'multifamily');
+  assert.deepEqual([show(mf.statusLoans.amount).text, show(mf.statusLoans.amount).tier], ['$15.0M', 'reported']);
+  assert.deepEqual(mf.statusLoans.byLine[0].parts.map((p) => show(at(r, p.ref)).text), ['$4.0M', '$1.0M', '$10.0M'], 'each stage is read from Q1 by its ref');
+  assert.deepEqual([show(mf.oreo.figure).text, show(mf.oreo.figure).tier], ['$1.0M', 'reported']);
+  const h = r.q7.sectors.find((s) => s.sector === 'hospitality');
+  assert.deepEqual([show(h.oreo.figure).text, show(h.oreo.figure).tier], ['$0 to $1.5M', 'inferred bounds']);
+  assert.ok(r.summary.some((s) => s.id === 'inBoxOreo:multifamily' && show(at(r, s.ref)).text === '$1.0M'), 'beside the loan bounds in the summary');
 });
 
 test('the page component renders from the record only, keeps the house style and carries no secret', () => {

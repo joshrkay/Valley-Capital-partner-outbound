@@ -13,7 +13,7 @@ import { saleSignals } from './sales.mjs';
 import { enforcementSignals } from './sources/enforcement.mjs';
 import { mergerSignals } from './sources/mergerapps.mjs';
 import { buildRegulatory, writeRegulatory } from './regulatory.mjs';
-import { buildPaper, paperPath } from './paper.mjs';
+import { buildPaper, paperPath, STATUS_STAGE_IDS } from './paper.mjs';
 
 const PLACEHOLDER = /\[confirm/i;
 const SECTORS = ['hospitality', 'multifamily', 'retail'];
@@ -36,6 +36,25 @@ export function findPlaceholders(v, path = '') {
   return [];
 }
 
+// D-P3: `statusStages` maps each status the buy box lists to the Call Report stage ids that count as it (src/paper.mjs, STATUS_STAGES).
+// Every listed status needs a mapping and every stage id must be known. A placeholder status is not checked: it is a placeholder.
+function statusStageErrors(buybox) {
+  const errors = [];
+  const map = buybox.statusStages;
+  const known = STATUS_STAGE_IDS.join(', ');
+  if (map !== undefined && !isObj(map)) return [`statusStages must be an object mapping each status to Call Report stage ids (D-P3; known: ${known})`];
+  for (const [status, ids] of Object.entries(map ?? {}).filter(([k]) => !k.startsWith('_'))) {
+    if (!Array.isArray(ids) || !ids.length) { errors.push(`statusStages."${status}" must list one or more stage ids (known: ${known})`); continue; }
+    for (const id of ids) if (!STATUS_STAGE_IDS.includes(id)) errors.push(`statusStages."${status}": unknown stage id "${id}" (known: ${known})`);
+  }
+  const listed = Array.isArray(buybox.statuses) ? buybox.statuses : typeof buybox.statuses === 'string' ? [buybox.statuses] : [];
+  for (const s of listed.map(String)) {
+    if (PLACEHOLDER.test(s)) continue;
+    if (!isObj(map) || s.startsWith('_') || !Object.prototype.hasOwnProperty.call(map, s)) errors.push(`statusStages has no mapping for status "${s}": every status in statuses maps to Call Report stage ids (D-P3; known: ${known})`);
+  }
+  return errors;
+}
+
 // { ok, placeholders: [path], errors: [message] }. ok means no errors and no placeholders.
 export function validateBuybox(buybox, { metros } = {}) {
   const errors = [];
@@ -54,6 +73,7 @@ export function validateBuybox(buybox, { metros } = {}) {
   const cap = buybox.filters?.maxAssetsThousands;
   if (!(typeof cap === 'number' && cap > 0)) errors.push('filters.maxAssetsThousands must be a positive number (thousands of dollars)');
   for (const k of ['loanSize', 'statuses', 'lien', 'exclusions']) if (!(k in buybox)) errors.push(`${k} is missing`);
+  errors.push(...statusStageErrors(buybox));
   const placeholders = findPlaceholders(buybox);
   return { ok: !errors.length && !placeholders.length, placeholders, errors };
 }

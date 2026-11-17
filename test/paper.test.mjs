@@ -4,9 +4,9 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { statSync } from 'node:fs';
 import { makeDir, put, loadJson, placeholderBuybox } from './kit.mjs';
-import { buildPaper, frechetBounds, sizeShareInterval, paperValues, paperAt, paperFileId, paperPath, readPaper, renderPaper, formatValue, paperForBriefer,
+import { buildPaper, frechetBounds, sizeShareInterval, statusEligible, paperValues, paperAt, paperFileId, paperPath, readPaper, renderPaper, formatValue, paperForBriefer,
   TIERS, STATUS, SERIES_BREAK_2023, TAPE_REQUEST, BOUNDS_METHOD } from '../src/paper.mjs';
-import { runScoring } from '../src/score.mjs';
+import { runScoring, validateBuybox } from '../src/score.mjs';
 import { SEMIANNUAL_FIELDS, FDIC_FIELDS } from '../src/sources/fdic.mjs';
 import { confirmFiler } from '../src/sources/filers.mjs';
 import { readJsonl } from '../src/store.mjs';
@@ -266,13 +266,14 @@ test('bounds math: k=1, k=3, a lower bound that hits zero, and intervals', () =>
   assert.deepEqual(sizeShareInterval({ minUsd: 250000, maxUsd: 5000000 }, b).may, ['from250kTo1m', 'over1m']);
 });
 
-test('Q7 in the record: multifamily from its own line and the metro proxy; hotel and retail unknown inside nonfarm nonresidential; no base figure', () => {
+test('Q7 in the record: multifamily from its own line, the metro proxy and its status stages; hotel and retail unknown inside nonfarm nonresidential; no base figure', () => {
   const r = paper();
   const book = (100000 + 300000 + 600000) * 1000;
   assert.equal(r.q1.creBook.value, book);
   const mf = r.q7.sectors.find((s) => s.sector === 'multifamily');
-  assert.deepEqual(mf.conditions.map((c) => [c.id, c.share.low, c.share.high]), [['category', 0.3, 0.3], ['metro', 0.6, 0.6], ['size', 0, 1], ['status', 0, 1], ['lien', 0, 1], ['exclusions', 0, 1]]);
-  assert.deepEqual([mf.bounds.low, mf.bounds.high, mf.bounds.k, mf.bounds.tier, mf.bounds.method], [0, 0.3 * book, 6, 'inferred', BOUNDS_METHOD], '0.3 + 0.6 - 1 < 0, and four conditions are unknown');
+  // The filled buy box buys non-performing loans: by D-P3, 90+ days past due + nonaccrual, 1,000 + 10,000 of multifamily (thousands).
+  assert.deepEqual(mf.conditions.map((c) => [c.id, c.share.low, c.share.high]), [['category', 0.3, 0.3], ['metro', 0.6, 0.6], ['size', 0, 1], ['status', 0.011, 0.011], ['lien', 0, 1], ['exclusions', 0, 1]]);
+  assert.deepEqual([mf.bounds.low, mf.bounds.high, mf.bounds.k, mf.bounds.tier, mf.bounds.method], [0, 11000 * 1000, 6, 'inferred', BOUNDS_METHOD], '0.3 + 0.6 - 1 < 0, three conditions are unknown, and the status share is the smallest');
   assert.match(mf.bounds.lowNote, /lower bound is 0/);
   assert.match(mf.unknownConditions.find((u) => u.id === 'size').reason, /no loan-size data for multifamily/);
   // Hotel: the category's share is unknown, so it enters as [0, nonfarm nonresidential share]: the lower bound is 0.
@@ -282,13 +283,15 @@ test('Q7 in the record: multifamily from its own line and the metro proxy; hotel
   assert.equal(h.bounds.low, 0);
   // Size: over $1 million by original amount = LNRENRES - LNRENR4 = 500,000 of 600,000 nonfarm nonresidential: 0.5 of the book at most.
   assert.deepEqual([h.conditions[2].share.low, h.conditions[2].share.high], [0, 0.5]);
-  assert.equal(h.bounds.high, Math.round(0.5 * book), 'upper = min(0.6, 0.6, 0.5) x book');
+  // Status: non-performing nonfarm nonresidential loans, both lines = 1,500 + 6,000 + 500 + 2,000 = 10,000: 0.01 of the book.
+  assert.deepEqual([h.conditions[3].share.low, h.conditions[3].share.high], [0.01, 0.01]);
+  assert.equal(h.bounds.high, 10000 * 1000, 'upper = min(0.6, 0.6, 0.5, 0.01) x book: the status share is the smallest');
   assert.match(h.why, /cannot split them/); assert.match(h.why, /lower bound is 0/);
   assert.equal(r.q7.sectors.find((s) => s.sector === 'retail').bounds.high, h.bounds.high);
-  // With no deposit data and no usable size, the upper bound for hotel is all of nonfarm nonresidential, and the lower is 0.
+  // With no deposit data and no usable size, the upper bound for hotel is its non-performing nonfarm nonresidential loans, and the lower is 0.
   const bare = paper({ footprint: {}, buybox: filledBuybox({ loanSize: { minUsd: '[CONFIRM]', maxUsd: '[CONFIRM]' } }), placeholders: ['loanSize.minUsd', 'loanSize.maxUsd'] });
   const hb = bare.q7.sectors.find((s) => s.sector === 'hospitality');
-  assert.deepEqual([hb.bounds.low, hb.bounds.high], [0, 600000 * 1000]);
+  assert.deepEqual([hb.bounds.low, hb.bounds.high], [0, 10000 * 1000]);
   assert.match(hb.unknownConditions.find((u) => u.id === 'size').reason, /placeholder/);
   assert.equal(bare.q7.provisional, true); assert.equal(bare.provisional, true);
   // Bounds only: no value, no base, anywhere in Q7.
@@ -317,20 +320,20 @@ test('k=3 in the record for hotel (its lower bound stays 0), and a lower bound a
 });
 
 test('every buy-box condition the data cannot measure enters as 0 to all, so the lower bound is 0, and the record lists them', () => {
-  // The review's case: 30% multifamily, 100% of deposits in buy-box metros. The buy box restricts size, status, lien and exclusions, and
-  // nothing measures them for multifamily, so the floor is 0, not 30% of the book.
+  // The review's case: 30% multifamily, 100% of deposits in buy-box metros. The buy box restricts size, lien and exclusions, and nothing
+  // measures them for multifamily, so the floor is 0, not 30% of the book. Status is measured (D-P3), so it is not among them.
   const r = paper({ footprint: ALL_IN_BOX });
   const mf = r.q7.sectors.find((s) => s.sector === 'multifamily');
-  assert.deepEqual(mf.unknownConditions.map((u) => u.id), ['size', 'status', 'lien', 'exclusions']);
-  assert.deepEqual([mf.bounds.low, mf.bounds.high, mf.bounds.k], [0, 300000 * 1000, 6]);
+  assert.deepEqual(mf.unknownConditions.map((u) => u.id), ['size', 'lien', 'exclusions']);
+  assert.deepEqual([mf.bounds.low, mf.bounds.high, mf.bounds.k], [0, 11000 * 1000, 6]);
   for (const u of mf.unknownConditions) {
     const c = mf.conditions.find((x) => x.id === u.id);
     assert.deepEqual([c.share.low, c.share.high, c.share.status, c.share.tier], [0, 1, 'unknown', null], u.id);
     assert.ok(u.label && u.reason, u.id);
   }
-  assert.match(mf.bounds.lowNote, /The lower bound is 0 because these buy-box conditions cannot be measured: loan size, status, lien position, exclusions\./);
+  assert.match(mf.bounds.lowNote, /The lower bound is 0 because these buy-box conditions cannot be measured: loan size, lien position, exclusions\./);
   const h = r.q7.sectors.find((s) => s.sector === 'hospitality');
-  assert.deepEqual(h.unknownConditions.map((u) => u.id), ['status', 'lien', 'exclusions'], 'hotel\'s size is measured from the size buckets');
+  assert.deepEqual(h.unknownConditions.map((u) => u.id), ['lien', 'exclusions'], 'hotel\'s size is measured from the size buckets, and its status from the stages');
   assert.equal(h.bounds.low, 0);
   assert.match(r.q8.unknowns.find((u) => u.id === 'in-box-floor').text, /lien position/);
   assert.match(renderPaper(r), /Unknown condition lien: .*0\.0% to 100\.0%/);
@@ -346,9 +349,9 @@ test('each Q7 condition carries its own tier: the deposit proxy, the hotel and r
   const r = paper();
   const tiers = (s) => Object.fromEntries(s.conditions.filter((c) => c.share.tier).map((c) => [c.id, c.share.tier]));
   const mf = r.q7.sectors.find((s) => s.sector === 'multifamily');
-  assert.deepEqual(tiers(mf), { category: 'reported', metro: 'inferred' }, 'multifamily has its own Call Report line; the metro share is a deposit proxy');
+  assert.deepEqual(tiers(mf), { category: 'reported', metro: 'inferred', status: 'reported' }, 'multifamily has its own Call Report line and stages; the metro share is a deposit proxy');
   const h = r.q7.sectors.find((s) => s.sector === 'hospitality');
-  assert.deepEqual(tiers(h), { category: 'inferred', metro: 'inferred', size: 'reported' }, 'the hotel share only lies in [0, NFNR share]; the June size mix on the June balance is reported');
+  assert.deepEqual(tiers(h), { category: 'inferred', metro: 'inferred', size: 'reported', status: 'reported' }, 'the hotel share only lies in [0, NFNR share]; the June size mix on the June balance, and the June stages, are reported');
   assert.deepEqual(tiers(r.q7.sectors.find((s) => s.sector === 'retail')), tiers(h));
   // With a September report, the June size mix is applied to the September balance: an inference.
   const sep = paper({ financials: { CERT: '1', quarters: quarters([...REPS.slice(1), '20260930']) } });
@@ -358,6 +361,142 @@ test('each Q7 condition carries its own tier: the deposit proxy, the hotel and r
   assert.equal(h.bounds.tier, 'inferred');
   assert.equal(paper({ footprint: {} }).q7.sectors.find((s) => s.sector === 'multifamily').bounds.tier, 'reported');
   assert.match(renderPaper(r), /Condition metro: Share in the buy-box metros, by the deposit proxy \[inferred\]: 60\.0%/);
+});
+
+// ---- Q7 status, by D-P3 (decided 2026-11-17) -----------------------------------------------------------------------------------------
+const bySector = (r, id) => r.q7.sectors.find((s) => s.sector === id);
+const statusShare = (s) => s.conditions.find((c) => c.id === 'status').share;
+
+test('D-P3: the status condition is the loans on each sector\'s own lines in the stages the buy box buys, with exact amounts', () => {
+  // The shipped buy box: non-performing (90+ days past due and nonaccrual), sub-performing (30-89) and foreclosed (OREO, not loans).
+  const r = paper({ buybox: shippedBuybox() });
+  assert.deepEqual(r.q7.statusRule.statuses, [{ status: 'non-performing', stages: ['pastDue90', 'nonaccrual'] }, { status: 'sub-performing', stages: ['pastDue30to89'] }, { status: 'foreclosed (REO/OREO)', stages: ['oreo'] }]);
+  assert.deepEqual([r.q7.statusRule.state, r.q7.statusRule.loanStages, r.q7.statusRule.oreo], ['mapped', ['pastDue30to89', 'pastDue90', 'nonaccrual'], true]);
+  const mf = bySector(r, 'multifamily'), h = bySector(r, 'hospitality'), rt = bySector(r, 'retail');
+  // Multifamily: P3REMULT + P9REMULT + NAREMULT = 4,000 + 1,000 + 10,000 (thousands), a reported sum.
+  assert.deepEqual([mf.statusLoans.amount.value, mf.statusLoans.amount.tier, mf.statusLoans.amount.kind, mf.statusLoans.amount.asOf], [15000 * 1000, 'reported', 'stock', '2026-06-30']);
+  assert.deepEqual(mf.statusLoans.amount.sources.map((s) => s.field), ['P3REMULT', 'P9REMULT', 'NAREMULT']);
+  // Hotel and retail: both nonfarm nonresidential lines, other (4,000 + 1,500 + 6,000) and owner-occupied (2,000 + 500 + 2,000).
+  assert.equal(h.statusLoans.amount.value, 16000 * 1000);
+  assert.deepEqual(h.statusLoans.byLine.map((l) => l.line), ['nonfarmNonresidentialOther', 'nonfarmNonresidentialOwnerOccupied']);
+  assert.deepEqual(rt.statusLoans.amount, h.statusLoans.amount);
+  for (const s of r.q7.sectors) {
+    assert.ok(!s.statusLoans.byLine.some((l) => l.line === 'notSecuredByRealEstate'), 'CRE not secured by real estate is outside the book Q7 measures');
+    for (const l of s.statusLoans.byLine) for (const p of l.parts) assert.equal(paperAt(r, p.ref), r.q1.categories.find((c) => c.id === l.line).stages[p.stage].amount, `${s.sector} ${p.ref}: each stage is stored once, in Q1`);
+  }
+  // As a condition: a direct share of the book, reported, combined with the others as bounds (upper = the smallest share), never multiplied.
+  assert.deepEqual([statusShare(mf).low, statusShare(mf).high, statusShare(mf).tier], [0.015, 0.015, 'reported']);
+  assert.deepEqual([statusShare(h).low, statusShare(h).high, statusShare(h).tier], [0.016, 0.016, 'reported']);
+  for (const s of [mf, h]) assert.deepEqual(frechetBounds(s.conditions.map((c) => c.share)), { k: s.bounds.k, low: s.bounds.lowShare, high: s.bounds.highShare }, s.sector);
+  assert.deepEqual([mf.bounds.low, mf.bounds.high, mf.bounds.k], [0, 15000 * 1000, 5], 'category 0.3, metro 0.6, size 0 to 1, status 0.015, lien 0 to 1');
+  assert.deepEqual([h.bounds.low, h.bounds.high, h.bounds.k], [0, 16000 * 1000, 5], 'category 0 to 0.6, metro 0.6, size 0 to 0.5, status 0.016, lien 0 to 1');
+  // A buy box of non-performing loans only: 30-89 days past due is sub-performing, so it does not count.
+  const np = paper();
+  assert.deepEqual(np.q7.statusRule.loanStages, ['pastDue90', 'nonaccrual']);
+  assert.equal(bySector(np, 'multifamily').statusLoans.amount.value, (1000 + 10000) * 1000);
+  assert.equal(bySector(np, 'hospitality').statusLoans.amount.value, (1500 + 6000 + 500 + 2000) * 1000);
+  // A bank with no multifamily loans in a stage the buy box buys has none in the box: a reported 0, and an upper bound of 0.
+  const clean = paper({ buybox: shippedBuybox(), financials: { CERT: '1', quarters: quarters(REPS, () => ({ P3REMULT: 0, P9REMULT: 0, NAREMULT: 0 })) } });
+  const cm = bySector(clean, 'multifamily');
+  assert.deepEqual([cm.statusLoans.amount.value, cm.statusLoans.amount.tier, cm.bounds.low, cm.bounds.high], [0, 'reported', 0, 0]);
+  // The text says which stages count as each status, citing D-P3, and states the fit rule.
+  const t = renderPaper(r);
+  assert.match(t, /Status, by D-P3 \(buybox\.json statusStages\): non-performing = 90 days or more past due \(still accruing\) \+ nonaccrual; sub-performing = 30-89 days past due; foreclosed \(REO\/OREO\) = foreclosed property the bank owns \(OREO\)\./);
+  assert.match(t, /Fit rule, D-P3: sector and metro must match; size and status narrow the range\./);
+  assert.match(t, /Multifamily loans in a stage the buy box buys \(30-89 days past due, 90 days or more past due \(still accruing\), nonaccrual\): \$15\.0 million {2}\[reported, June 30, 2026\]/);
+  assert.match(t, /Condition status: Multifamily loans in a stage the buy box buys .*\[reported\]: 1\.5%/);
+});
+
+test('a stage FDIC does not report is "not reported" in the status sum, never zero: it widens the range, and the bound, instead of zeroing them', () => {
+  const r = paper({ buybox: shippedBuybox() });
+  // CRE not secured by real estate: FDIC reports its 30-89 stage (P3COMRE, a reported 0 here) and no 90+ or nonaccrual field.
+  const ns = r.q1.categories.find((c) => c.id === 'notSecuredByRealEstate');
+  const e = statusEligible([ns], ['pastDue30to89', 'pastDue90', 'nonaccrual']);
+  assert.deepEqual(e.notReported.map((n) => [n.line, n.stage, n.status]), [['notSecuredByRealEstate', 'pastDue90', 'not-reported'], ['notSecuredByRealEstate', 'nonaccrual', 'not-reported']]);
+  assert.ok(e.notReported.every((n) => /^FDIC reports no (90\+ days past due|nonaccrual) field/.test(n.reason)), 'it says so');
+  assert.deepEqual(e.byLine[0].parts.map((p) => [p.stage, p.reported]), [['pastDue30to89', true], ['pastDue90', false], ['nonaccrual', false]]);
+  // The stages not reported hold anywhere from none to the rest of the line: LNCOMRE 20,000 less the 0 reported. A range, not a gap, not 0.
+  assert.deepEqual([e.amount.low, e.amount.high, e.amount.tier, 'value' in e.amount, 'status' in e.amount], [0, 20000 * 1000, 'inferred', false, false]);
+  // With 500 past due 30-89 days on the line, the range runs from 500 to the whole line; zeroing the missing stages would stop it at 500.
+  const r2 = paper({ buybox: shippedBuybox(), financials: { CERT: '1', quarters: quarters(REPS, () => ({ P3COMRE: 500 })) } });
+  const e2 = statusEligible([r2.q1.categories.find((c) => c.id === 'notSecuredByRealEstate')], ['pastDue30to89', 'pastDue90', 'nonaccrual']);
+  assert.deepEqual([e2.low, e2.high], [500 * 1000, 20000 * 1000]);
+  // In the record: FDIC sends no value for multifamily's 90+ stage. It is "no value from FDIC", never 0. The status share becomes a range
+  // from the stages reported (30-89 and nonaccrual) to the whole line, so the upper bound widens to the category share instead of shrinking.
+  const nul = paper({ buybox: shippedBuybox(), financials: { CERT: '1', quarters: quarters(REPS, (rep) => (rep === '20260630' ? { P9REMULT: null } : {})) } });
+  const mf = bySector(nul, 'multifamily');
+  assert.deepEqual(mf.statusLoans.notReported.map((n) => [n.line, n.stage, n.status]), [['multifamily', 'pastDue90', 'null']]);
+  assert.deepEqual([mf.statusLoans.amount.low, mf.statusLoans.amount.high, mf.statusLoans.amount.tier], [(4000 + 10000) * 1000, 300000 * 1000, 'inferred']);
+  const s = statusShare(mf);
+  assert.deepEqual([s.low, s.high, s.tier, s.method], [0.014, 0.3, 'inferred', 'share-interval']);
+  assert.equal(mf.bounds.high, 300000 * 1000, 'min(0.3, 0.6, 1, 0.3, 1): the category share, not the 1.4% the reported stages alone would give');
+  assert.equal(mf.bounds.tier, 'inferred');
+  assert.match(mf.conditions.find((c) => c.id === 'status').basis, /Not reported: 90 days or more past due \(still accruing\), multifamily \(no value from FDIC\)\..*never as zero/);
+  assert.match(renderPaper(nul), /Multifamily: 30-89 days past due: \$4\.0 million {2}\[reported, June 30, 2026\]; 90 days or more past due \(still accruing\): no value from FDIC: /);
+  everyValue(nul);
+});
+
+test('foreclosed property (OREO) is its own in-box figure, a stock beside the loan bounds, never added to a loan share', () => {
+  const r = paper({ buybox: shippedBuybox() });
+  const mf = bySector(r, 'multifamily'), h = bySector(r, 'hospitality');
+  assert.deepEqual([mf.oreo.inBox, mf.oreo.figure.value, mf.oreo.figure.kind, mf.oreo.figure.tier, mf.oreo.figure.sources.map((s) => s.field)], [true, 1000 * 1000, 'stock', 'reported', ['OREMULT']]);
+  // Hotel and retail OREO is an unknown part of nonfarm nonresidential OREO: from none to all of it, as the loans are.
+  assert.deepEqual([h.oreo.figure.low, h.oreo.figure.high, h.oreo.figure.kind, h.oreo.figure.tier, h.oreo.figure.sources.map((s) => s.field)], [0, 1500 * 1000, 'stock', 'inferred', ['ORENRES']]);
+  assert.match(h.oreo.note, /cannot split it/); assert.match(mf.oreo.note, /not loans/); assert.match(mf.oreo.note, /does not say where the property is/);
+  // Never in the loans: no OREO field behind any condition, status sum or bound, and the multifamily sum is its loan stages only.
+  for (const s of r.q7.sectors) {
+    const fields = [...s.conditions.flatMap((c) => c.share.sources), ...s.bounds.sources, ...s.statusLoans.amount.sources].map((x) => x.field);
+    assert.ok(!fields.some((f) => /^ORE/.test(f)), `${s.sector}: ${fields.join(', ')}`);
+  }
+  assert.equal(mf.statusLoans.amount.value, 15000 * 1000, 'not 15,000 + 1,000 of OREO');
+  // Beside the loan bounds: in the summary right after them, and in the text.
+  const ids = r.summary.map((s) => s.id);
+  assert.equal(ids.indexOf('inBoxOreo:multifamily'), ids.indexOf('inBox:multifamily') + 1);
+  assert.equal(paperAt(r, r.summary.find((s) => s.id === 'inBoxOreo:multifamily').ref), mf.oreo.figure);
+  const t = renderPaper(r);
+  assert.match(t, /In the buy box: \$0 to \$15\.0 million {2}\[inferred bounds, June 30, 2026\]\n {4}Multifamily foreclosed property \(OREO\), its own figure \(property, not loans; never added to the loan bounds\): \$1\.0 million {2}\[reported, June 30, 2026\]/);
+  // A buy box that does not buy foreclosed property has no OREO in the box, and no OREO line in the summary.
+  const np = paper();
+  assert.deepEqual([bySector(np, 'multifamily').oreo.inBox, bySector(np, 'multifamily').oreo.figure], [false, undefined]);
+  assert.ok(!np.summary.some((s) => s.id.startsWith('inBoxOreo:')));
+});
+
+test('with the shipped buy box, lien position stays an unknown condition, and its empty exclusions restrict nothing', () => {
+  const r = paper({ buybox: shippedBuybox() });
+  for (const s of r.q7.sectors) {
+    const lien = s.unknownConditions.find((u) => u.id === 'lien');
+    assert.deepEqual([lien.label, lien.reason], ['lien position', 'The Call Report does not report lien position for these loans.'], s.sector);
+    const c = s.conditions.find((x) => x.id === 'lien').share;
+    assert.deepEqual([c.low, c.high, c.status, c.tier], [0, 1, 'unknown', null]);
+    assert.ok(!s.conditions.some((x) => x.id === 'exclusions'));
+    assert.match(s.notUsed.find((n) => n.id === 'exclusions').reason, /excludes nothing/);
+    assert.ok(!s.unknownConditions.some((u) => u.id === 'status'), 'status is measured');
+  }
+  assert.deepEqual(bySector(r, 'multifamily').unknownConditions.map((u) => u.id), ['size', 'lien']);
+  assert.deepEqual(bySector(r, 'hospitality').unknownConditions.map((u) => u.id), ['lien']);
+  assert.match(bySector(r, 'hospitality').bounds.lowNote, /cannot be measured: lien position\./);
+  assert.ok(!r.q8.unknowns.some((u) => u.id === 'status-mapping'));
+  assert.match(r.q8.unknowns.find((u) => u.id === 'in-box-floor').text, /lien position/);
+});
+
+test('the placeholder buy box behaves as before: status unknown (0 to all), and the record provisional; an unmapped status is unknown too', () => {
+  const pb = placeholderBuybox();
+  const r = paper({ buybox: pb, placeholders: validateBuybox(pb, { metros }).placeholders });
+  assert.equal(r.provisional, true); assert.equal(r.q7.provisional, true);
+  assert.equal(r.q7.statusRule.state, 'unknown');
+  for (const s of r.q7.sectors) {
+    const u = s.unknownConditions.find((x) => x.id === 'status');
+    assert.match(u.reason, /placeholder/);
+    const c = statusShare(s);
+    assert.deepEqual([c.low, c.high, c.status, c.tier], [0, 1, 'unknown', null]);
+    assert.equal(s.statusLoans, undefined, 'no stages are summed while the statuses are a placeholder');
+    assert.deepEqual([s.oreo.inBox, s.oreo.figure.value, s.oreo.figure.status], [null, null, 'unknown'], 'nor is OREO claimed for the box');
+    assert.equal(s.bounds.low, 0);
+  }
+  for (const id of ['status-mapping', 'buy-box-placeholders']) assert.ok(r.q8.unknowns.some((u) => u.id === id), id);
+  // A status the mapping does not cover (validateBuybox calls it an error) is unknown too, never guessed.
+  const unmapped = paper({ buybox: filledBuybox({ statuses: ['non-performing', 'distressed'] }) });
+  assert.match(bySector(unmapped, 'multifamily').unknownConditions.find((u) => u.id === 'status').reason, /lists "distressed", which buybox\.json statusStages does not map/);
 });
 
 // ---- Q3, Q5, Q6, Q8 and the summary -----------------------------------------------------------------------------------------------
@@ -391,7 +530,7 @@ test('the text for `outbound paper show` gives each number its tier and date, an
   const t = renderPaper(r);
   assert.match(t, /^PAPER ESTIMATE: Alpha Example Bank \(fdic:1\)/);
   assert.match(t, /Investor CRE \(2006 guidance definition\): \$820\.0 million {2}\[reported, June 30, 2026\]/);
-  assert.match(t, /Multifamily loans in the buy box: bounds: \$0 to \$300\.0 million {2}\[inferred bounds, June 30, 2026\]/);
+  assert.match(t, /Multifamily loans in the buy box: bounds: \$0 to \$11\.0 million {2}\[inferred bounds, June 30, 2026\]/);
   assert.match(t, /Under \$1 million, number of loans: 340 {2}\[reported, June 30, 2026\]/);
   assert.match(t, /Charge-offs, net, year to date \(a flow\): \$20,000 {2}\[reported, year to date to June 30, 2026\]/);
   const gapLine = new RegExp(`: (${Object.values(STATUS).map((x) => x.replace(/[()]/g, '\\$&')).join('|')}): `);
