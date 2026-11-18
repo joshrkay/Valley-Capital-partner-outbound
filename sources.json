@@ -269,9 +269,8 @@
         "Find report links by their text ('Election and Demand'), since report type numbers differ by county."
       ],
       "adapter": "jefferson",
-      "enabled": false,
-      "waitingOn": "A principal's recorded decision (D-B8) and counsel's note on the county's copyright claim in data compilations (D-B9).",
-      "principalDecision": null,
+      "enabled": true,
+      "principalDecision": { "decision": "allowed", "decidedOn": "2026-11-18", "by": "a principal", "robotsCheckedOn": "2026-11-18", "termsCheckedOn": "2026-11-18", "cadence": "weekly", "conditions": ["Only the facts read from the reports are stored, never the county's PDFs.", "The county's copyright claim in data compilations goes to counsel (D-B9)."] },
       "toConfirm": ["Counsel: that storing extracted fields is untouched by the county's copyright claim in data compilations (with D-B9)."]
     },
     {
@@ -315,9 +314,8 @@
         "The same as the NED report. A sale-week signal: it confirms which NED cases reach a sale, and their bid and indebtedness."
       ],
       "adapter": "jefferson",
-      "enabled": false,
-      "waitingOn": "The same decision as the NED report: one adapter reads both.",
-      "principalDecision": null,
+      "enabled": true,
+      "principalDecision": { "decision": "allowed", "decidedOn": "2026-11-18", "by": "a principal", "robotsCheckedOn": "2026-11-18", "termsCheckedOn": "2026-11-18", "cadence": "weekly", "conditions": ["The same decision as the NED report: one adapter reads both."] },
       "toConfirm": []
     },
     {
@@ -364,9 +362,8 @@
         "Borrower names stay principal context; the signal is the current beneficiary."
       ],
       "adapter": "douglas",
-      "enabled": false,
-      "waitingOn": "A principal recording that the firm accepts the reports page's terms.",
-      "principalDecision": null,
+      "enabled": true,
+      "principalDecision": { "decision": "allowed", "decidedOn": "2026-11-18", "by": "a principal", "robotsCheckedOn": "2026-11-18", "termsCheckedOn": "2026-11-18", "cadence": "weekly", "conditions": ["The firm accepts the reports page's terms: lawful and ethical use only, and a release of liability.", "Only the facts read from the list are stored, never the county's PDFs."] },
       "toConfirm": ["A principal records acceptance of the Douglas reports terms.", "Ask the Public Trustee whether it would publish a new-NED report, as Jefferson does: the pre-sale list comes 110 days or more after the NED."]
     },
     {

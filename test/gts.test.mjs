@@ -200,23 +200,33 @@ test('the layout reader: a lead label and its columns, wrapped lines, a repeated
   assert.deepEqual([r.preamble, r.stray], [['preamble'], 2]);
 });
 
-test('NOT ENABLED: the shipped Jefferson and Douglas adapters refuse to run or backfill and fetch nothing, until the decision is recorded and config enables them', async () => {
+test('THE GATE: Jefferson and Douglas ship with the principal\'s decision of 2026-11-18 and are enabled; without a recorded decision, or while config marks them not enabled, they refuse to run or backfill and fetch nothing', async () => {
+  // As shipped: the decision is recorded on each adapter, and config.counties.sources enables both.
+  for (const s of [jefferson, douglas]) {
+    assert.deepEqual([s.terms.decision, s.terms.by, s.terms.decidedOn], ['allowed', 'a principal', '2026-11-18'], `${s.id} carries the decision`);
+    assert.equal(runnable(s).ok, true, `${s.id} is runnable as shipped`);
+    assert.equal(config().counties.sources[s.id].enabled, true, `${s.id} is enabled in config`);
+  }
   const calls = [];
   const fetchImpl = async (u) => { calls.push(u); return new Response('', { status: 500 }); };
-  for (const s of [jefferson, douglas]) {
+  // Without a recorded decision, nothing is read.
+  const undecided = (s) => defineNoticeSource({ ...s, terms: { ...s.terms, decision: null, by: null, waitingOn: 'a principal\'s recorded decision.' } });
+  for (const s of [jefferson, douglas].map(undecided)) {
     await assert.rejects(runNoticeSource({ dir: world(), source: s, counties: config().counties, fetchImpl }), /no recorded decision[\s\S]*Waiting on/);
     assert.match(runnable(s).reason, /Waiting on: a principal/);
   }
-  await assert.rejects(runNoticeSource({ dir: world(), source: jefferson, counties: config().counties, fetchImpl, backfill: { since: '2025-01-01' } }), /no recorded decision/);
-  // A recorded decision is not enough while config.counties.sources still marks it not enabled.
-  await assert.rejects(runNoticeSource({ dir: world(), source: J, counties: config().counties, fetchImpl }), /not enabled in config\.counties\.sources[\s\S]*Waiting on/);
-  await assert.rejects(runNoticeSource({ dir: world(), source: D, counties: config().counties, fetchImpl }), /not enabled/);
+  await assert.rejects(runNoticeSource({ dir: world(), source: undecided(jefferson), counties: config().counties, fetchImpl, backfill: { since: '2025-01-01' } }), /no recorded decision/);
+  // A recorded decision is not enough while config.counties.sources marks the source not enabled.
+  const c = config().counties;
+  const off = { ...c, sources: { ...c.sources, jefferson: { enabled: false, waitingOn: 'paused by a principal.' }, douglas: { enabled: false, waitingOn: 'paused by a principal.' } } };
+  await assert.rejects(runNoticeSource({ dir: world(), source: J, counties: off, fetchImpl }), /not enabled in config\.counties\.sources[\s\S]*Waiting on/);
+  await assert.rejects(runNoticeSource({ dir: world(), source: D, counties: off, fetchImpl }), /not enabled/);
   assert.deepEqual(calls, [], 'not one request');
   // Its verify check reads nothing either.
   const dir = world();
   put(dir, 'loans/state.json', { sources: { jefferson: { lastOk: { ranAt: T1.toISOString() } } } });
-  const v = await verifyNoticeSource({ dir, source: jefferson, counties: config().counties, fetchImpl, now: T1 });
-  assert.match(v.checks.find((c) => c.id === 'county.recall').summary, /no recorded decision/);
+  const v = await verifyNoticeSource({ dir, source: undecided(jefferson), counties: config().counties, fetchImpl, now: T1 });
+  assert.match(v.checks.find((x) => x.id === 'county.recall').summary, /no recorded decision/);
   assert.deepEqual(calls, []);
 });
 

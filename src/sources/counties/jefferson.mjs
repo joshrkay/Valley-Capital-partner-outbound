@@ -145,8 +145,10 @@ export const jefferson = defineNoticeSource({
   hosts: [JEFFERSON_HOST],
   minIntervalMs: 21000,
   terms: {
-    robotsCheckedOn: '2026-11-18', termsCheckedOn: '2026-11-18', decision: null, by: null,
-    waitingOn: 'a principal\'s recorded decision that the GTS reports may be read by software, and counsel\'s note on the county\'s copyright claim in "data compilations" (D-B9).',
+    // A principal's decision of 2026-11-18: the GTS reports may be read weekly by software. Only the facts read out of them are stored
+    // (lender, amounts, dates, references), never the county's PDFs. The county's copyright claim in "data compilations" goes to counsel
+    // with D-B9.
+    robotsCheckedOn: '2026-11-18', termsCheckedOn: '2026-11-18', decision: 'allowed', by: 'a principal', decidedOn: '2026-11-18',
   },
   requests: () => [{ url: JEFFERSON_REPORTS, kind: 'reports' }],
   parse: gtsPageParser({ reports: JEFFERSON_REPORT_KINDS, weekly: ['ned-index', 'presale-index'], backfill: ['archive-index'] }),

@@ -20,7 +20,9 @@ test('the worker\'s loans.watch job runs every watched county in its own unit of
   const { work, JOB_KINDS } = await import('../src/platform/worker.mjs');
   const { loadRules } = await import('../src/rules.mjs');
   assert.ok(JOB_KINDS.includes('loans.watch'));
-  const rules = loadRules();
+  // This test is about the job and Caldwell; Jefferson and Douglas (enabled as shipped) are paused here and have their own tests.
+  const shippedRules = loadRules(), sc = shippedRules.config.counties;
+  const rules = { ...shippedRules, config: { ...shippedRules.config, counties: { ...sc, sources: { ...sc.sources, jefferson: { enabled: false, waitingOn: 'paused for this test.' }, douglas: { enabled: false, waitingOn: 'paused for this test.' } } } } };
   const fake = fakePostgrest();
   fake.docs.set('sources/fdic/institutions.json', { path: 'sources/fdic/institutions.json', kind: 'json', body: INSTITUTIONS, text: null, version: 1 });
   const url = 'https://example-project.supabase.test';
@@ -53,7 +55,7 @@ test('the workflow installs pdftotext and queues loans.watch on the Monday cron,
   assert.match(loadJson('config.json').counties._note, /loans\.watch/);
 });
 
-test('the job reads every enabled county: Jefferson and Douglas are skipped while not enabled, and Jefferson joins with no change once a principal enables it', needsPdf, async () => {
+test('the job reads every enabled county: as shipped Caldwell, Jefferson and Douglas; a county config marks not enabled is skipped and asked nothing', needsPdf, async () => {
   const { fakePostgrest } = await import('./postgrest-fake.mjs');
   const { platformClient } = await import('../src/platform/client.mjs');
   const { watchCounties } = await import('../src/platform/worker.mjs');
@@ -61,28 +63,31 @@ test('the job reads every enabled county: Jefferson and Douglas are skipped whil
   const { caldwellCounty } = await import('../src/sources/counties/caldwell.mjs');
   const { jefferson } = await import('../src/sources/counties/jefferson.mjs');
   const { douglas } = await import('../src/sources/counties/douglas.mjs');
-  const { jeffersonSite, layoutOf } = await import('./gts-fake.mjs');
+  const { jeffersonSite, douglasSite, layoutOf } = await import('./gts-fake.mjs');
   const { config } = await import('./kit.mjs');
   const world = () => {
     const fake = fakePostgrest();
     fake.docs.set('sources/fdic/institutions.json', { path: 'sources/fdic/institutions.json', kind: 'json', body: INSTITUTIONS, text: null, version: 1 });
     return { fake, client: platformClient({ url: 'https://example-project.supabase.test', key: 'service', fetchImpl: fake.fetchImpl }) };
   };
-  // One fetch for both counties' fake sites, by host.
-  const caldwell = fakeCaldwell(), jeff = jeffersonSite();
-  const fetchImpl = (url, init) => (new URL(url).host === 'caldwellcounty.texas.gov' ? caldwell.fetchImpl(url, init) : jeff.fetchImpl(url, init));
-  const deps = { fetchImpl, now: () => T1, sleep: async () => {}, pdfToText: layoutOf };
-  // As shipped: Jefferson and Douglas are registered and not enabled, so only Caldwell is read and nothing is asked of Colorado.
-  const shipped = { config: config() };
-  const a = await watchCounties({ client: world().client, rules: shipped, deps, registry: { [CALDWELL_ID]: caldwellCounty, jefferson, douglas } });
-  assert.deepEqual(a.map((c) => [c.source, c.outcome]), [[CALDWELL_ID, 'ok']]);
-  assert.equal(jeff.calls.length, 0, 'not one request to Jefferson');
-  // A principal records Jefferson's decision (its adapter's terms) and enables it in config.counties.sources: the same job reads it.
+  // One fetch for the three counties' fake sites, by host.
+  const sites = () => {
+    const caldwell = fakeCaldwell(), jeff = jeffersonSite(), doug = douglasSite();
+    const byHost = (url) => { const h = new URL(url).host; return h === 'caldwellcounty.texas.gov' ? caldwell : /douglas/.test(h) ? doug : jeff; };
+    return { jeff, doug, fetchImpl: (url, init) => byHost(url).fetchImpl(url, init) };
+  };
+  void defineNoticeSource;
+  // As shipped: Jefferson and Douglas carry the principal's decision and are enabled, so the one job reads all three counties.
+  const s1 = sites();
+  const a = await watchCounties({ client: world().client, rules: { config: config() }, deps: { fetchImpl: s1.fetchImpl, now: () => T1, sleep: async () => {}, pdfToText: layoutOf }, registry: { [CALDWELL_ID]: caldwellCounty, jefferson, douglas } });
+  assert.deepEqual(a.map((x) => [x.source, x.outcome]), [[CALDWELL_ID, 'ok'], ['jefferson', 'ok'], ['douglas', 'ok']], JSON.stringify(a));
+  assert.ok(a[1].read > 0 && s1.jeff.calls.length > 0 && s1.doug.calls.length > 0);
+  assert.doesNotMatch(JSON.stringify(a), /Example Holdings|Sample Owner|Pat Example/, 'counts only');
+  // A principal pauses Jefferson in config.counties.sources: the same job skips it and asks it nothing.
   const c = config().counties;
-  const enabled = { config: { ...config(), counties: { ...c, sources: { ...c.sources, jefferson: { enabled: true } } } } };
-  const decided = defineNoticeSource({ ...jefferson, terms: { ...jefferson.terms, decision: 'allowed', by: 'a principal' } });
-  const b = await watchCounties({ client: world().client, rules: enabled, deps, registry: { [CALDWELL_ID]: caldwellCounty, jefferson: decided, douglas } });
-  assert.deepEqual(b.map((x) => [x.source, x.outcome]), [[CALDWELL_ID, 'ok'], ['jefferson', 'ok']], JSON.stringify(b));
-  assert.ok(b[1].read > 0 && jeff.calls.length > 0);
-  assert.doesNotMatch(JSON.stringify(b), /Example Holdings|Sample Owner|Pat Example/, 'counts only');
+  const paused = { config: { ...config(), counties: { ...c, sources: { ...c.sources, jefferson: { enabled: false, waitingOn: 'paused by a principal.' } } } } };
+  const s2 = sites();
+  const b = await watchCounties({ client: world().client, rules: paused, deps: { fetchImpl: s2.fetchImpl, now: () => T1, sleep: async () => {}, pdfToText: layoutOf }, registry: { [CALDWELL_ID]: caldwellCounty, jefferson, douglas } });
+  assert.deepEqual(b.map((x) => [x.source, x.outcome]), [[CALDWELL_ID, 'ok'], ['douglas', 'ok']], JSON.stringify(b));
+  assert.equal(s2.jeff.calls.length, 0, 'not one request to Jefferson');
 });
