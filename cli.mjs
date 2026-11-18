@@ -44,6 +44,9 @@ import { runPanel, verifyPanel } from './src/backtest/panel.mjs';
 import { buildLabels } from './src/backtest/labels.mjs';
 import { runBacktest, readReport, summarize } from './src/backtest/run.mjs';
 import { readSenders, setSender, removeSender, sendingReadiness, validateSender } from './src/senders.mjs';
+import { runNoticeSource, verifyNoticeSource } from './src/sources/notices.mjs';
+import { buildLoanIndex, readBankLoans, readLoanState, loanEvents, loansPaths, DOC_TYPES, STAGES, AMOUNT_BASES, PROPERTY_TYPES } from './src/loans.mjs';
+import { countySource, countyCoverage } from './src/counties.mjs';
 import { readFileSync } from 'node:fs';
 
 const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE this repository first.
@@ -186,6 +189,18 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound enforcement unmatched                  the review list: recent orders naming a party in the universe's states that match no
                                                   bank, or more than one, with suggestions. Nothing is guessed
   outbound enforcement alias --key fdic:CERT --name "ORG NAME" --by NAME   a principal resolves one: the order's name becomes the bank's alias
+
+  County loan documents (docs/county-loans.md): public-records documents about loans, matched to banks. Context for principals only:
+  never in a message, never given to a model, never scored.
+  outbound loans run --source ID                  one county source's weekly read: new documents written, changed ones updated, unchanged
+                                                  ones left alone, lenders matched to banks, a dated event per document newly matched
+  outbound loans verify --source ID [--sample N]  fresh, sourced, complete against the live list, every lender name accounted for (read-only)
+  outbound loans status                           each watched county: the last run, documents read, new this week, matched to a bank
+  outbound loans show --key fdic:CERT             the documents matched to one bank, newest first (no borrower, no address)
+  outbound loans review                           lender names that matched no bank or several, with their candidates; names set aside
+  outbound loans alias --key fdic:CERT --name "NAME" --by NAME   a principal resolves one: the name becomes the bank's alias, then a re-match
+  outbound loans match                            match every stored document again (after an alias), without reading any county
+  outbound loans events [--key fdic:CERT]         the dated events, newest first
 
   Bank filers (PRD E13-S1): which SEC filer (CIK) files for each bank, usually its holding company. Only confirmed ones are searched.
   outbound filers list                            every bank in the list: confirmed, rejected or not mapped yet
@@ -692,6 +707,50 @@ async function main() {
       const r = aliasParty({ dir, key: need(flags, 'key'), name: need(flags, 'name'), by: need(flags, 'by') });
       return out(`${r.key} (${r.bank ?? ''}) now also matches: ${r.aliases.join('; ')}. The next score run shows its orders: outbound score run`);
     }
+  }
+
+  if (cmd === 'loans') {   // county loan documents (docs/county-loans.md): for the principals; never in a message
+    const counties = rules.config.counties;
+    const money = (a) => (a?.value === null || a?.value === undefined ? AMOUNT_BASES[a?.basis] ?? 'not read yet' : `$${Number(a.value).toLocaleString('en-US')} (${AMOUNT_BASES[a.basis]})`);
+    if (sub === 'run') {   // an invented example source is refused here: it runs only against its fake, in the tests
+      const r = await runNoticeSource({ dir, source: countySource(need(flags, 'source')), counties });
+      if (r.outcome === 'failed') process.exitCode = 1;
+      return out(r);
+    }
+    if (sub === 'verify') {
+      const r = await verifyNoticeSource({ dir, source: countySource(need(flags, 'source')), counties, sample: Number(flags.sample ?? 5) });
+      const lines = [`== ${r.source.toUpperCase()}`, ...r.checks.map((c) => `${c.ok ? 'PASS' : 'FAIL'}  ${c.id}: ${c.summary}`)];
+      if (r.sample.length) lines.push('', `Compare by eye (${r.sample.length} documents, each with the public URL to check against):`, ...r.sample.map((x) => `- ${JSON.stringify(x)}`));
+      console.log(lines.join('\n'));
+      if (!r.checks.every((c) => c.ok)) process.exitCode = 1;
+      return;
+    }
+    if (sub === 'status') {
+      const rows = countyCoverage({ config: counties, state: readLoanState(dir) });
+      if (!rows.length) return out('No county is watched yet. A county is watched once its source is built and a principal lists it in config.counties.watch.');
+      const last = (r) => (r.lastRun ? `${r.lastRun.ranAt.slice(0, 10)}, ${r.lastRun.outcome}${r.lastRun.error ? `: ${r.lastRun.error}` : ''}` : 'never');
+      return out(rows.map((r) => `${r.countyLabel}  [${r.id}]${r.configured ? '' : '  (not in config.counties.watch)'}\n  last run: ${last(r)}\n  documents read: ${r.read ?? '-'}; new this week: ${r.newThisWeek ?? '-'}; changed this week: ${r.changedThisWeek ?? '-'}\n  stored: ${r.stored ?? '-'}; matched to a bank: ${r.matchedDocuments ?? '-'}; names on the review list: ${r.reviewNames ?? '-'}`).join('\n\n'));
+    }
+    if (sub === 'show') {
+      const key = need(flags, 'key');
+      const b = readBankLoans({ dir, key });
+      if (!b?.loans?.length) return out(`${key}: no document in a watched county names this bank as lender, beneficiary or holder.`);
+      const row = (l) => `${l.date}  ${DOC_TYPES[l.documentType].label} (${l.dateKind}), ${l.county.name} County, ${l.state}: ${STAGES[l.stage]}${l.saleDate ? `, sale ${l.saleDate}` : ''}\n    as ${l.roles.join(' and ')} (${l.how}); property type: ${PROPERTY_TYPES[l.propertyType] ?? 'not known yet'}\n    original principal: ${money(l.amounts.originalPrincipal)}; unpaid balance: ${money(l.amounts.unpaidBalance)}\n    ${l.link}`;
+      return out(`${key}: ${b.loans.length} document(s). ${b.note}\n\n${b.loans.map(row).join('\n')}`);
+    }
+    if (sub === 'review') {
+      const r = readJson(loansPaths(dir).review, { entries: [], setAside: [] });
+      const cand = (c) => `${c.key} ${c.name ?? ''}, ${c.city ?? ''}, ${c.state ?? ''}${c.inDocumentState ? ' (the document\'s state)' : ''}`;
+      const entry = (e) => `${e.name}  (${e.status}; ${e.roles.join(', ')}; ${e.count} time(s) in ${e.counties.join(', ')})${e.candidates.length ? `\n  candidates: ${e.candidates.map(cand).join('; ')}` : ''}${e.suggestions.length ? `\n  similar: ${e.suggestions.map((x) => `${x.key} ${x.name} (${x.similarity})`).join('; ')}` : ''}`;
+      return out(`${r.entries.length} name(s) to review: each matched no bank in the list, or more than one. Nothing is guessed. If one is a bank in the list (or its holding company), add its alias:\n  outbound loans alias --key fdic:CERT --name "NAME AS THE DOCUMENT GIVES IT" --by NAME\n\n${r.entries.map(entry).join('\n')}\n\nSet aside, never matched to a bank (${r.setAside.length}):\n${r.setAside.map((x) => `  ${x.name}: ${x.why} (${x.count})`).join('\n')}`);
+    }
+    if (sub === 'alias') {
+      const r = aliasParty({ dir, key: need(flags, 'key'), name: need(flags, 'name'), by: need(flags, 'by') });
+      const idx = buildLoanIndex({ dir });
+      return out(`${r.key} (${r.bank ?? ''}) now also matches: ${r.aliases.join('; ')}. Matched again: ${idx.matchedDocuments} document(s) name a bank in the list; ${idx.eventsNew} new event(s).`);
+    }
+    if (sub === 'match') return out(buildLoanIndex({ dir }));
+    if (sub === 'events') return out(loanEvents({ dir, key: flags.key && flags.key !== true ? flags.key : null }).map((e) => `${e.date}  ${e.key}  ${e.label}`).join('\n') || 'No events yet.');
   }
 
   if (cmd === 'filers') {   // the bank-to-filer map for the SEC filings listener (PRD E13-S1); a principal decides every mapping

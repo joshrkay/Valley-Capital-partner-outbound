@@ -22,7 +22,7 @@ export const CATEGORIES = Object.freeze(['actNow', 'watch', 'inConversation']);
 export const CATEGORY_LABELS = Object.freeze({ actNow: 'Act now', watch: 'Watch', inConversation: 'Already in conversation' });
 // Every kind of finding, each with its own fixed template below. Which are act now is decided by triage.json `actNow`.
 export const FINDING_TYPES = Object.freeze(['cmbs-note-sale', 'failure-in-metros', 'sec-filing-strong', 'new-tier-a', 'tier-up-a', 'concentration-tier-a',
-  'sec-filing', 'acquisition', 'cmbs-special-servicing', 'new-tier-b', 'tier-down-b', 'state-on', 'dropped', 'state-off']);
+  'sec-filing', 'acquisition', 'cmbs-special-servicing', 'new-tier-b', 'tier-down-b', 'state-on', 'county-document', 'dropped', 'state-off']);
 export const HEALTH_SOURCES = Object.freeze(['fdic', 'edgar', 'filings']);
 const TOUCH_EVENTS = ['reply', 'opt_out', 'bounce', 'meeting', 'handoff'];
 export const INTERNAL_NOTE = 'Internal: for the firm\'s principals only. It is never sent to anyone and never given to the drafter. The calendar decides when to look, never what a message says.';
@@ -217,6 +217,7 @@ export function runTriage({ dir, rules, now = new Date(), since, metros, scoring
   const fdicState = readJson(join(dir, 'sources', 'fdic', 'state.json'), null);
   const failed = readJson(join(dir, 'sources', 'fdic', 'failed.json'), {});
   const loans = readJson(join(dir, 'sources', 'edgar', 'loans.json'), {});
+  const countyEvents = readJson(join(dir, 'loans', 'events.json'), {});
   const filings = filingSignals({ dir, rules: filingRules ?? loadFilingRules() });
 
   const labelOf = (c) => metros?.metros?.find((m) => m.cbsa === String(c))?.label ?? `CBSA ${c}`;
@@ -291,6 +292,15 @@ export function runTriage({ dir, rules, now = new Date(), since, metros, scoring
         reason: `A CMBS loan in ${where || 'our metros'}${sectors ? ` (${sectors})` : ''} moved to special servicing on ${longDate(loan.specialServicingSince)}; ${who}.${lateNote(n, loan.specialServicingSince)}`,
         ids: [id], dates: [loan.specialServicingSince], signalIds: [id], links });
     }
+  }
+
+  // County loan documents (docs/county-loans.md): each document newly matched to a bank is a dated event, for a principal's context.
+  // Always watch, never act now (no rule in triage.json makes it one), and it carries no signal id, so it never brings back a bank a
+  // principal dismissed: an event is context, not a signal, and nothing scores it. Its line is the event's own fixed template.
+  for (const e of Object.values(countyEvents).filter((x) => x && typeof x.id === 'string' && /^fdic:\d+$/.test(String(x.key))).sort((a, b) => cmp(a.id, b.id))) {
+    const n = newness({ seenKey: e.id, date: e.date, at: e.matchedAt });
+    if (!n) continue;
+    add({ key: e.key, name: nameOf(e.key), type: 'county-document', act: false, reason: `${e.label}${lateNote(n, e.date)}`, ids: [e.id], dates: [e.date] });
   }
 
   // Changes against the snapshot: new candidates, tier changes, candidates that dropped out, state signals on and off.

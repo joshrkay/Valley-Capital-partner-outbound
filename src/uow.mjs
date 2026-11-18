@@ -37,8 +37,14 @@ export const LOADS = Object.freeze({
   // The weekly triage (src/triage.mjs): the candidate list and decisions, accounts, the guard's log and suppression list, the run log, the
   // few source files it reads, and its own snapshot. The day's two output files are added per run (triageLoads), so past triages are
   // never loaded. No research or drafting action loads triage/, so the triage never reaches a brief or a message.
+  // It also reads the county loan events (loans/events.json, docs/county-loans.md), as Watch lines for principals; never the documents.
   triage: ['candidates/', 'accounts/', 'suppression.json', 'touches.jsonl', 'sources/runs.jsonl', 'sources/fdic/state.json', 'sources/fdic/failed.json',
-    'sources/edgar/loans.json', 'sources/edgar/filings.json', 'sources/edgar/filers.json', 'triage/state.json'],
+    'sources/edgar/loans.json', 'sources/edgar/filings.json', 'sources/edgar/filers.json', 'triage/state.json', 'loans/events.json'],
+  // County loan documents (docs/county-loans.md, src/loans.mjs and src/sources/notices.mjs): the watcher's own folder, the bank list and
+  // the aliases it matches lenders against, and the run log. Loan and borrower detail is context for principals only: no model-facing
+  // action (research, draft, approve, call prep, call notes, the call desk) loads loans/, and neither does scoring, so no county
+  // document can change a score, a weight or a tier (test/loans-handoff.test.mjs).
+  loans: ['loans/', 'sources/fdic/institutions.json', 'candidates/aliases.json', 'sources/runs.jsonl'],
   sales: ['sources/', 'sales/', 'intermediaries/'],   // next-five E19-S1: the intermediary registry is rebuilt with the ledger
   // Intermediaries (next-five E19): the registry, a principal's records and registrations; the ledger and CMBS loans it is built from;
   // the suppression list (an NDA under an advisor's agreement goes there). No model-facing action loads intermediaries/.
