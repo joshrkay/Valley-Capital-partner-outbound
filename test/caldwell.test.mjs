@@ -13,7 +13,7 @@ import { caldwellCounty, caldwellSource, registryEntry, termsFrom, intervalFrom,
   numericDateReadings, readDateAt, monthOf, texasSaleDay, readDollars, lenderName, splitNames, borrowerName, isEntityName, readAddress, readRecording, CALDWELL_ID, CALDWELL_LIST } from '../src/sources/counties/caldwell.mjs';
 import { pdfToText, hasPdfToText } from '../src/sources/pdftext.mjs';
 import { COUNTY_SOURCES, countyCoverage } from '../src/counties.mjs';
-import { loansPaths, loanEvents, readBankLoans, readLoanState } from '../src/loans.mjs';
+import { loansPaths, loanEvents, readBankLoans, readLoanState, loanScope, eventLabel } from '../src/loans.mjs';
 import { matchLender } from '../src/lenders.mjs';
 import { fakeCaldwell, listHtml, textPdf, WEEK1, WEEK2, SERVICER_NOTICE, ATTORNEY_NOTICE, RUINED_NOTICE, CHALLENGE, INSTITUTIONS, PEOPLE, BORROWER_FIRMS, ADDRESSES } from './caldwell-fake.mjs';
 
@@ -95,6 +95,11 @@ test('reading values through OCR errors: each date, amount and name is read once
   assert.equal(borrowerName('Pat Example and Jordan Example, husband and wife, as Grantor/Borrower'), 'Pat Example and Jordan Example');
   assert.equal(borrowerName('Pa:t Example'), null, 'a colon inside a name is OCR debris');
   assert.deepEqual([isEntityName('Sample Retail Partners LLC'), isEntityName('Sample Land Trust'), isEntityName('Pat Example and Jordan Example')], [true, true, false]);
+  // An entity's description is cut, unless the name alone would not say it is an entity: then the description is kept (never what
+  // follows it), so the scope rule never takes the entity for a person.
+  assert.equal(borrowerName('Sample Retail Partners LLC, a Texas limited liability company'), 'Sample Retail Partners LLC');
+  assert.equal(borrowerName('Sample Widgets, a Texas limited liability company, whose address is 100 Example Way'), 'Sample Widgets, a Texas limited liability company');
+  assert.ok(isEntityName(borrowerName('Sample Widgets, a Delaware corporation')));
   assert.equal(readAddress('123 EXAMPLE LANE ANYTOWN, TX 78644 WHEREAS'), '123 EXAMPLE LANE ANYTOWN, TX 78644');
   assert.equal(readAddress('tl23 EXAMPLE DR ANYTOWN, TX 78644'), null, 'a misread house number is not read');
   assert.deepEqual(readRecording('as Volume 2023-004321, Book, Page'), { documentNumber: '2023-004321', book: null, page: null });
@@ -210,13 +215,21 @@ test('the record, the bank\'s file and the events: matched through MERS, the not
     assert.match(d.sources[0].listUrl, /^https:\/\/caldwellcounty\.texas\.gov\/foreclosures#fc-m-\d{4}-\d{2}$/);
     assert.match(d.sources[0].etag, /^"f-/);
   }
-  const bank = readBankLoans({ dir, key: 'fdic:9001' });
-  assert.equal(bank.loans.length, 1);
-  assert.deepEqual([bank.loans[0].how, bank.loans[0].dateKind, bank.loans[0].date, bank.loans[0].saleDate, bank.loans[0].amounts.originalPrincipal.value], ['name, named through MERS as nominee', 'notice', '2026-10-21', '2026-12-01', 412500]);
-  assert.equal(bank.loans[0].link, `${CALDWELL_LIST}#fc-m-2026-12`, 'the list\'s month, not the file named for the debtor');
-  assert.equal(readBankLoans({ dir, key: 'fdic:9002' }).loans.length, 2);
-  const ev = loanEvents({ dir, key: 'fdic:9001' })[0];
-  assert.equal(ev.label, 'A notice of trustee\'s sale dated October 21, 2026 was posted for a loan from this bank on a property in Caldwell County, TX.');
+  // The servicer's notice: a husband and wife borrow, and a Texas notice gives no loan type, so it is a home mortgage, out of scope. It is
+  // stored, read through MERS, with the notice's own dates, and reaches no bank's file and no event.
+  const home = docs.find((d) => d.dates.notice === '2026-10-21');
+  assert.deepEqual([home.dates.sale, home.amounts.originalPrincipal.value, home.parties.find((p) => p.role === 'beneficiary').name], ['2026-12-01', 412500, 'Mortgage Electronic Registration Systems, Inc., as nominee for Example Bank, N.A.']);
+  assert.deepEqual(loanScope(home), { inScope: false, why: 'individual-borrowers', loanType: null, commercial: null, borrowers: 'individuals' });
+  assert.equal(readBankLoans({ dir, key: 'fdic:9001' }), null, 'no bank file from the home mortgage');
+  assert.deepEqual(loanEvents({ dir, key: 'fdic:9001' }), []);
+  assert.equal(eventLabel(home, ['beneficiary']), 'A notice of trustee\'s sale dated October 21, 2026 was posted for a loan from this bank on a property in Caldwell County, TX.', 'the sentence it would have had');
+  // The attorney's notices: an LLC borrows, so they are in scope, matched to the bank as payee, beneficiary and lender.
+  const bank = readBankLoans({ dir, key: 'fdic:9002' });
+  assert.equal(bank.loans.length, 2);
+  assert.deepEqual([bank.loans[0].relation, bank.loans[0].scope, bank.loans[0].dateKind], ['current', { commercial: null, borrowers: 'entity' }, 'notice']);
+  assert.match(bank.loans[0].link, new RegExp(`^${CALDWELL_LIST}#fc-m-\\d{4}-\\d{2}$`), 'the list\'s month, not the file named for the debtor');
+  const ev = loanEvents({ dir, key: 'fdic:9002' }).find((e) => e.documentId === bank.loans[1].id);
+  assert.match(ev.label, /^A notice of trustee's sale dated October 9, 2026 was posted for a loan from this bank on a property in Caldwell County, TX\.$/);
   // Nothing about a person, a borrower, an address or a file name anywhere but the documents themselves.
   const outside = [P.state, P.events, P.review, P.list(CALDWELL_ID), join(dir, 'sources', 'runs.jsonl'), ...['fdic-9001', 'fdic-9002'].map((k) => join(P.banksDir, `${k}.json`))]
     .filter(existsSync).map((p) => readFileSync(p, 'utf8')).join('\n');

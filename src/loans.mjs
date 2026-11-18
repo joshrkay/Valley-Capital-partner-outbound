@@ -19,9 +19,67 @@ import { paperFileId } from './paper.mjs';
 import { fdicPaths } from './sources/fdic.mjs';
 import { loadAliases } from './candidates.mjs';
 import { sourceBlock, CHANGES, CONTEXT_ONLY_VALUE } from './sources/runlog.mjs';
-import { matchLender, reviewKey, bankLike, LENDER_ROLES, SET_ASIDE, PERSON_WITHHELD } from './lenders.mjs';
+import { matchLender, reviewKey, bankLike, cleanLenderName, naturalPerson, LENDER_ROLES, SET_ASIDE, PERSON_WITHHELD } from './lenders.mjs';
 
 export const CONTEXT_NOTE = 'Context for the firm\'s principals only: never in a message, never given to a model, never scored.';
+
+// ---- Scope: commercial loans only ----------------------------------------------------------------------------------------------
+// The firm buys commercial real estate loans, and most loans a county's foreclosure list names are home mortgages. One rule decides,
+// everywhere the pipeline builds what a principal sees (each bank's file, the review list, the events; the triage and the bank page
+// check it again): a document is IN SCOPE unless it is known to be residential.
+//   1. Its loan type reads as a residential program or label (FNMA, FHA, VA, Conventional...): the stored commercial flag is false.
+//      A stored null is read again from the type, so a type the classifier learns later applies to the documents already stored.
+//   2. A document with no loan type of its own takes its case's: another document of the same foreclosure in the same source that gives
+//      one (a Colorado pre-sale entry and its NED).
+//   3. With no loan type at all (Caldwell, Douglas), every borrower and grantor it names is a natural person, not an entity.
+// Otherwise it is in scope: a type that is unknown or blank, an entity borrower, or none named. A document out of scope stays in
+// loans/docs/<source>.json (the weekly diff stays idempotent), and nothing downstream uses it.
+export const OUT_OF_SCOPE = Object.freeze({ 'residential-loan-type': 'a residential loan type', 'individual-borrowers': 'every borrower a person, no loan type' });
+
+// The county's loan type, as written, to the commercial flag: true for a commercial, business-purpose, construction, SBA or multifamily
+// loan; false for the residential programs and labels; null for a blank, "Unknown" or any other type (never guessed). Case, punctuation
+// and spaces are ignored ("F.H.A.", "Fannie-Mae", "CONVENTIONAL RESIDENTIAL").
+const RESIDENTIAL_TYPES = new Set(['fnma', 'fanniemae', 'fhlmc', 'freddiemac', 'fha', 'va', 'usda', 'rhs', 'usdarhs', 'gnma', 'ginniemae',
+  'conventional', 'conv', 'conventionalresidential', 'convresidential', 'residential', 'reverse', 'reversemortgage', 'hecm']);
+const COMMERCIAL_WORDS = /\b(?:commercial|business|construction|multi ?family|sba)\b|^bpl\b/;
+export function commercialFromLoanType(type) {
+  const words = String(type ?? '').toLowerCase().replace(/\./g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+  if (!words) return null;
+  if (COMMERCIAL_WORDS.test(words)) return true;
+  return RESIDENTIAL_TYPES.has(words.replace(/ /g, '')) ? false : null;
+}
+
+// A document's case, for rule 2: its source and foreclosure number.
+const caseKey = (doc) => (doc?.foreclosure?.number ? `${doc.sourceId}|${String(doc.foreclosure.number).toUpperCase()}` : null);
+const flagOf = (loan) => (typeof loan?.commercial === 'boolean' ? loan.commercial : commercialFromLoanType(loan?.type));
+
+// One document's scope. `caseLoan` is the loan of another document of its case, for one with no loan type. Returns { inScope, why,
+// loanType, commercial, borrowers }: why is a key of OUT_OF_SCOPE or null; borrowers is 'individuals' (every borrower and grantor a
+// natural person), 'entity' (at least one is not) or null (none named, or the loan type decided). No name is returned.
+export function loanScope(doc, { caseLoan = null } = {}) {
+  const loan = doc?.loan?.type ? doc.loan : caseLoan?.type ? caseLoan : null;
+  if (loan) {
+    const commercial = flagOf(loan);
+    return { inScope: commercial !== false, why: commercial === false ? 'residential-loan-type' : null, loanType: loan.type, commercial, borrowers: null };
+  }
+  const names = (doc?.parties ?? []).filter((p) => p.role === 'borrower' || p.role === 'grantor').map((p) => p.name);
+  const borrowers = !names.length ? null : names.every(naturalPerson) ? 'individuals' : 'entity';
+  return { inScope: borrowers !== 'individuals', why: borrowers === 'individuals' ? 'individual-borrowers' : null, loanType: null, commercial: null, borrowers };
+}
+
+// Every document's scope, by id: the documents of one source or all, with each case's loan type for rule 2.
+export function scopeAll(docs = []) {
+  const cases = new Map();
+  for (const d of docs) { const k = caseKey(d); if (k && d.loan?.type && !cases.has(k)) cases.set(k, d.loan); }
+  return new Map(docs.map((d) => [d.id, loanScope(d, { caseLoan: cases.get(caseKey(d)) ?? null })]));
+}
+
+// The guard the triage and the bank page apply to what the index wrote: a bank's row or an event shows only when the scope rule wrote it
+// (it carries `scope`) and that scope is not residential. A file written before the rule, or by anything else, shows nothing until
+// `outbound loans rebuild` writes it again.
+export const scopeShown = (x) => !!x?.scope && typeof x.scope === 'object' && x.scope.commercial !== false && x.scope.borrowers !== 'individuals';
+// An event also needs a match on the bank that holds the loan now (relation 'current'): never one that only originated it.
+export const eventShown = (e) => scopeShown(e) && e.relation === 'current';
 
 // ---- What a document is --------------------------------------------------------------------------------------------------------
 // Every document type the pipeline keeps, with the stage of a loan's life it marks. A county's own codes map to these in its adapter.
@@ -335,10 +393,22 @@ const byNewest = (a, b) => {
   const da = documentDate(a).date ?? '', db = documentDate(b).date ?? '';
   return da !== db ? (da < db ? 1 : -1) : a.id < b.id ? -1 : 1;
 };
+// How a bank stands to the loan a document names:
+//   current     it holds the loan by the document: its current holder, beneficiary or mortgagee (role holder), a party to an assignment,
+//               or its lender or deed-of-trust beneficiary when the document names no separate current holder
+//   originated  it is named only as the original lender (lender, beneficiary) and the document names another current holder (a CMBS
+//               trust's trustee, a fund, another bank). Its page shows the document, "Originated by this bank; now held by <holder>",
+//               and no event is written: "a loan from this bank" would mislead
+// MERS named as holder with no lender behind it is a nominee, not a separate holder.
+const ORIGINATING = ['lender', 'beneficiary'];
+const originatedLabel = (heldBy) => `Originated by this bank; now held by ${heldBy ?? 'a person (name withheld)'}`;
+// The current holder as the page names it: the name without its legal phrases, a MERS nominee read through. A person is never named.
+const holderName = (m) => (m.status === 'set-aside' && m.class === 'person' ? null : m.matchedName || cleanLenderName(m.name) || m.name);
+
 // What the bank page shows for one document: no borrower, grantor or owner, no address, legal description or APN, and nothing of the
 // foreclosure file but the loan type and its commercial flag. The labels are the engine's own words, so the page and the command line
-// say the same.
-export function loanRow(doc, roles, how) {
+// say the same. `scope` is what the scope rule read (the guard checks it again); `relation` and `heldBy` how the bank stands to the loan.
+export function loanRow(doc, roles, how, { scope = loanScope(doc), relation = 'current', heldBy = null } = {}) {
   const { date, kind } = documentDate(doc);
   const stage = DOC_TYPES[doc.documentType]?.stage ?? null;
   const pt = doc.property?.propertyType ?? null;
@@ -346,34 +416,57 @@ export function loanRow(doc, roles, how) {
     id: doc.id, sourceId: doc.sourceId, documentType: doc.documentType, typeLabel: DOC_TYPES[doc.documentType]?.label ?? doc.documentType, documentNumber: doc.documentNumber,
     stage, stageLabel: STAGES[stage] ?? null, county: doc.county, countyLabel: countyLabel(doc), state: doc.state, date, dateKind: kind, saleDate: doc.dates?.sale ?? null, roles, how,
     amounts: doc.amounts, propertyType: pt, propertyTypeLabel: pt ? PROPERTY_TYPES[pt] ?? null : null, useCode: doc.property?.useCode ?? null,
-    loanType: doc.loan?.type ?? null, commercial: doc.loan?.commercial ?? null,
+    loanType: scope.loanType, commercial: scope.commercial, scope: { commercial: scope.commercial, borrowers: scope.borrowers },
+    relation, heldBy: relation === 'originated' ? heldBy : null, relationLabel: relation === 'originated' ? originatedLabel(heldBy) : null,
     deedOfTrust: doc.deedOfTrust ? { documentNumber: doc.deedOfTrust.documentNumber, recorded: doc.deedOfTrust.recorded, dated: doc.deedOfTrust.dated ?? null, book: doc.deedOfTrust.book ?? null, page: doc.deedOfTrust.page ?? null } : null,
     link: publicLink(doc), firstSeenAt: doc.firstSeenAt ?? null,
   };
 }
 const sansStamp = ({ builtAt, runId, ...rest }) => stable(rest);
+const eventId = (doc, key) => `county:${doc.id}:${key}`;
 
-// Matches every stored document's lender-side parties against the bank list and the aliases, then writes each bank's file (rewritten
-// only when its content changed), the review list, and an event for each document and bank not matched before: "new-document" when the
-// document arrived in this run, "new-match" when an alias a principal added since made it match. An event, once written, is kept.
-// Returns counts only.
+// One event, from its document, the bank, the bank's roles and the document's scope. `first` is when it was first matched: its run, the
+// time and the basis, kept when an event is written again.
+function eventOf(doc, key, roles, scope, first) {
+  const { date, kind } = documentDate(doc);
+  return {
+    id: eventId(doc, key), kind: 'event', type: 'county_document', key, documentId: doc.id, sourceId: doc.sourceId, documentType: doc.documentType,
+    stage: DOC_TYPES[doc.documentType].stage, roles, date, dateKind: kind, county: doc.county, state: doc.state, link: publicLink(doc),
+    label: eventLabel(doc, roles), basis: first.basis, relation: 'current', scope: { commercial: scope.commercial, borrowers: scope.borrowers },
+    firstSeenAt: doc.firstSeenAt ?? null, matchedAt: first.matchedAt, runId: first.runId, contextOnly: true, scored: false,
+  };
+}
+
+// Applies the scope rule to every stored document, matches the lender-side parties of those in scope against the bank list and the
+// aliases, then writes each bank's file (rewritten only when its content changed), the review list, and the events: one for each
+// document in scope and bank that holds the loan now (relation current), the first time they match: "new-document" when the document
+// arrived in this run, "new-match" when an alias a principal added since made it match. An event is kept, and written again from its
+// document with when it was first matched, until the rule no longer allows it: its document is out of scope, or the bank only
+// originated the loan. Documents out of scope give no bank row, no review name, no set-aside count and no event.
+// Returns counts only, with each source's.
 export function buildLoanIndex({ dir, now = new Date(), runId = null, institutions, aliases } = {}) {
   const P = loansPaths(dir);
   const inst = institutions ?? readJson(fdicPaths(dir).institutions, {});
   const al = aliases ?? loadAliases(dir);
   const at = now.toISOString();
   const docs = allDocuments(dir).sort(byNewest);
-  const banks = new Map(), review = new Map(), aside = new Map(), bySource = {};
-  const pairs = [];
-  let lenderParties = 0, matchedParties = 0;
+  const scopes = scopeAll(docs);
+  const byId = new Map(docs.map((d) => [d.id, d]));
+  const banks = new Map(), review = new Map(), aside = new Map(), bySource = {}, outOfScopeWhy = {};
+  const pairs = [], notCurrent = new Set();
+  let lenderParties = 0, matchedParties = 0, inScope = 0, outOfScope = 0, originated = 0;
   for (const doc of docs) {
-    const src = (bySource[doc.sourceId] ??= { documents: 0, matchedDocuments: 0, reviewNames: 0 });
+    const src = (bySource[doc.sourceId] ??= { documents: 0, inScope: 0, outOfScope: 0, matchedDocuments: 0, reviewNames: 0 });
     src.documents++;
-    const mine = new Map();
+    const scope = scopes.get(doc.id);
+    if (!scope.inScope) { outOfScope++; src.outOfScope++; outOfScopeWhy[scope.why] = (outOfScopeWhy[scope.why] ?? 0) + 1; continue; }
+    inScope++; src.inScope++;
+    const mine = new Map(), holders = [];
     for (const party of doc.parties ?? []) {
       if (!LENDER_ROLES.includes(party.role)) continue;
       lenderParties++;
       const m = matchLender(party, { institutions: inst, aliases: al, documentState: doc.state });
+      if (party.role === 'holder' && !(m.status === 'set-aside' && m.class === 'mers')) holders.push(m);
       if (m.status === 'matched') {
         matchedParties++;
         const e = mine.get(m.key) ?? { roles: new Set(), how: m.how };
@@ -399,9 +492,11 @@ export function buildLoanIndex({ dir, now = new Date(), runId = null, institutio
     if (mine.size) src.matchedDocuments++;
     for (const [key, e] of mine) {
       const roles = [...e.roles].sort(roleOrder);
-      pairs.push({ doc, key, roles });
+      // Named only as the original lender while the document names another current holder: on the bank's page, never an event.
+      const other = roles.every((r) => ORIGINATING.includes(r)) ? holders.find((h) => !(h.status === 'matched' && h.key === key)) : null;
+      if (other) { originated++; notCurrent.add(eventId(doc, key)); } else pairs.push({ doc, key, roles, scope });
       if (!banks.has(key)) banks.set(key, []);
-      banks.get(key).push(loanRow(doc, roles, e.how));
+      banks.get(key).push(loanRow(doc, roles, e.how, { scope, relation: other ? 'originated' : 'current', heldBy: other ? holderName(other) : null }));
     }
   }
 
@@ -427,27 +522,43 @@ export function buildLoanIndex({ dir, now = new Date(), runId = null, institutio
   const oldReview = readJson(P.review, null);
   if (!oldReview || sansStamp(oldReview) !== sansStamp(reviewRec)) writeJson(P.review, reviewRec);
 
-  // Events: one per document and bank, the first time they are matched.
-  const events = readJson(P.events, {});
-  let eventsNew = 0;
-  for (const { doc, key, roles } of pairs) {
-    const id = `county:${doc.id}:${key}`;
-    if (events[id]) continue;
-    const { date, kind } = documentDate(doc);
-    events[id] = {
-      id, kind: 'event', type: 'county_document', key, documentId: doc.id, sourceId: doc.sourceId, documentType: doc.documentType,
-      stage: DOC_TYPES[doc.documentType].stage, roles, date, dateKind: kind, county: doc.county, state: doc.state, link: publicLink(doc),
-      label: eventLabel(doc, roles), basis: runId && doc.firstRunId === runId ? 'new-document' : 'new-match',
-      firstSeenAt: doc.firstSeenAt ?? null, matchedAt: at, runId, contextOnly: true, scored: false,
-    };
-    eventsNew++;
+  // Events: one per document and bank, the first time they are matched. One the rule no longer allows is removed: its document is out
+  // of scope, or the bank only originated the loan. One that remains is written again from its document, keeping when it was matched.
+  const events = readJson(P.events, {}) ?? {};
+  const eventsBefore = stable(events);
+  let eventsNew = 0, eventsRemoved = 0;
+  for (const [id, e] of Object.entries(events)) {
+    const doc = byId.get(e?.documentId);
+    if ((doc && !scopes.get(doc.id).inScope) || notCurrent.has(id)) { delete events[id]; eventsRemoved++; }
   }
-  if (eventsNew) writeJson(P.events, events);
+  for (const { doc, key, roles, scope } of pairs) {
+    const old = events[eventId(doc, key)];
+    const first = old ? { matchedAt: old.matchedAt ?? at, runId: old.runId ?? null, basis: old.basis ?? 'new-match' }
+      : { matchedAt: at, runId, basis: runId && doc.firstRunId === runId ? 'new-document' : 'new-match' };
+    events[eventId(doc, key)] = eventOf(doc, key, roles, scope, first);
+    if (!old) eventsNew++;
+  }
+  if (stable(events) !== eventsBefore) writeJson(P.events, events);
 
-  const counts = { documents: docs.length, lenderParties, matchedParties, matchedDocuments: Object.values(bySource).reduce((n, s) => n + s.matchedDocuments, 0), banks: banks.size, review: entries.length, setAside: setAside.reduce((n, s) => n + s.count, 0), eventsNew, bankFilesWritten };
+  const counts = { documents: docs.length, inScope, outOfScope, outOfScopeWhy, lenderParties, matchedParties, matchedDocuments: Object.values(bySource).reduce((n, s) => n + s.matchedDocuments, 0), banks: banks.size, originated, review: entries.length, setAside: setAside.reduce((n, s) => n + s.count, 0), eventsNew, eventsRemoved, bankFilesWritten };
   const state = readLoanState(dir);
   writeJson(P.state, { ...state, sources: state.sources ?? {}, index: { builtAt: at, runId, counts, bySource } });
-  return counts;
+  return { ...counts, bySource };
+}
+
+// The rebuild (`outbound loans rebuild`): each bank's file, the review list and the events written again from the stored documents
+// under the current rules, without reading any county. Events about documents now out of scope, or on a bank that only originated the
+// loan, are removed; the others keep when they were first matched. The documents themselves are not touched. Safe on a data folder
+// pulled from the platform (`outbound platform pull --to DIR`, then `outbound platform push --from DIR`): it writes only under loans/,
+// and refuses a folder with no stored document or no bank list, which would otherwise empty every bank's file.
+export function rebuildLoanIndex({ dir, now = new Date() } = {}) {
+  const P = loansPaths(dir);
+  if (!allDocuments(dir).length) throw new Error(`No stored county document in ${P.docsDir}: point OUTBOUND_DATA_DIR at the whole data folder (outbound platform pull --to DIR).`);
+  const institutions = readJson(fdicPaths(dir).institutions, {});
+  if (!institutions || typeof institutions !== 'object' || !Object.keys(institutions).length)
+    throw new Error(`No bank list at ${fdicPaths(dir).institutions}: rebuilding without it would empty every bank's file. Pull the whole data folder first.`);
+  const runId = `loans-rebuild-${now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z')}`;
+  return { runId, ...buildLoanIndex({ dir, now, runId, institutions }) };
 }
 
 // Every event, newest first, optionally for one bank: for the triage (src/triage.mjs) and `outbound loans events`.

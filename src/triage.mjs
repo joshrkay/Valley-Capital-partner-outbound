@@ -17,6 +17,7 @@ import { contentHash } from './score.mjs';
 import { filingSignals, loadFilingRules } from './sources/filings.mjs';
 import { FDIC_LOAN_SALES_URL } from './sources/fdic.mjs';
 import { LOADS } from './uow.mjs';
+import { eventShown } from './loans.mjs';
 
 export const CATEGORIES = Object.freeze(['actNow', 'watch', 'inConversation']);
 export const CATEGORY_LABELS = Object.freeze({ actNow: 'Act now', watch: 'Watch', inConversation: 'Already in conversation' });
@@ -298,7 +299,9 @@ export function runTriage({ dir, rules, now = new Date(), since, metros, scoring
   // County loan documents (docs/county-loans.md): each document newly matched to a bank is a dated event, for a principal's context.
   // Always watch, never act now (no rule in triage.json makes it one), and it carries no signal id, so it never brings back a bank a
   // principal dismissed: an event is context, not a signal, and nothing scores it. Its line is the event's own fixed template.
-  for (const e of Object.values(countyEvents).filter((x) => x && typeof x.id === 'string' && /^fdic:\d+$/.test(String(x.key))).sort((a, b) => cmp(a.id, b.id))) {
+  // The scope guard (src/loans.mjs, eventShown): only an event the scope rule wrote, about a document not known to be residential, on
+  // the bank that holds the loan now. An event written before the rule waits for `outbound loans rebuild`.
+  for (const e of Object.values(countyEvents).filter((x) => x && typeof x.id === 'string' && /^fdic:\d+$/.test(String(x.key)) && eventShown(x)).sort((a, b) => cmp(a.id, b.id))) {
     const n = newness({ seenKey: e.id, date: e.date, at: e.matchedAt });
     if (!n) continue;
     add({ key: e.key, name: nameOf(e.key), type: 'county-document', act: false, reason: `${e.label}${lateNote(n, e.date)}`, ids: [e.id], dates: [e.date] });

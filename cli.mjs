@@ -45,7 +45,7 @@ import { buildLabels } from './src/backtest/labels.mjs';
 import { runBacktest, readReport, summarize } from './src/backtest/run.mjs';
 import { readSenders, setSender, removeSender, sendingReadiness, validateSender } from './src/senders.mjs';
 import { runNoticeSource, verifyNoticeSource, clearBlock } from './src/sources/notices.mjs';
-import { buildLoanIndex, readBankLoans, readLoanState, loanEvents, loansPaths, DOC_TYPES, STAGES, AMOUNT_BASES, PROPERTY_TYPES } from './src/loans.mjs';
+import { buildLoanIndex, rebuildLoanIndex, readBankLoans, readLoanState, loanEvents, loansPaths, scopeShown, eventShown, DOC_TYPES, STAGES, AMOUNT_BASES, PROPERTY_TYPES, OUT_OF_SCOPE } from './src/loans.mjs';
 import { countySource, countyCoverage } from './src/counties.mjs';
 import { readFileSync } from 'node:fs';
 
@@ -204,6 +204,11 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound loans review                           lender names that matched no bank or several, with their candidates; names set aside
   outbound loans alias --key fdic:CERT --name "NAME" --by NAME   a principal resolves one: the name becomes the bank's alias, then a re-match
   outbound loans match                            match every stored document again (after an alias), without reading any county
+  outbound loans rebuild                          write every bank's file, the review list and the events again from the stored
+                                                  documents under the scope rule (commercial loans only), reading no county: removes
+                                                  the events of documents now out of scope or of banks that only originated the loan,
+                                                  keeps when the others were matched. Safe on a pulled data folder: platform pull
+                                                  --to DIR, OUTBOUND_DATA_DIR=DIR loans rebuild, then platform push --from DIR
   outbound loans events [--key fdic:CERT]         the dated events, newest first
   outbound loans unblock --source ID --by NAME    a principal clears a recorded block (a refusal or challenge page stopped the source),
                                                   after deciding the source may be read again
@@ -748,8 +753,11 @@ async function main() {
       const key = need(flags, 'key');
       const b = readBankLoans({ dir, key });
       if (!b?.loans?.length) return out(`${key}: no document in a watched county names this bank as lender, beneficiary or holder.`);
-      const row = (l) => `${l.date}  ${DOC_TYPES[l.documentType].label} (${l.dateKind}), ${l.county.name} County, ${l.state}: ${STAGES[l.stage]}${l.saleDate ? `, sale ${l.saleDate}` : ''}\n    as ${l.roles.join(' and ')} (${l.how}); property type: ${PROPERTY_TYPES[l.propertyType] ?? 'not known yet'}\n    original principal: ${money(l.amounts.originalPrincipal)}; unpaid balance: ${money(l.amounts.unpaidBalance)}\n    ${l.link}`;
-      return out(`${key}: ${b.loans.length} document(s). ${b.note}\n\n${b.loans.map(row).join('\n')}`);
+      // The scope guard, as on the bank page: a row the scope rule wrote, not known to be residential.
+      const shown = b.loans.filter(scopeShown);
+      if (!shown.length) return out(`${key}: no commercial loan in a watched county names this bank${shown.length < b.loans.length ? ` (its file was written before the scope rule: outbound loans rebuild)` : ''}.`);
+      const row = (l) => `${l.date}  ${DOC_TYPES[l.documentType].label} (${l.dateKind}), ${l.county.name} County, ${l.state}: ${STAGES[l.stage]}${l.saleDate ? `, sale ${l.saleDate}` : ''}\n    as ${l.roles.join(' and ')} (${l.how}); property type: ${PROPERTY_TYPES[l.propertyType] ?? 'not known yet'}${l.loanType ? `; loan type: ${l.loanType}` : ''}${l.relationLabel ? `\n    ${l.relationLabel}` : ''}\n    original principal: ${money(l.amounts.originalPrincipal)}; unpaid balance: ${money(l.amounts.unpaidBalance)}\n    ${l.link}`;
+      return out(`${key}: ${shown.length} document(s). ${b.note}\n\n${shown.map(row).join('\n')}`);
     }
     if (sub === 'review') {
       const r = readJson(loansPaths(dir).review, { entries: [], setAside: [] });
@@ -763,11 +771,16 @@ async function main() {
       return out(`${r.key} (${r.bank ?? ''}) now also matches: ${r.aliases.join('; ')}. Matched again: ${idx.matchedDocuments} document(s) name a bank in the list; ${idx.eventsNew} new event(s).`);
     }
     if (sub === 'match') return out(buildLoanIndex({ dir }));
+    if (sub === 'rebuild') {   // reads no county: the stored documents, the bank list and the aliases, under the scope rule
+      const r = rebuildLoanIndex({ dir });
+      const why = Object.entries(r.outOfScopeWhy).map(([k, n]) => `${n} ${OUT_OF_SCOPE[k] ?? k}`).join(', ');
+      return out(`Rebuilt from ${r.documents} stored document(s) (${r.runId}): ${r.inScope} in scope, ${r.outOfScope} out of scope${why ? ` (${why})` : ''}. In scope: ${r.matchedDocuments} matched to ${r.banks} bank(s) in the list, ${r.originated} of those match(es) on a bank that only originated the loan (shown, no event); ${r.review} name(s) to review. Events: ${r.eventsRemoved} removed, ${r.eventsNew} new; the rest keep when they were matched. ${r.bankFilesWritten} bank file(s) written.\n${Object.entries(r.bySource).map(([id, x]) => `  ${id}: ${x.documents} stored, ${x.inScope} in scope, ${x.outOfScope} out of scope, ${x.matchedDocuments} matched, ${x.reviewNames} name(s) to review`).join('\n')}`);
+    }
     if (sub === 'unblock') {
       const r = clearBlock({ dir, sourceId: countySource(need(flags, 'source')).id, by: need(flags, 'by') });
       return out(r.cleared ? `${r.sourceId}: the block of ${String(r.blockedAt).slice(0, 10)} is cleared. The next run reads the source again.` : `${r.sourceId}: no block is recorded.`);
     }
-    if (sub === 'events') return out(loanEvents({ dir, key: flags.key && flags.key !== true ? flags.key : null }).map((e) => `${e.date}  ${e.key}  ${e.label}`).join('\n') || 'No events yet.');
+    if (sub === 'events') return out(loanEvents({ dir, key: flags.key && flags.key !== true ? flags.key : null }).filter(eventShown).map((e) => `${e.date}  ${e.key}  ${e.label}`).join('\n') || 'No events yet.');
   }
 
   if (cmd === 'filers') {   // the bank-to-filer map for the SEC filings listener (PRD E13-S1); a principal decides every mapping

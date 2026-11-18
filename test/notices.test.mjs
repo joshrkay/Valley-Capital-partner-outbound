@@ -145,7 +145,9 @@ test('the field check: a missing column or an unreadable document fails the run,
 test('two weeks of the watcher: new documents written, a changed one updated, unchanged ones left alone, dated events for the banks', async () => {
   const dir = world();
   const r1 = await run(dir, fakeCounty());
-  assert.deepEqual([r1.outcome, r1.read, r1.added, r1.changed, r1.unchanged, r1.skipped, r1.index.eventsNew], ['ok', 8, 8, 0, 0, 1, 5]);
+  // Five banks' documents, four events: the notice of sale names Example Bank only as the original beneficiary and a fund as the current
+  // holder, so it is on the bank's page and gives no event. Every grantor is an entity, so all eight are in scope.
+  assert.deepEqual([r1.outcome, r1.read, r1.added, r1.changed, r1.unchanged, r1.skipped, r1.inScope, r1.outOfScope, r1.index.eventsNew, r1.index.originated], ['ok', 8, 8, 0, 0, 1, 8, 0, 4, 1]);
   const P = loansPaths(dir);
   const docsAfter1 = readFileSync(P.docs('example-county'), 'utf8');
   // The same week again: idempotent. Nothing new, nothing rewritten, no event.
@@ -164,7 +166,8 @@ test('two weeks of the watcher: new documents written, a changed one updated, un
   assert.deepEqual(changes.map((c) => [c.key, c.field]).sort(), [['example-county:2026-004101', 'amounts'], ['example-county:2026-004101', 'dates']]);
 
   const ev = loanEvents({ dir });
-  assert.equal(ev.length, 7, 'two more: the new notice (Example Bank) and the new deed of trust (Example Mountain Bank); none for the changed one');
+  assert.equal(ev.length, 6, 'two more: the new notice (Example Bank) and the new deed of trust (Example Mountain Bank); none for the changed one');
+  assert.ok(!ev.some((e) => e.documentId === 'example-county:2026-004105'), 'none for the bank that only originated the loan');
   assert.match(ev.find((e) => e.documentId === 'example-county:2026-004121').label, /^A deed of trust was recorded on November 18, 2026 for a loan from this bank/);
   const fresh = ev.find((e) => e.documentId === 'example-county:2026-004120');
   assert.equal(fresh.label, 'A notice of election and demand was recorded on November 17, 2026 for a loan from this bank on a property in Example County, CO.');

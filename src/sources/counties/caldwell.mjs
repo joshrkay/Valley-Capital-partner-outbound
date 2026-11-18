@@ -48,6 +48,7 @@ import { REPO } from '../../paths.mjs';
 import { defineNoticeSource } from '../notices.mjs';
 import { pdfToText } from '../pdftext.mjs';
 import { validYmd } from '../../loans.mjs';
+import { isEntityName } from '../../lenders.mjs';
 
 export const CALDWELL_ID = 'tx-caldwell-notices-of-sale';
 export const CALDWELL_HOST = 'caldwellcounty.texas.gov';
@@ -237,16 +238,23 @@ export function cleanName(raw) {
 }
 // The description an entity's name carries after it: ", a Texas limited liability company", ", a Delaware corporation".
 const DESCRIPTION = /,?\s+an?\s+(?:[A-Za-z.-]+\s+){0,4}?(?:limited\s+liability\s+\w+|corporation|limited\s+partnership|general\s+partnership|partnership|national\s+(?:banking\s+)?association|banking\s+(?:association|corporation)|state\s+(?:chartered\s+)?bank|savings\s+bank|federal\s+savings\s+bank|trust\s+company|company|series\s+llc)\b.*$/i;
+// The description alone, without what follows it.
+const DESCRIPTION_KIND = new RegExp(DESCRIPTION.source.replace(/\.\*\$$/, ''), 'i');
 // A grantor's or borrower's name without the words on marriage or capacity that follow it.
 export function borrowerName(raw) {
   const s = String(raw ?? '').replace(/\s+/g, ' ')
     .replace(/,?\s+(?:as\s+)?(?:husband\s+and\s+wife|wife\s+and\s+husband|a\s+married\s+(?:couple|man|woman|person)|an?\s+(?:un)?married\s+(?:man|woman|person)|a\s+single\s+(?:man|woman|person)|spouses?|joined\s+herein\b.*|individually\b.*|not\s+individually\b.*|both\s+individually\b.*)(?=,|$|\s+and\s)/gi, '')
     .replace(/,?\s+as\s+(?:grantors?|borrowers?|mortgagors?)\b.*$/i, '').replace(/,?\s+(?:its|his|her|their)\s+successors?\b.*$/i, '');
-  return cleanName(s.replace(DESCRIPTION, ''));
+  // The entity's description is cut, and what follows it. Where the name alone would not say it is an entity, the description itself
+  // is kept (", a Texas limited liability company"), never what follows: the scope rule (src/loans.mjs, loanScope) reads the stored
+  // name, and an entity taken for a person would leave its loan out.
+  const kind = DESCRIPTION_KIND.exec(s);
+  const cut = s.replace(DESCRIPTION, '');
+  return cleanName(kind && !isEntityName(cut) ? `${cut}${kind[0]}` : cut);
 }
-// Whether a borrower is an entity (an LLC, a corporation, a partnership, a trust, a church) rather than one or more people.
-const ENTITY = /\b(?:L\.?\s?L\.?\s?C\.?|L\.?\s?P\.?|L\.?\s?L\.?\s?P\.?|Inc\.?|Incorporated|Corp\.?|Corporation|Company|Co\.|Ltd\.?|Limited|Partners(?:hip)?|Holdings?|Properties|Investments?|Investors|Enterprises?|Ventures?|Capital|Group|Trust|Trustees?|Church|Ministries|Association|Foundation|Development|Homes|Realty|Estate of|Series)\b/i;
-export const isEntityName = (name) => ENTITY.test(String(name ?? ''));
+// Whether a borrower is an entity (an LLC, a corporation, a partnership, a trust, a church) rather than one or more people: the shared
+// test (src/lenders.mjs), which the scope rule also uses.
+export { isEntityName };
 
 // MERS, read through: "Mortgage Electronic Registration Systems, Inc. (MERS), as beneficiary, as nominee for X, its successors and
 // assigns" becomes the canonical "Mortgage Electronic Registration Systems, Inc., as nominee for X", which the lender match reads as X.

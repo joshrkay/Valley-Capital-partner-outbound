@@ -246,19 +246,24 @@ test('Jefferson, two weeks: robots.txt, the reports page, both indexes by link t
   assert.deepEqual(Object.keys(docs).sort(), ['jefferson:J2690044/SALE', 'jefferson:J2690055/SALE', 'jefferson:J2690085/SALE', 'jefferson:J2698990/NED', 'jefferson:J2699001/NED', 'jefferson:J2699002/NED', 'jefferson:J2699003/NED', 'jefferson:J2699004/NED', 'jefferson:J2699005/NED']);
   const ned = docs['jefferson:J2699001/NED'];
   assert.deepEqual([ned.documentType, ned.county, ned.loan, ned.sources[0].url], ['election_and_demand', { fips: '08059', name: 'Jefferson' }, { type: 'Commercial', commercial: true }, 'https://gts.co.jefferson.co.us/Report_Files/NED%2011-12-2026.pdf']);
-  // Banks: Example Bank (holder on two NEDs and lender on the sale list), Example Mountain Bank, Sample Community Bank through MERS.
+  // The scope rule: the FHA NED (J2699003) and the Conventional one (J2699005) are home mortgages, and so is the pre-sale entry whose
+  // only grantor is a person (J2690055, no NED to give its loan type). They stay stored and reach no bank's file, review list or event.
+  assert.deepEqual([r1.inScope, r1.outOfScope, r1.index.outOfScopeWhy], [6, 3, { 'residential-loan-type': 2, 'individual-borrowers': 1 }]);
+  // Banks: Example Bank (holder on two NEDs and on the sale list); Sample Community Bank, through MERS, only as the original lender of a
+  // loan a trust's trustee now holds. Example Mountain Bank's only loan is the FHA one: no file.
   const ex = readBankLoans({ dir, key: 'fdic:9001' });
-  assert.deepEqual(ex.loans.map((l) => [l.id, l.dateKind, l.loanType, l.commercial]), [
-    ['jefferson:J2690044/SALE', 'listed', null, null], ['jefferson:J2699001/NED', 'recorded', 'Commercial', true], ['jefferson:J2698990/NED', 'recorded', 'Commercial', true]]);
-  assert.equal(readBankLoans({ dir, key: 'fdic:9002' }).loans.length, 2, 'the NED through MERS as nominee, and the pre-sale entry');
-  assert.equal(readBankLoans({ dir, key: 'fdic:9005' }).loans[0].id, 'jefferson:J2699003/NED');
+  assert.deepEqual(ex.loans.map((l) => [l.id, l.dateKind, l.loanType, l.commercial, l.relation]), [
+    ['jefferson:J2690044/SALE', 'listed', null, null, 'current'], ['jefferson:J2699001/NED', 'recorded', 'Commercial', true, 'current'], ['jefferson:J2698990/NED', 'recorded', 'Commercial', true, 'current']]);
+  const sc = readBankLoans({ dir, key: 'fdic:9002' });
+  assert.deepEqual(sc.loans.map((l) => [l.id, l.roles, l.relation, l.relationLabel]), [['jefferson:J2699002/NED', ['lender'], 'originated',
+    'Originated by this bank; now held by Sample Trust Company, N.A., not in its individual capacity, but solely as trustee on behalf of Sample 2025-1 Trust']]);
+  assert.equal(readBankLoans({ dir, key: 'fdic:9005' }), null);
   const review = readJson(P.review);
-  // The review list keeps each name as the report gives it (a MERS nominee's whole line), and never a borrower's or an owner's.
-  assert.deepEqual(review.entries.map((e) => [e.name, e.status]).sort(), [['First Example Bank', 'ambiguous'],
-    ['MORTGAGE ELECTRONIC REGISTRATION SYSTEMS, INC. AS NOMINEE FOR EXAMPLE HOME LOANS LLC, ITS SUCCESSORS AND ASSIGNS', 'unmatched'],
-    ['MORTGAGE ELECTRONIC REGISTRATION SYSTEMS, INC. AS NOMINEE FOR FIRST EXAMPLE BANK, ITS SUCCESSORS AND ASSIGNS', 'ambiguous'], ['SAMPLE LENDING PARTNERS LLC', 'unmatched']]);
+  // The review list keeps each name as the report gives it, never a borrower's or an owner's, and none from a document out of scope.
+  assert.deepEqual(review.entries.map((e) => [e.name, e.status]), [['SAMPLE LENDING PARTNERS LLC', 'unmatched']]);
   assert.ok(review.entries.every((e) => e.roles.every((x) => ['holder', 'lender'].includes(x))));
   assert.deepEqual(review.setAside.map((x) => x.class).sort(), ['servicer', 'trustee']);
+  assert.deepEqual(loanEvents({ dir }).map((e) => e.key).sort(), ['fdic:9001', 'fdic:9001', 'fdic:9001'], 'no event for the bank that only originated the loan');
   const ev = loanEvents({ dir, key: 'fdic:9001' });
   assert.equal(ev.find((e) => e.documentId === 'jefferson:J2690044/SALE').label, 'A notice of trustee\'s sale was listed on November 17, 2026 for a loan this bank holds on a property in Jefferson County, CO.');
   assert.equal(ev.find((e) => e.documentId === 'jefferson:J2699001/NED').label, 'A notice of election and demand was recorded on November 12, 2026 for a loan from this bank on a property in Jefferson County, CO.');
@@ -292,7 +297,7 @@ test('Jefferson, two weeks: robots.txt, the reports page, both indexes by link t
 
   // Nothing about a borrower, an owner, an address or a legal description in the log, the state, the events, a bank's file or the review list.
   const logs = [readFileSync(join(dir, 'sources', 'runs.jsonl'), 'utf8'), readFileSync(P.state, 'utf8'), readFileSync(P.events, 'utf8'), readFileSync(P.review, 'utf8'),
-    ...['fdic-9001', 'fdic-9002', 'fdic-9005'].map((b) => readFileSync(join(P.banksDir, `${b}.json`), 'utf8'))].join('\n');
+    ...['fdic-9001', 'fdic-9002'].map((b) => readFileSync(join(P.banksDir, `${b}.json`), 'utf8'))].join('\n');
   for (const leak of [...BORROWERS, ...ADDRESSES, ...LEGAL_WORDS, ...APNS]) assert.ok(!logs.includes(leak), leak);
 });
 

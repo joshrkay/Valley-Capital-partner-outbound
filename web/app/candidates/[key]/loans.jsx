@@ -29,6 +29,7 @@ export function LoansCard({ loans, watched = [], href }) {
               <span>{l.type}</span>
               <span className="rel-m">{l.stage} · {l.county}</span>
               <span className="rel-m">{l.dateKind} {l.short}{l.amounts[0].label ? ` · ${l.amounts[0].text} ${l.amounts[0].label.toLowerCase()}` : ''}</span>
+              {l.relation ? <span className="rel-m">{l.relation}</span> : null}
             </li>
           ))}
         </ul>
@@ -45,7 +46,7 @@ export function LoansSection({ loans, watched = [] }) {
     <section aria-labelledby="h-loans-tab" className="page">
       <div>
         <h2 id="h-loans-tab" className="sec-h"><Term id="loans-we-can-see">Loans we can see</Term> <Basis tier="observed" /></h2>
-        <p className="sec-intro">Each row is one public-records document that names this bank as the lender, the beneficiary or the holder of a loan, in a county we watch. Amounts are as the document states them: an original principal is the loan&apos;s size when it was made, never today&apos;s balance.</p>
+        <p className="sec-intro">Each row is one public-records document that names this bank as the lender, the beneficiary or the holder of a commercial loan, in a county we watch. Loans known to be residential (a home-mortgage loan type, or every borrower a person) are left out. Amounts are as the document states them: an original principal is the loan&apos;s size when it was made, never today&apos;s balance.</p>
       </div>
       {rows.length ? (
         <div className="tablebox">
@@ -54,7 +55,7 @@ export function LoansSection({ loans, watched = [] }) {
             <tbody>
               {rows.map((r) => (
                 <tr key={r.id}>
-                  <td data-label="Document"><b>{r.type}</b><div className="small muted">{r.role}{r.via ? ` · ${r.via}` : ''}</div></td>
+                  <td data-label="Document"><b>{r.type}</b><div className="small muted">{r.role}{r.via ? ` · ${r.via}` : ''}</div>{r.relation ? <div className="small">{r.relation}</div> : null}</td>
                   <td data-label="County">{r.county}</td>
                   <td data-label={r.dateKind} className="nowrap">{r.short}<div className="small muted kind">{r.dateKind}</div></td>
                   <td data-label="Stage">{r.stage}{r.saleShort ? <div className="small muted">Sale set for {r.saleShort}</div> : null}</td>

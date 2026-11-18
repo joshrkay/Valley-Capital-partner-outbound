@@ -34,6 +34,15 @@ export function personName(name) {
   return words.length >= 2 && words.every((w) => /^[A-Za-z][A-Za-z.'-]*$/.test(w));
 }
 
+// Whether a borrower's or grantor's name is an entity (an LLC, a corporation, a partnership, a trust, a church) rather than one or more
+// people. Read on the name as stored, so an adapter that cuts an entity's description (", a Texas limited liability company") keeps it
+// when the name alone would not say (src/sources/counties/caldwell.mjs, borrowerName).
+const ENTITY = /\b(?:L\.?\s?L\.?\s?C\.?|L\.?\s?P\.?|L\.?\s?L\.?\s?P\.?|Inc\.?|Incorporated|Corp\.?|Corporation|Company|Co\.|Ltd\.?|Limited|Partners(?:hip)?|Holdings?|Properties|Investments?|Investors|Enterprises?|Ventures?|Capital|Group|Trust|Trustees?|Church|Ministries|Association|Foundation|Development|Homes|Realty|Estate of|Series)\b/i;
+export const isEntityName = (name) => ENTITY.test(String(name ?? ''));
+// A natural person: not an entity by the test above, and read as one or more people's names (personName). A name that is neither, an
+// OCR fragment or a name with digits, is not taken for a person.
+export const naturalPerson = (name) => !isEntityName(name) && personName(name);
+
 // MERS by its full name (any case) or its initials (capitals only, so "Mers" in a surname is not MERS).
 const MERS_INITIALS = /\bMERS\b/;
 const MERS_NAME = /\bmortgage\s+electronic\s+registration\s+systems?\b/i;

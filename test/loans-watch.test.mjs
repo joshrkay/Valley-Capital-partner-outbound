@@ -31,9 +31,13 @@ test('the worker\'s loans.watch job runs every watched county in its own unit of
   await work({ client: service, rules, deps: { fetchImpl: fakeCaldwell().fetchImpl, now: () => T1, sleep: async () => {} } });
   const job = fake.jobs[0];
   assert.equal(job.status, 'done', JSON.stringify(job.result));
-  assert.deepEqual([job.result.watched, job.result.counties[0].source, job.result.counties[0].outcome, job.result.counties[0].added, job.result.counties[0].held, job.result.counties[0].matchedDocuments],
-    [1, CALDWELL_ID, 'ok', 2, 1, 2]);
-  assert.ok(fake.docs.has(`loans/docs/${CALDWELL_ID}.json`) && fake.docs.has(`loans/lists/${CALDWELL_ID}.json`) && fake.docs.has('loans/banks/fdic-9001.json'));
+  // Two notices stored: the attorney's form (an LLC borrows) is in scope and matched; the servicer's form (a couple borrows, no loan
+  // type) is out of scope, stored but matched to no bank.
+  const c0 = job.result.counties[0];
+  assert.deepEqual([job.result.watched, c0.source, c0.outcome, c0.added, c0.held, c0.inScope, c0.outOfScope, c0.matchedDocuments],
+    [1, CALDWELL_ID, 'ok', 2, 1, 1, 1, 1]);
+  assert.ok(fake.docs.has(`loans/docs/${CALDWELL_ID}.json`) && fake.docs.has(`loans/lists/${CALDWELL_ID}.json`) && fake.docs.has('loans/banks/fdic-9002.json'));
+  assert.ok(!fake.docs.has('loans/banks/fdic-9001.json'), 'the out-of-scope notice gives its bank no file');
   assert.doesNotMatch(JSON.stringify(job.result), /Example|Sample|Placeholder|files\//, 'the job result holds counts, not names or links');
   // After the decision's recheck date the job refuses and fails, which turns the workflow red.
   await platformClient({ url, key: 'anon-key', accessToken: 'user:pat@example.test', fetchImpl: fake.fetchImpl }).enqueue('loans.watch');

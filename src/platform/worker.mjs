@@ -31,7 +31,7 @@ const CHANNELS = ['email', 'letter', 'call', 'linkedin_note'];
 // One county's run, in counts only: no name, no address, no document link (docs/county-loans.md).
 const countySummary = (id, r) => ({ source: id, outcome: r.outcome, listed: r.listed ?? null, read: r.read ?? null, added: r.added ?? null, changed: r.changed ?? null,
   fetched: r.fetched ?? null, held: r.held ?? null, deferred: r.deferred ?? null, requests: r.requests ?? null, blocked: !!r.blocked, missingFields: r.missingFields ?? null,
-  matchedDocuments: r.index?.matchedDocuments ?? null, eventsNew: r.index?.eventsNew ?? null, review: r.index?.review ?? null, ...(r.errors?.length ? { error: String(r.errors[0]).slice(0, 300) } : {}) });
+  inScope: r.inScope ?? null, outOfScope: r.outOfScope ?? null, matchedDocuments: r.index?.matchedDocuments ?? null, eventsNew: r.index?.eventsNew ?? null, review: r.index?.review ?? null, ...(r.errors?.length ? { error: String(r.errors[0]).slice(0, 300) } : {}) });
 
 // The county watchers: every enabled source (enabledSourceIds: those config.counties.watch lists and config.counties.sources does not
 // mark not enabled, and those it marks enabled), each in its own unit of work, one after another. Jefferson and Douglas, registered and

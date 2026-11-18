@@ -46,13 +46,20 @@ export function basisLine(lines = []) {
 
 const roleText = (roles = []) => { const s = [...new Set(roles.map((r) => ROLE_WORDS[r] ?? r))].join(' and '); return s ? s.charAt(0).toUpperCase() + s.slice(1) : ''; };
 
-// One row per document, newest first as the file stores them.
+// The scope guard (src/loans.mjs, scopeShown, docs/county-loans.md): the firm buys commercial loans, so a row shows only when the
+// engine's scope rule wrote it (it carries `scope`) and it is not known to be residential: no residential loan type, and not a loan
+// whose every borrower is a person. A file written before the rule shows nothing until `outbound loans rebuild` writes it again.
+export const inScope = (l) => !!l?.scope && typeof l.scope === 'object' && l.scope.commercial !== false && l.scope.borrowers !== 'individuals';
+
+// One row per document in scope, newest first as the file stores them. A bank named only as the original lender, where the document
+// names another current holder, says so ("Originated by this bank; now held by ...").
 export function loanRows(bank) {
-  return (bank?.loans ?? []).map((l) => ({
+  return (bank?.loans ?? []).filter(inScope).map((l) => ({
     id: l.id, type: l.typeLabel ?? l.documentType, documentNumber: l.documentNumber ?? '', county: l.countyLabel ?? `${l.county?.name ?? ''} County, ${l.state ?? ''}`,
     dateKind: DATE_KIND_WORDS[l.dateKind] ?? 'Recorded', date: longDate(l.date), short: shortDate(l.date), stage: l.stageLabel ?? '', saleDate: l.saleDate ? longDate(l.saleDate) : '',
     saleShort: l.saleDate ? shortDate(l.saleDate) : '', amounts: amountLines(l.amounts), basis: basisLine(amountLines(l.amounts)), propertyType: l.propertyTypeLabel ?? 'Not known yet', propertyKnown: !!l.propertyTypeLabel, role: roleText(l.roles),
     via: /through MERS/.test(String(l.how ?? '')) ? 'Named through MERS as nominee' : /alias/.test(String(l.how ?? '')) ? 'Matched by a principal\'s alias' : '',
+    originated: l.relation === 'originated', relation: l.relation === 'originated' ? String(l.relationLabel ?? 'Originated by this bank; now held by another holder') : '',
     link: safeLink(l.link), deedOfTrust: l.deedOfTrust?.documentNumber ? `${l.deedOfTrust.documentNumber}${l.deedOfTrust.recorded ? `, recorded ${longDate(l.deedOfTrust.recorded)}` : ''}` : '',
   }));
 }
