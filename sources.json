@@ -1,5 +1,5 @@
 {
-  "_note": "The source registry (docs/data-sources.md section 4): one entry per outside source, with its cadence, hosts, whether a key is needed, the dated robots.txt and terms checks, the verdict under the watcher rule (docs/county-data-build-vs-buy.md 3.4) and the principal's decision. This first set is the county foreclosure-notice watchers, from the recon of 2026-11-18 (docs/county-watchers-recon.md). A rule file: sources only, NO prospect data, NO borrower, lender or person names. verdict is allowed, not_allowed or unclear; only an allowed source may be enabled, and enabled means cleared to build and run, not that an adapter exists. fields says where each field of a notice appears: list (on the list page itself), document (only on the linked notice), absent, or not_seen (the source could not be read). Requests send the User-Agent in config.json (fdic.userAgent) and stay at or under 3 a minute per host, or slower where robots.txt sets a Crawl-delay. A terms check older than a year, a new challenge page, a block or a cease-and-desist letter stops the source until a principal decides.",
+  "_note": "The source registry (docs/data-sources.md section 4): one entry per outside source, with its cadence, hosts, whether a key is needed, the dated robots.txt and terms checks, the verdict under the watcher rule (docs/county-data-build-vs-buy.md 3.4) and the principal's decision. This first set is the county foreclosure-notice watchers, from the recon of 2026-11-18 (docs/county-watchers-recon.md). A rule file: sources only, NO prospect data, NO borrower, lender or person names. verdict is allowed, not_allowed or unclear; only an allowed source may be enabled, and enabled means cleared to build and run, not that an adapter exists. adapter names the county adapter in src/counties.mjs that reads the source (one adapter may read several of a county's reports); a source with an adapter stays not enabled, with what it is waitingOn, until a principal records the decision (principalDecision, the adapter's terms and config.counties.sources). fields says where each field of a notice appears: list (on the list page itself), document (only on the linked notice), absent, or not_seen (the source could not be read). Requests send the User-Agent in config.json (fdic.userAgent) and stay at or under 3 a minute per host, or slower where robots.txt sets a Crawl-delay. A terms check older than a year, a new challenge page, a block or a cease-and-desist letter stops the source until a principal decides.",
   "sources": [
     {
       "id": "tx-caldwell-notices-of-sale",
@@ -252,7 +252,9 @@
         "Store the extracted fields, not copies of the county's PDFs beyond a run's cache (the data-compilation copyright claim); borrower and owner names stay principal context.",
         "Find report links by their text ('Election and Demand'), since report type numbers differ by county."
       ],
-      "enabled": true,
+      "adapter": "jefferson",
+      "enabled": false,
+      "waitingOn": "A principal's recorded decision (D-B8) and counsel's note on the county's copyright claim in data compilations (D-B9).",
       "principalDecision": null,
       "toConfirm": ["Counsel: that storing extracted fields is untouched by the county's copyright claim in data compilations (with D-B9)."]
     },
@@ -296,7 +298,9 @@
       "conditions": [
         "The same as the NED report. A sale-week signal: it confirms which NED cases reach a sale, and their bid and indebtedness."
       ],
-      "enabled": true,
+      "adapter": "jefferson",
+      "enabled": false,
+      "waitingOn": "The same decision as the NED report: one adapter reads both.",
       "principalDecision": null,
       "toConfirm": []
     },
@@ -343,7 +347,9 @@
         "Read only the reports index and the PDFs it links, by GET. The apps host sets no Crawl-delay; keep 21 seconds or more (the county's main site asks 60).",
         "Borrower names stay principal context; the signal is the current beneficiary."
       ],
-      "enabled": true,
+      "adapter": "douglas",
+      "enabled": false,
+      "waitingOn": "A principal recording that the firm accepts the reports page's terms.",
       "principalDecision": null,
       "toConfirm": ["A principal records acceptance of the Douglas reports terms.", "Ask the Public Trustee whether it would publish a new-NED report, as Jefferson does: the pre-sale list comes 110 days or more after the NED."]
     },

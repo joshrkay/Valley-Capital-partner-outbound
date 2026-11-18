@@ -29,8 +29,12 @@ test('the interface: an adapter declares its county, channel, cadence, hosts, te
   assert.equal(runnable(defineNoticeSource({ ...good, terms: { decision: 'allowed', robotsCheckedOn: '2026-11-20', termsCheckedOn: '2026-11-20', by: 'Pat Example' } })).ok, true);
   assert.match(runnable(exampleCounty).reason, /invented/);
   assert.equal(runnable(exampleCounty, { allowExample: true }).ok, true);
-  assert.deepEqual(Object.keys(COUNTY_SOURCES), ['example-county']);
+  assert.deepEqual(Object.keys(COUNTY_SOURCES), ['example-county', 'jefferson', 'douglas']);
   assert.throws(() => countySource('nowhere-county'), /No county source/);
+  // Optional parts are checked too: a file parser, a backfill with its date, a source's own interval.
+  assert.throws(() => defineNoticeSource({ ...good, parseFile: 'x' }), /parseFile/);
+  assert.throws(() => defineNoticeSource({ ...good, backfill: { since: 'January 2025', requests: () => [] } }), /backfill/);
+  assert.throws(() => defineNoticeSource({ ...good, minIntervalMs: -5 }), /minIntervalMs/);
 });
 
 test('config.counties: the firm\'s User-Agent, three requests a minute, and no county watched until a principal lists one', () => {
@@ -41,6 +45,12 @@ test('config.counties: the firm\'s User-Agent, three requests a minute, and no c
   assert.deepEqual(c.watch, [], 'the example is never watched in the shipped config');
   assert.ok(validateCountyConfig({ ...c, minIntervalMs: -1 }).some((e) => /minIntervalMs/.test(e)));
   assert.ok(validateCountyConfig({ ...c, watch: ['Bad Id'] }).some((e) => /watch/.test(e)));
+  // Every registered real county is in config.counties.sources, not enabled, with what it waits on; none is watched.
+  for (const id of Object.keys(COUNTY_SOURCES).filter((k) => !COUNTY_SOURCES[k].example)) {
+    assert.equal(c.sources[id]?.enabled, false, `${id} is registered as not enabled`);
+    assert.ok(c.sources[id].waitingOn, `${id} says what it waits on`);
+  }
+  assert.ok(validateCountyConfig({ ...c, sources: { jefferson: { enabled: 'yes' } } }).some((e) => /sources.jefferson.enabled/.test(e)));
 });
 
 test('parse: the list page to documents, a document type not kept skipped, every party with its role, amounts with their basis', () => {
