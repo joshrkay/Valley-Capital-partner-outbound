@@ -67,7 +67,7 @@ test('every configured model has a price, so cost is always reported', () => {
 // the network. backtest/ (PRD E17) holds the point-in-time panel, the labels and the reports, which name banks: src/backtest/ is code.
 const dataFormat = (f) => /(\.(json|jsonl|md|txt)|\/[^/.]+)$/.test(f);
 const isDataFile = (f) => /(^|\/)(suppression\.json|touches\.jsonl|audit\.jsonl|senders\.json|runs\.jsonl|changes\.jsonl|KILL|\.env)$/.test(f)
-  || (dataFormat(f) && /(^|\/)(accounts|research|briefs|drafts|facts|data|candidates|pilot|paper|triage|sales|contacts|network|routes|backtest|intermediaries|market)\//.test(f))
+  || (dataFormat(f) && /(^|\/)(accounts|research|briefs|drafts|facts|data|candidates|pilot|paper|triage|sales|contacts|network|routes|backtest|intermediaries|market|loans)\//.test(f))
   || /^sources\//.test(f);
 
 test('DATA RULE: the data-folder names cover the firm\'s network and the routes, and leave code and rule files alone', () => {
@@ -82,6 +82,14 @@ test('DATA RULE: the backtest (PRD E17) is a data folder: its panel, labels and 
     assert.equal(isDataFile(f), true, `${f} is a data file`);
   for (const f of ['src/backtest/panel.mjs', 'src/backtest/run.mjs', 'test/backtest-run.test.mjs', 'test/backtest-kit.mjs', 'docs/prd-next-five.md'])
     assert.equal(isDataFile(f), false, `${f} is code or a rule file`);
+});
+
+test('DATA RULE: county loan documents (loans/) name borrowers and lenders, so they are a data folder and never tracked', () => {
+  for (const f of ['loans/docs/example-county.json', 'loans/banks/fdic-9001.json', 'loans/review.json', 'loans/events.json', 'loans/state.json', 'data/loans/docs/x.json'])
+    assert.equal(isDataFile(f), true, `${f} is a data file`);
+  for (const f of ['src/loans.mjs', 'src/lenders.mjs', 'src/counties.mjs', 'src/sources/notices.mjs', 'src/sources/counties/example.mjs', 'test/loans.test.mjs', 'test/county-notices-fake.mjs', 'web/lib/loans-view.mjs', 'web/app/candidates/[key]/loans.jsx', 'docs/county-loans.md'])
+    assert.equal(isDataFile(f), false, `${f} is code or a rule file`);
+  assert.match(readFileSync(join(REPO, '.gitignore'), 'utf8'), /^\/loans\/$/m, '.gitignore backstops a loans/ folder at the root');
 });
 
 test('DATA RULE: the rule knows every data folder, contacts/ included, and leaves code and rule files alone', () => {

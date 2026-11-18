@@ -9,7 +9,7 @@ import { queueSourcesAction, queueScoreAction, queueEdgarAction } from './action
 
 const STATUS_CHIP = { done: ['done', 'Done'], failed: ['stop', 'Failed'], running: ['back', 'Running'], queued: ['', 'Waiting'] };
 
-export default function StatusView({ s, cov, covError, reminders = [], now = new Date(), outcomes = null, scoreCheck = 'Score check' }) {
+export default function StatusView({ s, cov, covError, reminders = [], counties = [], countiesError = null, now = new Date(), outcomes = null, scoreCheck = 'Score check' }) {
   const health = healthSummary(s, { now, staleDays: s.staleDays ?? {} });
   const sending = sendingLine(s.kill);
   const edgar = s.edgar;
@@ -57,6 +57,27 @@ export default function StatusView({ s, cov, covError, reminders = [], now = new
             {cov.notRunNote ? <p className="muted small">{cov.notRunNote}</p> : null}
           </>
         ) : null}
+      </section>
+
+      <section className="sec" aria-labelledby="h-county">
+        <h2 id="h-county">County records</h2>
+        <p className="sub">Each watched county&apos;s weekly read of public-records documents about loans, which feeds Loans we can see on each bank page. Counts only.</p>
+        {countiesError ? <div className="banner error">County coverage could not be read: {countiesError}</div> : null}
+        {counties.length ? (
+          <div className="scroll card"><table>
+            <thead><tr><th>County</th><th>Last run</th><th className="num">Documents read</th><th className="num">New this week</th><th className="num">Matched to a bank</th><th className="num">Names to review</th></tr></thead>
+            <tbody>{counties.map((c) => (
+              <tr key={c.id}>
+                <td>{c.county}<span className="src">{c.label}{c.configured ? '' : ' · not in the watch list'}</span></td>
+                <td>{c.lastRun}{c.error ? <span className="src">{c.error}</span> : null}</td>
+                <td className="num">{c.read}</td>
+                <td className="num">{c.newThisWeek}</td>
+                <td className="num">{c.stored === '–' ? '–' : `${c.matched} of ${c.stored}`}</td>
+                <td className="num">{c.review}</td>
+              </tr>
+            ))}</tbody>
+          </table></div>
+        ) : countiesError ? null : <p className="muted">No county is watched yet. A county&apos;s watcher starts once its source is built, its robots.txt and terms are read and dated, and a principal lists it.</p>}
       </section>
 
       <section className="sec" aria-labelledby="h-edgar">
