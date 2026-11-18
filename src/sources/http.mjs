@@ -45,10 +45,13 @@ async function readCapped(res, maxBytes) {
   return { text: bytes.toString('utf8'), truncated };
 }
 
-async function request(url, params, { as, maxBytes, accept, fetchImpl = globalThis.fetch, timeoutMs = 60000, retries = 3, backoffMs = 1000, maxBackoffMs = 30000, userAgent, sleep = realSleep } = {}) {
+// `ifNoneMatch` (text and bytes only) sends a conditional GET: a 304 then returns { notModified: true } with no body, so an unchanged
+// page costs no download. A text or bytes result also carries the response's ETag and content type.
+async function request(url, params, { as, maxBytes, accept, fetchImpl = globalThis.fetch, timeoutMs = 60000, retries = 3, backoffMs = 1000, maxBackoffMs = 30000, userAgent, sleep = realSleep, ifNoneMatch } = {}) {
   const full = buildUrl(url, params);
   const headers = { accept };
   if (userAgent) headers['user-agent'] = userAgent;
+  if (ifNoneMatch && as !== 'json') headers['if-none-match'] = String(ifNoneMatch);
   let lastErr;
   for (let attempt = 1; attempt <= retries + 1; attempt++) {
     let res;
@@ -61,9 +64,11 @@ async function request(url, params, { as, maxBytes, accept, fetchImpl = globalTh
       await sleep(Math.min(backoffMs * 2 ** (attempt - 1), maxBackoffMs));
       continue;
     }
+    const meta = () => ({ etag: res.headers?.get?.('etag') ?? null, contentType: res.headers?.get?.('content-type') ?? null });
+    if (res.status === 304 && headers['if-none-match']) return { notModified: true, text: '', bytes: Buffer.alloc(0), truncated: false, ...meta() };
     if (res.ok) {
-      if (as === 'text') return readCapped(res, maxBytes);
-      if (as === 'bytes') return readCappedBytes(res, maxBytes);
+      if (as === 'text') return { ...(await readCapped(res, maxBytes)), notModified: false, ...meta() };
+      if (as === 'bytes') return { ...(await readCappedBytes(res, maxBytes)), notModified: false, ...meta() };
       try { return await res.json(); } catch (e) { throw new HttpError(`Response from ${url} was not JSON: ${e.message}`, { status: res.status, url, attempts: attempt }); }
     }
     lastErr = new HttpError(`HTTP ${res.status} from ${url}`, { status: res.status, url, attempts: attempt });
@@ -76,10 +81,12 @@ async function request(url, params, { as, maxBytes, accept, fetchImpl = globalTh
 
 export const getJson = (url, params = {}, opts = {}) => request(url, params, { ...opts, as: 'json', accept: 'application/json' });
 
-// Text (XML, HTML, an index file). Returns { text, truncated }. With maxBytes, stops reading once that much has arrived.
+// Text (XML, HTML, an index file). Returns { text, truncated, etag, contentType, notModified }. With maxBytes, stops reading once that
+// much has arrived.
 export const getText = (url, params = {}, opts = {}) => request(url, params, { ...opts, as: 'text', accept: opts.accept ?? '*/*' });
 
-// Raw bytes (a PDF). Returns { bytes: Buffer, truncated }. With maxBytes, stops reading once that much has arrived.
+// Raw bytes (a PDF). Returns { bytes: Buffer, truncated, etag, contentType, notModified }. With maxBytes, stops reading once that much
+// has arrived.
 export const getBytes = (url, params = {}, opts = {}) => request(url, params, { ...opts, as: 'bytes', accept: opts.accept ?? '*/*' });
 
 // Spaces calls at least `minIntervalMs` apart. Sources are read sequentially, so this is the whole rate limit.

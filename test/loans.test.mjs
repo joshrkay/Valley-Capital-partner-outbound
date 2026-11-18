@@ -29,11 +29,12 @@ test('the record: every field the brief names, with its basis, its sources and a
   assert.deepEqual(Object.keys(r).sort(), RECORD_KEYS.filter((k) => !['firstSeenAt', 'firstRunId', 'updatedAt', 'updatedRunId'].includes(k)).sort());
   assert.equal(r.id, 'example-county:2026-004105');
   assert.deepEqual([r.sourceId, r.county, r.state], ['example-county', { fips: '99001', name: 'Example' }, 'CO']);
-  assert.deepEqual(r.dates, { recorded: '2026-11-11', filed: null, sale: '2026-12-09' });
+  assert.deepEqual(r.dates, { recorded: '2026-11-11', filed: null, sale: '2026-12-09', notice: null });
   assert.deepEqual(r.parties.map((p) => p.role), ['beneficiary', 'trustee', 'grantor']);
+  assert.deepEqual([r.salePlace, r.unread], [null, []], 'no sale place stated; every field read');
   assert.deepEqual(r.amounts.unpaidBalance, { value: 7215000, unit: 'dollars', basis: 'document' });
   assert.deepEqual(r.amounts.originalPrincipal.unit, 'dollars');
-  assert.deepEqual(r.deedOfTrust, { documentNumber: '2018-0333222', recorded: '2018-04-27', book: null, page: null });
+  assert.deepEqual(r.deedOfTrust, { documentNumber: '2018-0333222', recorded: '2018-04-27', dated: null, book: null, page: null });
   assert.deepEqual(r.sources, [{ url: 'https://publictrustee.example/documents/2026-004105', fetchedAt: AT }]);
   assert.match(r.contentHash, /^[0-9a-f]{16}$/);
   assert.equal(r.contextOnly, true);
@@ -41,7 +42,7 @@ test('the record: every field the brief names, with its basis, its sources and a
   // Every type the brief lists, each with a stage; every role; every amount basis.
   assert.deepEqual(Object.keys(DOC_TYPES).sort(), ['assignment', 'deed_of_trust', 'election_and_demand', 'lis_pendens', 'notice_of_default', 'notice_of_trustee_sale', 'release', 'rule_120_notice', 'trustees_deed']);
   for (const t of Object.values(DOC_TYPES)) assert.ok(STAGES[t.stage], t.label);
-  assert.deepEqual([...ROLES], ['lender', 'beneficiary', 'holder', 'assignor', 'assignee', 'trustee', 'attorney', 'borrower', 'grantor']);
+  assert.deepEqual([...ROLES], ['lender', 'beneficiary', 'holder', 'assignor', 'assignee', 'trustee', 'attorney', 'borrower', 'grantor', 'servicer']);
   assert.deepEqual(Object.keys(AMOUNT_BASES), ['document', 'index', 'not-stated', 'not-read']);
 });
 
@@ -67,7 +68,10 @@ test('a document is refused, field by field, before it is a record: type, number
   assert.match(errs({ documentType: 'mortgage' }), /document type "mortgage"/);
   assert.match(errs({ documentNumber: '' }), /document number/);
   assert.match(errs({ dates: { recorded: '11/11/2026' } }), /dates.recorded/);
-  assert.match(errs({ dates: { recorded: null, filed: null } }), /neither a recording date nor a filing date/);
+  assert.match(errs({ dates: { recorded: null, filed: null } }), /no recording, filing or notice date/);
+  assert.deepEqual(errs({ dates: { recorded: null, filed: null, notice: '2026-11-10', sale: '2026-12-01' } }), '', 'a notice known by its own date');
+  assert.match(errs({ deedOfTrust: { documentNumber: '2018-0333222', dated: '2018-02-30' } }), /deedOfTrust.dated "2018-02-30"/);
+  assert.match(errs({ unread: ['borrower', 'phone'] }), /unread: "phone"/);
   assert.match(errs({ parties: [{ role: 'mortgagor', name: 'X' }, { role: 'beneficiary', name: 'Example Bank, N.A.' }] }), /party role "mortgagor"/);
   assert.match(errs({ parties: [{ role: 'grantor', name: 'Sample Holdings LLC' }] }), /names no lender/);
   assert.match(errs({ amounts: { originalPrincipal: { value: 5, basis: 'not-stated' } } }), /has no value/);
@@ -190,6 +194,9 @@ test('the event sentence for each role and date kind', () => {
   assert.equal(eventLabel(r, ['holder']), 'A Rule 120 notice was filed on November 13, 2026 for a loan this bank holds on a property in Example County, CO.');
   assert.equal(eventLabel(build({ documentType: 'assignment' }).record, ['assignee']), 'An assignment was recorded on November 11, 2026 moving a loan on a property in Example County, CO to this bank.');
   assert.equal(eventLabel(build({ documentType: 'election_and_demand' }).record, ['beneficiary', 'holder']), 'A notice of election and demand was recorded on November 11, 2026 for a loan from this bank on a property in Example County, CO.');
+  // A Texas notice of sale known only by the date it states (the clerk's filed stamp not read).
+  const dated = build({ dates: { recorded: null, filed: null, sale: '2026-12-01', notice: '2026-11-10' } }).record;
+  assert.equal(eventLabel(dated, ['beneficiary']), 'A notice of trustee\'s sale dated November 10, 2026 was posted for a loan from this bank on a property in Example County, CO.');
 });
 
 test('platform storage: every path the pipeline writes fits the existing document store, so no migration is needed', () => {
@@ -201,7 +208,7 @@ test('platform storage: every path the pipeline writes fits the existing documen
   buildLoanIndex({ dir, now: new Date(AT), runId: 'r1' });
   const rel = (p) => p.slice(dir.length + 1);
   const P = loansPaths(dir);
-  for (const p of [P.docs('example-county'), P.bank('fdic:9001'), P.review, P.events, P.state].map(rel)) {
+  for (const p of [P.docs('example-county'), P.docs('tx-caldwell-notices-of-sale'), P.list('tx-caldwell-notices-of-sale'), P.bank('fdic:9001'), P.review, P.events, P.state].map(rel)) {
     assert.match(p, doc, p);
     assert.ok(!p.includes('..') && !p.endsWith('.jsonl'), p);
     assert.ok(p.startsWith('loans/'), p);

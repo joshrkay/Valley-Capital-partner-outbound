@@ -44,7 +44,7 @@ import { runPanel, verifyPanel } from './src/backtest/panel.mjs';
 import { buildLabels } from './src/backtest/labels.mjs';
 import { runBacktest, readReport, summarize } from './src/backtest/run.mjs';
 import { readSenders, setSender, removeSender, sendingReadiness, validateSender } from './src/senders.mjs';
-import { runNoticeSource, verifyNoticeSource } from './src/sources/notices.mjs';
+import { runNoticeSource, verifyNoticeSource, clearBlock } from './src/sources/notices.mjs';
 import { buildLoanIndex, readBankLoans, readLoanState, loanEvents, loansPaths, DOC_TYPES, STAGES, AMOUNT_BASES, PROPERTY_TYPES } from './src/loans.mjs';
 import { countySource, countyCoverage } from './src/counties.mjs';
 import { readFileSync } from 'node:fs';
@@ -193,7 +193,9 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   County loan documents (docs/county-loans.md): public-records documents about loans, matched to banks. Context for principals only:
   never in a message, never given to a model, never scored.
   outbound loans run --source ID                  one county source's weekly read: new documents written, changed ones updated, unchanged
-                                                  ones left alone, lenders matched to banks, a dated event per document newly matched
+                                                  ones left alone, lenders matched to banks, a dated event per document newly matched.
+                                                  Caldwell County, TX (tx-caldwell-notices-of-sale) reads each new notice's PDF with
+                                                  pdftotext (poppler-utils); the worker runs every watched county each Monday (loans.watch)
   outbound loans verify --source ID [--sample N]  fresh, sourced, complete against the live list, every lender name accounted for (read-only)
   outbound loans status                           each watched county: the last run, documents read, new this week, matched to a bank
   outbound loans show --key fdic:CERT             the documents matched to one bank, newest first (no borrower, no address)
@@ -201,6 +203,8 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound loans alias --key fdic:CERT --name "NAME" --by NAME   a principal resolves one: the name becomes the bank's alias, then a re-match
   outbound loans match                            match every stored document again (after an alias), without reading any county
   outbound loans events [--key fdic:CERT]         the dated events, newest first
+  outbound loans unblock --source ID --by NAME    a principal clears a recorded block (a refusal or challenge page stopped the source),
+                                                  after deciding the source may be read again
 
   Bank filers (PRD E13-S1): which SEC filer (CIK) files for each bank, usually its holding company. Only confirmed ones are searched.
   outbound filers list                            every bank in the list: confirmed, rejected or not mapped yet
@@ -303,7 +307,7 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound platform smoke                         check a new project with SUPABASE_URL and SUPABASE_ANON_KEY (the PUBLIC key only):
                                                   sign-ups off, every table and function present and refusing the public key
   outbound worker [--max N]                       run queued jobs until the queue is empty (or N have run); prints ids and outcomes only
-  outbound enqueue sources.fdic|sources.edgar|sources.filings|sources.fdicsales|sources.enforcement|sources.mergerapps|score.run|triage.run|research.run|draft.run|call.prep|call.extract [--account ID] [--channel C] [--step N] [--date D] [--by NAME] [--draft-buybox] [--include-hq] [--since YYYY-MM-DD]
+  outbound enqueue sources.fdic|sources.edgar|sources.filings|sources.fdicsales|sources.enforcement|sources.mergerapps|loans.watch|score.run|triage.run|research.run|draft.run|call.prep|call.extract [--account ID] [--channel C] [--step N] [--date D] [--by NAME] [--draft-buybox] [--include-hq] [--since YYYY-MM-DD]
   outbound platform push [--from DIR]             copy a data folder into the platform (default: OUTBOUND_DATA_DIR); safe to re-run
   outbound platform pull --to DIR                 write everything back to a new or empty folder outside this repository
   outbound platform verify [fdic|edgar|filings|fdicsales|enforcement|occorders|mergerapps|sales] [--sample N]   the same checks on the platform's data (read-only); no spot-check list unless asked
@@ -750,6 +754,10 @@ async function main() {
       return out(`${r.key} (${r.bank ?? ''}) now also matches: ${r.aliases.join('; ')}. Matched again: ${idx.matchedDocuments} document(s) name a bank in the list; ${idx.eventsNew} new event(s).`);
     }
     if (sub === 'match') return out(buildLoanIndex({ dir }));
+    if (sub === 'unblock') {
+      const r = clearBlock({ dir, sourceId: countySource(need(flags, 'source')).id, by: need(flags, 'by') });
+      return out(r.cleared ? `${r.sourceId}: the block of ${String(r.blockedAt).slice(0, 10)} is cleared. The next run reads the source again.` : `${r.sourceId}: no block is recorded.`);
+    }
     if (sub === 'events') return out(loanEvents({ dir, key: flags.key && flags.key !== true ? flags.key : null }).map((e) => `${e.date}  ${e.key}  ${e.label}`).join('\n') || 'No events yet.');
   }
 

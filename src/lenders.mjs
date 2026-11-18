@@ -9,7 +9,10 @@
 //   - trustees: a trustee or foreclosure-services company, a title company, a public trustee, a reconveyance company, or any party
 //     named "as trustee" (a bank acting as a securitization's trustee is not its lender);
 //   - servicers: a party "as servicer" or "as attorney-in-fact", or a name with "servicing", "servicer" or "loan services";
-//   - law firms: LLP, PLLC, P.C., P.A., Esq., "attorneys", "law firm", "law office", "law group".
+//   - law firms: LLP, PLLC, P.C., P.A., Esq., "attorneys", "law firm", "law office", "law group";
+//   - people: a lender named as one or more people ("Pat Example and Jordan Example"), with no word an institution's name carries.
+//     A private person who financed a sale is not an institution, and no person named in a notice is ever a lead: such a name is never
+//     matched, and the review list counts it without naming it.
 // Only the lender side is matched (lender, beneficiary, holder, assignor, assignee). A trustee, an attorney, a borrower or a grantor is
 // never matched, and a borrower's or grantor's name never reaches the review list.
 import { resolveParty } from './sources/enforcement.mjs';
@@ -17,7 +20,19 @@ import { matchInstitution } from './candidates.mjs';
 import { norm } from './guard.mjs';
 
 export const LENDER_ROLES = Object.freeze(['lender', 'beneficiary', 'holder', 'assignor', 'assignee']);
-export const SET_ASIDE = Object.freeze({ mers: 'MERS, a nominee and not the lender', trustee: 'a trustee', servicer: 'a loan servicer', 'law-firm': 'a law firm' });
+export const SET_ASIDE = Object.freeze({ mers: 'MERS, a nominee and not the lender', trustee: 'a trustee', servicer: 'a loan servicer', 'law-firm': 'a law firm', person: 'a person, not an institution' });
+// The review list's entry for the people set aside: one line, a count, and no name.
+export const PERSON_WITHHELD = '(a person named as lender: name withheld)';
+
+// Words an institution's name carries and a person's does not: a bank's, a fund's, a company's, a government's.
+const INSTITUTION_WORDS = /\b(?:bank|bancorp|banc|bancshares|n\.?\s?a\.?|national|association|savings|credit|union|trust|fsb|f\.s\.b\.?|ssb|mortgage|mtg|lending|lender|loans?|financ\w*|funding|capital|fund|investments?|investors|holdings?|properties|partners(?:hip)?|group|company|co\.|corp\.?|corporation|inc\.?|incorporated|l\.?\s?l\.?\s?c\.?|l\.?\s?p\.?|l\.?\s?l\.?\s?p\.?|ltd\.?|limited|series|services?|servicing|united|states|america|department|secretary|housing|veterans|administration|authority|agency|county|city|state|federal|church|ministries|foundation|enterprises?|ventures?|realty|homes|development|estate|equity|acceptance|commercial|residential|parts|management|solutions|systems|ranch|farms?|land|title|plc|usa)\b/i;
+// Whether a lender's name reads as one or more people: two or more plain words, and no word an institution's name carries.
+export function personName(name) {
+  const s = String(name ?? '').replace(/\s+/g, ' ').trim();
+  if (!s || INSTITUTION_WORDS.test(s) || /\d/.test(s)) return false;
+  const words = s.replace(/\b(?:a\/k\/a|a\.k\.a\.?|aka|f\/k\/a|and|or|jr\.?|sr\.?|ii|iii|iv|mr\.?|mrs\.?|ms\.?|dr\.?)(?=\s|,|$)/gi, ' ').replace(/&/g, ' ').split(/[\s,]+/).filter(Boolean);
+  return words.length >= 2 && words.every((w) => /^[A-Za-z][A-Za-z.'-]*$/.test(w));
+}
 
 // MERS by its full name (any case) or its initials (capitals only, so "Mers" in a surname is not MERS).
 const MERS_INITIALS = /\bMERS\b/;
@@ -87,6 +102,7 @@ export function matchLender(party, { institutions = {}, aliases = {}, documentSt
   }
   const cls = setAsideClass(name);
   if (cls) return { status: 'set-aside', class: cls, name: raw };
+  if (personName(cleanLenderName(name))) return { status: 'set-aside', class: 'person', name: raw };
   if (!name) return { status: 'unmatched', name: raw, matchedName: '', candidates: [], suggestions: [] };
   const how = (h) => (via ? `${h}, named through ${via}` : h);
   // A principal's alias, on the name exactly as the document gives it, then on the name without its legal phrases.

@@ -65,12 +65,15 @@
     "minRowsPerWeek": 5
   },
   "counties": {
-    "_note": "County records watchers (docs/county-loans.md; county-data-build-vs-buy 3.4 and 5.2, component 9). Each county's adapter is registered in src/counties.mjs; a county is watched once a principal lists its source id in watch, after its robots.txt and terms are read and dated (D-B8). None is yet: the only adapter is an invented example that runs against its fake. userAgent: the firm's name and a monitored business contact, sent with every request. minIntervalMs: at least this long between requests to a county host (the county playbook's 3 a minute); a longer Crawl-delay in robots.txt wins. maxBytes: the most of one list page read. freshDays: the verify check fails when a source's last good run is older. PLACEHOLDERS for a principal to review.",
+    "_note": "County records watchers (docs/county-loans.md; county-data-build-vs-buy 3.4 and 5.2, component 9). Each county's adapter is registered in src/counties.mjs; a county is watched once a principal lists its source id in watch, after its robots.txt and terms are read and dated (D-B8) and its decision is recorded in sources.json. Caldwell County, TX (tx-caldwell-notices-of-sale) is watched from 2026-11-18, on a principal's decision of that date; the worker reads every watched county each Monday (job loans.watch). userAgent: the firm's name and a monitored business contact, sent with every request. minIntervalMs: at least this long between requests to a county host (the county playbook's 3 a minute); a source's own pacing (Caldwell: 21 seconds) or a longer Crawl-delay in robots.txt wins. maxBytes: the most of one list page read. maxDocumentBytes: the most of one linked document (a scanned notice) read. maxDocumentsPerRun: the most linked documents fetched in one run; the rest wait for the next. backfillDays: on a source's first run, only documents its list dates within this many days are read; older ones are recorded as history and never fetched. freshDays: the verify check fails when a source's last good run is older. PLACEHOLDERS for a principal to review.",
     "userAgent": "Valley Capital Partners josh@valleycapitalpartner.com",
     "minIntervalMs": 20000,
     "maxBytes": 5000000,
+    "maxDocumentBytes": 15000000,
+    "maxDocumentsPerRun": 40,
+    "backfillDays": 60,
     "freshDays": 10,
-    "watch": []
+    "watch": ["tx-caldwell-notices-of-sale"]
   },
   "sales": {
     "_note": "The who-sells-to-whom ledger (PRD E16, outbound sales build). filingSearches: the saved searches in filings.json whose hit on a bank's filing counts as a disclosed sale (8-K Item 2.01, a completed acquisition or disposition of assets, may also be the bank BUYING: the event says so). acquisitionKinds: the FDIC structure-event kinds that count as a whole-bank acquisition; affiliate-reorganization (224, inside one holding company) is left out, as in scoring.json. Both lists are PLACEHOLDERS for a principal to review.",

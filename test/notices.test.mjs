@@ -26,19 +26,30 @@ test('the interface: an adapter declares its county, channel, cadence, hosts, te
     assert.throws(() => defineNoticeSource({ ...good, [k]: v }), re, k);
   // Only an allowed, dated terms decision runs a real source; an example runs only against its fake.
   assert.match(runnable(defineNoticeSource(good)).reason, /no recorded decision/);
-  assert.equal(runnable(defineNoticeSource({ ...good, terms: { decision: 'allowed', robotsCheckedOn: '2026-11-20', termsCheckedOn: '2026-11-20', by: 'Pat Example' } })).ok, true);
+  assert.equal(runnable(defineNoticeSource({ ...good, terms: { decision: 'allowed', robotsCheckedOn: '2026-11-20', termsCheckedOn: '2026-11-20', by: 'Pat Example' } }), { now: new Date('2026-11-21T12:00:00Z') }).ok, true);
+  // A terms read over a year old, a recheck date passed, a bad recheck date, or a recorded block: refused.
+  const dated = (t) => defineNoticeSource({ ...good, terms: { decision: 'allowed', robotsCheckedOn: '2026-11-20', termsCheckedOn: '2026-11-20', by: 'Pat Example', ...t } });
+  assert.match(runnable(dated({}), { now: new Date('2027-11-22T12:00:00Z') }).reason, /more than a year ago/);
+  assert.match(runnable(dated({ nextRecheckOn: '2026-12-20' }), { now: new Date('2026-12-21T12:00:00Z') }).reason, /rechecked by 2026-12-20/);
+  assert.equal(runnable(dated({ nextRecheckOn: '2026-12-20' }), { now: new Date('2026-12-20T23:00:00Z') }).ok, true, 'the recheck date itself still runs');
+  assert.match(runnable(dated({ nextRecheckOn: 'monthly' }), { now: new Date('2026-12-01T12:00:00Z') }).reason, /is not a date/);
+  assert.match(runnable(dated({}), { now: new Date('2026-11-21T12:00:00Z'), state: { blocked: { at: '2026-11-21T10:00:00Z', reason: 'HTTP 403 on /list' } } }).reason, /blocked on 2026-11-21 \(HTTP 403 on \/list\)/);
+  assert.throws(() => defineNoticeSource({ ...good, minIntervalMs: -5 }), /minIntervalMs/);
+  assert.throws(() => defineNoticeSource({ ...good, readDocument: 'no' }), /readDocument/);
   assert.match(runnable(exampleCounty).reason, /invented/);
   assert.equal(runnable(exampleCounty, { allowExample: true }).ok, true);
-  assert.deepEqual(Object.keys(COUNTY_SOURCES), ['example-county']);
+  assert.deepEqual(Object.keys(COUNTY_SOURCES), ['example-county', 'tx-caldwell-notices-of-sale']);
   assert.throws(() => countySource('nowhere-county'), /No county source/);
 });
 
-test('config.counties: the firm\'s User-Agent, three requests a minute, and no county watched until a principal lists one', () => {
+test('config.counties: the firm\'s User-Agent, three requests a minute, and only a county a principal decided on is watched', () => {
   const c = counties();
   assert.deepEqual(validateCountyConfig(c), []);
   assert.equal(c.minIntervalMs, 20000);
   assert.equal(c.userAgent, config().sec.userAgent, 'the same contact as the SEC, FDIC and Federal Reserve requests');
-  assert.deepEqual(c.watch, [], 'the example is never watched in the shipped config');
+  assert.deepEqual(c.watch, ['tx-caldwell-notices-of-sale'], 'Caldwell, on the principal\'s decision of 2026-11-18; the example is never watched');
+  assert.deepEqual([c.maxDocumentsPerRun, c.backfillDays], [40, 60]);
+  assert.ok(validateCountyConfig({ ...c, maxDocumentsPerRun: 0 }).some((e) => /maxDocumentsPerRun/.test(e)));
   assert.ok(validateCountyConfig({ ...c, minIntervalMs: -1 }).some((e) => /minIntervalMs/.test(e)));
   assert.ok(validateCountyConfig({ ...c, watch: ['Bad Id'] }).some((e) => /watch/.test(e)));
 });
@@ -170,17 +181,17 @@ test('the verify check: fresh, sourced, recall against the list, and every lende
 });
 
 test('watched counties and coverage: the configured list and every source that ran, with the last run, documents read and new this week', async () => {
-  assert.deepEqual(watchedCounties({ config: counties(), state: { sources: {} } }), [], 'no county is watched in the shipped config');
+  assert.deepEqual(watchedCounties({ config: counties(), state: { sources: {} } }).map((w) => [w.id, w.countyLabel, w.configured]), [['tx-caldwell-notices-of-sale', 'Caldwell County, TX', true]], 'Caldwell is watched in the shipped config');
   const dir = world();
   await run(dir, fakeCounty());
   await run(dir, fakeCounty({ rows: WEEK2() }), T2);
   const rows = countyCoverage({ config: counties(), state: readLoanState(dir), now: new Date('2026-11-24T12:00:00Z') });
-  assert.equal(rows.length, 1);
-  const r = rows[0];
+  assert.equal(rows.length, 2, 'the watched Caldwell, which has not run here, and the example, which has');
+  const r = rows.find((x) => x.id === 'example-county');
   assert.deepEqual([r.id, r.countyLabel, r.channel, r.example, r.configured, r.lastRun.outcome, r.read, r.newThisWeek, r.changedThisWeek, r.stored, r.matchedDocuments],
     ['example-county', 'Example County, CO', 'b', true, false, 'ok', 8, 2, 1, 10, 7]);
   // Two weeks on, nothing new this week.
-  assert.equal(countyCoverage({ config: counties(), state: readLoanState(dir), now: new Date('2026-12-08T12:00:00Z') })[0].newThisWeek, 0);
+  assert.equal(countyCoverage({ config: counties(), state: readLoanState(dir), now: new Date('2026-12-08T12:00:00Z') }).find((x) => x.id === 'example-county').newThisWeek, 0);
   // A listed county that never ran is shown as such.
   const listed = countyCoverage({ config: { ...counties(), watch: ['example-county'] }, state: { sources: {} } })[0];
   assert.deepEqual([listed.configured, listed.lastRun, listed.read, listed.newThisWeek], [true, null, null, null]);

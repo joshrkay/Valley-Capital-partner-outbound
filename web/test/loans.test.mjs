@@ -63,9 +63,10 @@ test('the sidebar card and the empty state: which counties are watched, and that
   const watched = watchedCounties({ config: counties, state: readLoanState(dir) });
   const card = loansCard(readBankLoans({ dir, key: 'fdic:9001' }), watched);
   assert.deepEqual([card.count, card.latest.length, card.more, card.empty], [4, 3, 1, '']);
-  assert.equal(card.watched, 'Watched: Example County, CO (last read November 23, 2026).');
+  // The shipped config watches Caldwell County, TX (a principal's decision of 2026-11-18); it has not run in this folder.
+  assert.equal(card.watched, 'Watched: Caldwell County, TX (not read yet) and Example County, CO (last read November 23, 2026).');
   const none = loansCard(null, watched);
-  assert.deepEqual([none.count, none.empty, none.watched], [0, 'None of the watched counties has a document for this bank yet.', 'Watched: Example County, CO (last read November 23, 2026).'], 'none yet, and which counties are watched');
+  assert.deepEqual([none.count, none.empty, none.watched], [0, 'None of the watched counties has a document for this bank yet.', 'Watched: Caldwell County, TX (not read yet) and Example County, CO (last read November 23, 2026).'], 'none yet, and which counties are watched');
   assert.equal(emptyText([]), 'No county is watched yet, so no public record can show this bank\'s loans. A county is watched once its source is built and a principal allows it.');
   assert.equal(watchedLine([]), 'No county is watched yet.');
   assert.match(LOANS_CONTEXT, /never in a message/i);
@@ -84,7 +85,7 @@ test('the bank page reads its loans the way it reads the paper record: one docum
   const d = await ops.candidateDetail(pat, 'fdic:9001');
   assert.equal(d.loans.key, 'fdic:9001');
   assert.equal(d.loans.loans.length, 4);
-  assert.deepEqual(d.watched.map((w) => [w.id, w.countyLabel, w.configured]), [['example-county', 'Example County, CO', false]]);
+  assert.deepEqual(d.watched.map((w) => [w.id, w.countyLabel, w.configured]), [['tx-caldwell-notices-of-sale', 'Caldwell County, TX', true], ['example-county', 'Example County, CO', false]]);
   const reads = fake.calls.filter((c) => c.path === 'documents');
   assert.ok(reads.length && reads.every((c) => c.caller === 'principal'), 'read with the principal\'s token, never a service key');
   const or = reads.map((c) => String(c.query.or)).join(' ');
@@ -95,7 +96,7 @@ test('the bank page reads its loans the way it reads the paper record: one docum
   assert.ok(other.loans.loans.length >= 1);
   await pat.flush({ docs: [{ path: 'candidates/latest.json', kind: 'json', body: { runId: 'score-2', items: [item, { ...item, key: 'fdic:9003', cert: '9003' }] }, baseVersion: 1 }], lines: [] });
   const none = await ops.candidateDetail(pat, 'fdic:9003');
-  assert.deepEqual([none.loans, none.watched.length], [null, 1]);
+  assert.deepEqual([none.loans, none.watched.length], [null, 2]);
   // Someone signed in who is not a principal reads nothing.
   const stranger = platformClient({ url: URL_, key: 'anon-key', accessToken: 'user:stranger@example.test', fetchImpl: fake.fetchImpl });
   assert.equal(await ops.candidateDetail(stranger, 'fdic:9001'), null);
@@ -108,10 +109,11 @@ test('System status: a row per watched county with the last run, documents read 
   await pat.flush({ docs: [{ path: 'loans/state.json', kind: 'json', body: readJson(`${dir}/loans/state.json`), baseVersion: 0 }], lines: [] });
   fake.calls.length = 0;
   const rows = countyRows(await ops.countyCoverage(pat, { now: new Date('2026-11-24T12:00:00Z') }));
-  assert.deepEqual(rows.map((r) => [r.county, r.lastRun, r.read, r.newThisWeek, r.matched, r.stored, r.review]), [['Example County, CO', 'November 23, 2026', '8', '2', '7', '10', '3']]);
+  assert.deepEqual(rows.map((r) => [r.county, r.lastRun, r.read, r.newThisWeek, r.matched, r.stored, r.review]), [['Caldwell County, TX', 'Never', '–', '–', '–', '–', '–'], ['Example County, CO', 'November 23, 2026', '8', '2', '7', '10', '3']]);
   assert.deepEqual(fake.calls.filter((c) => c.path === 'documents').map((c) => String(c.query.or)), ['(path.eq."loans/state.json")'], 'one document');
-  // Before any county runs: no row, and the page says no county is watched yet.
-  assert.deepEqual(countyRows(countyCoverage({ config: counties, state: {} })), []);
+  // Before any county runs: the watched county's row says it never ran; with none watched, no row, and the page says so.
+  assert.deepEqual(countyRows(countyCoverage({ config: counties, state: {} })).map((r) => [r.county, r.lastRun, r.configured]), [['Caldwell County, TX', 'Never', true]]);
+  assert.deepEqual(countyRows(countyCoverage({ config: { ...counties, watch: [] }, state: {} })), []);
   // A failed run says so, with its error.
   const failed = countyRows([{ id: 'x', countyLabel: 'X County, CO', lastRun: { ranAt: '2026-11-20T00:00:00Z', outcome: 'failed', error: 'robots.txt disallows the list' }, read: null, newThisWeek: 0, matchedDocuments: null, stored: null, reviewNames: null }]);
   assert.deepEqual([failed[0].lastRun, failed[0].failed, failed[0].error, failed[0].read], ['November 20, 2026, failed', true, 'robots.txt disallows the list', '–']);
@@ -132,4 +134,15 @@ test('the section is server-rendered: no client script, a card in the sidebar, i
   assert.match(src('candidates/[key]/page.jsx'), /<BankRecord [^>]*loans=\{d\.loans\} watched=\{d\.watched\}/);
   assert.match(src('status/status-view.jsx'), /County records[\s\S]*New this week[\s\S]*No county is watched yet/);
   assert.doesNotMatch(src('status/status-view.jsx'), /'use client'/);
+});
+
+test('a Texas notice of sale is known by the date it states ("Dated"), or by its sale date when that could not be read; its link is the list\'s month', () => {
+  const row = (over) => loanRows({ loans: [{ id: 'tx-caldwell-notices-of-sale:0123456789ABCDEF', documentType: 'notice_of_trustee_sale', typeLabel: 'Notice of trustee\'s sale', countyLabel: 'Caldwell County, TX',
+    date: '2026-10-21', dateKind: 'notice', saleDate: '2026-12-01', roles: ['beneficiary'], how: 'name, named through MERS as nominee', amounts: { originalPrincipal: { value: 412500, unit: 'dollars', basis: 'document' }, unpaidBalance: { value: null, unit: 'dollars', basis: 'not-stated' } },
+    link: 'https://caldwellcounty.texas.gov/foreclosures#fc-m-2026-12', ...over }] })[0];
+  const r = row({});
+  assert.deepEqual([r.dateKind, r.date, r.saleDate, r.via, r.link], ['Dated', 'October 21, 2026', 'December 1, 2026', 'Named through MERS as nominee', 'https://caldwellcounty.texas.gov/foreclosures#fc-m-2026-12']);
+  assert.deepEqual(r.amounts.map((a) => a.label), ['Original principal'], 'no balance is stated on a Texas notice, so none is shown');
+  assert.equal(row({ dateKind: 'sale', date: '2026-12-01' }).dateKind, 'Sale');
+  assert.equal(row({ dateKind: 'filed' }).dateKind, 'Filed');
 });

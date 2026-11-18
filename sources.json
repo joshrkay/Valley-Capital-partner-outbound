@@ -44,8 +44,24 @@
         "Recheck the disclaimer monthly while the District Attorney's review is open."
       ],
       "enabled": true,
-      "principalDecision": null,
-      "toConfirm": ["A principal records that the firm's lender-level use is 'any use permitted by the Texas Public Information Act' and not harvesting personal information for solicitation."]
+      "principalDecision": {
+        "decision": "allowed",
+        "decidedOn": "2026-11-18",
+        "by": "a principal",
+        "robotsCheckedOn": "2026-11-18",
+        "termsCheckedOn": "2026-11-18",
+        "cadence": "weekly",
+        "use": "Lender-level use only, as a use permitted by the Texas Public Information Act; never harvesting personal information for solicitation.",
+        "conditions": [
+          "Lender-level use only: the signal is the enforcing lender, an institution.",
+          "No borrower, and no individual named in a notice, is ever contacted from this data.",
+          "Recheck the county's disclaimer monthly, because it is under review by the County District Attorney's office."
+        ],
+        "recheckEvery": "monthly",
+        "recheckUrl": "https://caldwellcounty.texas.gov/disclaimer",
+        "nextRecheckOn": "2026-12-18"
+      },
+      "toConfirm": []
     },
     {
       "id": "tx-travis-notices-of-sale",

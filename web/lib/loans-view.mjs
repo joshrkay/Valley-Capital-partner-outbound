@@ -14,6 +14,9 @@ export const LOANS_CONTEXT = 'Context for principals only. Never in a message, n
 // How an amount is known, in words. A document that states no amount says so; it is never shown as zero.
 export const BASIS_WORDS = Object.freeze({ document: 'as stated on the document', index: 'from the county\'s index', 'not-stated': 'Not stated on the document', 'not-read': 'Not read yet' });
 const ROLE_WORDS = Object.freeze({ lender: 'lender', beneficiary: 'lender', holder: 'holder', assignor: 'assigned the loan away', assignee: 'assigned the loan to it' });
+// The date a row is known by (src/loans.mjs documentDate): filed, recorded, the date a notice itself states (a Texas notice of sale),
+// or, when that could not be read, the sale date the notice gives.
+export const DATE_KIND_WORDS = Object.freeze({ filed: 'Filed', recorded: 'Recorded', notice: 'Dated', sale: 'Sale' });
 
 // Only a web address leaves the app: http or https. Anything else (javascript:, a bare path) is dropped.
 export const safeLink = (u) => { try { const x = new URL(String(u ?? '')); return ['https:', 'http:'].includes(x.protocol) ? x.toString() : null; } catch { return null; } };
@@ -47,7 +50,7 @@ const roleText = (roles = []) => { const s = [...new Set(roles.map((r) => ROLE_W
 export function loanRows(bank) {
   return (bank?.loans ?? []).map((l) => ({
     id: l.id, type: l.typeLabel ?? l.documentType, documentNumber: l.documentNumber ?? '', county: l.countyLabel ?? `${l.county?.name ?? ''} County, ${l.state ?? ''}`,
-    dateKind: l.dateKind === 'filed' ? 'Filed' : 'Recorded', date: longDate(l.date), short: shortDate(l.date), stage: l.stageLabel ?? '', saleDate: l.saleDate ? longDate(l.saleDate) : '',
+    dateKind: DATE_KIND_WORDS[l.dateKind] ?? 'Recorded', date: longDate(l.date), short: shortDate(l.date), stage: l.stageLabel ?? '', saleDate: l.saleDate ? longDate(l.saleDate) : '',
     saleShort: l.saleDate ? shortDate(l.saleDate) : '', amounts: amountLines(l.amounts), basis: basisLine(amountLines(l.amounts)), propertyType: l.propertyTypeLabel ?? 'Not known yet', propertyKnown: !!l.propertyTypeLabel, role: roleText(l.roles),
     via: /through MERS/.test(String(l.how ?? '')) ? 'Named through MERS as nominee' : /alias/.test(String(l.how ?? '')) ? 'Matched by a principal\'s alias' : '',
     link: safeLink(l.link), deedOfTrust: l.deedOfTrust?.documentNumber ? `${l.deedOfTrust.documentNumber}${l.deedOfTrust.recorded ? `, recorded ${longDate(l.deedOfTrust.recorded)}` : ''}` : '',

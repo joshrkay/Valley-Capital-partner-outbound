@@ -48,3 +48,24 @@ test('sources.json: a rule file, never prospect data: no email address, and noth
   assert.doesNotMatch(text, /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/, 'no email addresses');
   assert.doesNotMatch(text, /\$\s?\d[\d,]*\.\d{2}/, 'no loan amounts');
 });
+
+// The principal's decision is the gate a county source's run reads (runnable in src/sources/notices.mjs): decision 'allowed', the
+// dates of the robots.txt and terms reads (the same as the entry's own checks), who decided (a role, never a personal name or email),
+// the conditions, and the next recheck when the terms are under review.
+test('sources.json: a recorded principal decision has the gate\'s shape, matches the dated checks, and names no person', () => {
+  const decided = reg.sources.filter((s) => s.principalDecision);
+  assert.ok(decided.some((s) => s.id === 'tx-caldwell-notices-of-sale'), 'Caldwell\'s decision is recorded');
+  for (const s of decided) {
+    const d = s.principalDecision;
+    assert.ok(['allowed', 'not_allowed'].includes(d.decision), `${s.id}: decision`);
+    if (d.decision === 'allowed') assert.equal(s.verdict, 'allowed', `${s.id}: allowed only on an allowed verdict`);
+    for (const k of ['decidedOn', 'robotsCheckedOn', 'termsCheckedOn']) assert.ok(isDate(d[k]), `${s.id}: principalDecision.${k}`);
+    assert.equal(d.robotsCheckedOn, s.robots.checkedOn, `${s.id}: the decision's robots.txt date is the entry's own check`);
+    assert.equal(d.termsCheckedOn, s.terms.checkedOn, `${s.id}: the decision's terms date is the entry's own check`);
+    assert.equal(d.by, 'a principal', `${s.id}: the decision names a role, not a person`);
+    assert.ok(Array.isArray(d.conditions) && d.conditions.length, `${s.id}: conditions`);
+    if (d.nextRecheckOn !== undefined) assert.ok(isDate(d.nextRecheckOn) && d.nextRecheckOn > d.termsCheckedOn, `${s.id}: nextRecheckOn after the terms check`);
+  }
+  const c = reg.sources.find((s) => s.id === 'tx-caldwell-notices-of-sale').principalDecision;
+  assert.deepEqual([c.decidedOn, c.recheckEvery, c.nextRecheckOn], ['2026-11-18', 'monthly', '2026-12-18']);
+});

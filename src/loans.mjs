@@ -19,7 +19,7 @@ import { paperFileId } from './paper.mjs';
 import { fdicPaths } from './sources/fdic.mjs';
 import { loadAliases } from './candidates.mjs';
 import { sourceBlock, CHANGES, CONTEXT_ONLY_VALUE } from './sources/runlog.mjs';
-import { matchLender, reviewKey, bankLike, LENDER_ROLES, SET_ASIDE } from './lenders.mjs';
+import { matchLender, reviewKey, bankLike, LENDER_ROLES, SET_ASIDE, PERSON_WITHHELD } from './lenders.mjs';
 
 export const CONTEXT_NOTE = 'Context for the firm\'s principals only: never in a message, never given to a model, never scored.';
 
@@ -40,9 +40,16 @@ export const STAGES = Object.freeze({
   recorded: 'Loan recorded', assigned: 'Loan assigned', default: 'Foreclosure started', court: 'In court', sale: 'Sale scheduled',
   foreclosed: 'Sold at foreclosure', released: 'Released',
 });
-// Party roles as the document names them. LENDER_ROLES (src/lenders.mjs) are the ones matched to a bank.
-export const ROLES = Object.freeze(['lender', 'beneficiary', 'holder', 'assignor', 'assignee', 'trustee', 'attorney', 'borrower', 'grantor']);
-export const DATE_KINDS = Object.freeze(['recorded', 'filed', 'sale']);
+// Party roles as the document names them. LENDER_ROLES (src/lenders.mjs) are the ones matched to a bank. A servicer (a Texas notice
+// names the mortgage servicer apart from the mortgagee) is its own role and never matched: it collects for the lender, it is not one.
+export const ROLES = Object.freeze(['lender', 'beneficiary', 'holder', 'assignor', 'assignee', 'trustee', 'attorney', 'borrower', 'grantor', 'servicer']);
+// recorded: the county's recording date; filed: a court or clerk filing date; sale: the scheduled sale; notice: the date the notice
+// itself states (a Texas notice of sale is dated by its trustee or attorney, and the clerk's filed stamp is often unreadable).
+export const DATE_KINDS = Object.freeze(['recorded', 'filed', 'sale', 'notice']);
+// The fields a reader can fail to read (an OCR misread, a value that fails its check). Each one not read is listed in the record's
+// `unread`, so "not read" is never confused with "not on the document"; an amount not read also has the basis "not-read".
+export const READ_FIELDS = Object.freeze(['dates.recorded', 'dates.filed', 'dates.sale', 'dates.notice', 'salePlace', 'property.address', 'amounts.originalPrincipal',
+  'amounts.unpaidBalance', 'deedOfTrust.reference', 'deedOfTrust.dated', 'deedOfTrust.recorded', 'lender', 'servicer', 'trustee', 'borrower']);
 export const AMOUNT_KINDS = Object.freeze(['originalPrincipal', 'unpaidBalance']);
 // Where an amount comes from. A stated amount (document, index) has a value in dollars; the other two have none.
 export const AMOUNT_BASES = Object.freeze({
@@ -71,13 +78,13 @@ const stable = (v) => (Array.isArray(v) ? `[${v.map(stable).join(',')}]` : v && 
   ? `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${stable(v[k])}`).join(',')}}` : JSON.stringify(v ?? null));
 // The fields that make a document what it is. The fetch date, the run and the first-seen date are not among them, so reading the same
 // document again gives the same hash.
-const CONTENT = ['sourceId', 'county', 'state', 'documentType', 'documentNumber', 'dates', 'parties', 'property', 'amounts', 'deedOfTrust'];
+const CONTENT = ['sourceId', 'county', 'state', 'documentType', 'documentNumber', 'dates', 'parties', 'property', 'amounts', 'deedOfTrust', 'salePlace', 'unread'];
 export const contentOf = (r) => ({ ...Object.fromEntries(CONTENT.map((k) => [k, r?.[k] ?? null])), urls: (r?.sources ?? []).map((s) => s.url).sort() });
 export const hashDocument = (r) => createHash('sha256').update(stable(contentOf(r))).digest('hex').slice(0, 16);
 
 // Every key a stored document may carry. Nothing else is stored, so an adapter cannot add a field (a phone, a note) by accident.
 export const RECORD_KEYS = Object.freeze(['id', ...CONTENT, 'sources', 'contentHash', 'contextOnly', 'firstSeenAt', 'firstRunId', 'updatedAt', 'updatedRunId', '_source']);
-const PARSED_KEYS = new Set(['documentType', 'documentNumber', 'dates', 'parties', 'property', 'amounts', 'deedOfTrust', 'url']);
+const PARSED_KEYS = new Set(['documentType', 'documentNumber', 'dates', 'parties', 'property', 'amounts', 'deedOfTrust', 'salePlace', 'unread', 'url', 'etag', 'listLink']);
 
 // ---- Building a record ---------------------------------------------------------------------------------------------------------
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
@@ -103,7 +110,7 @@ export function buildDocument(parsed, { source, fetchedAt, runId }) {
     if (v !== null && !validYmd(v)) err(`dates.${k} "${v}" is not a date (YYYY-MM-DD)`);
     dates[k] = v;
   }
-  if (!dates.recorded && !dates.filed) err('the document has neither a recording date nor a filing date');
+  if (!dates.recorded && !dates.filed && !dates.notice && !(documentType === 'notice_of_trustee_sale' && dates.sale)) err('the document has no recording, filing or notice date');
 
   const parties = [];
   for (const x of Array.isArray(p.parties) ? p.parties : []) {
@@ -133,28 +140,44 @@ export function buildDocument(parsed, { source, fetchedAt, runId }) {
     amounts[k] = { value: stated ? raw : null, unit: 'dollars', basis };
   }
 
+  // The deed of trust the document refers to: its recording number (or book and page; a Texas clerk calls the book a volume), when it
+  // was recorded, and the date it was signed (`dated`), which a notice gives apart from the recording.
   let deedOfTrust = null;
   if (p.deedOfTrust) {
-    const d = { documentNumber: text(p.deedOfTrust.documentNumber), recorded: p.deedOfTrust.recorded ?? null, book: text(p.deedOfTrust.book), page: text(p.deedOfTrust.page) };
-    if (d.recorded !== null && !validYmd(d.recorded)) err(`deedOfTrust.recorded "${d.recorded}" is not a date (YYYY-MM-DD)`);
-    if (d.documentNumber || d.recorded || (d.book && d.page)) deedOfTrust = d;
+    const d = { documentNumber: text(p.deedOfTrust.documentNumber), recorded: p.deedOfTrust.recorded ?? null, dated: p.deedOfTrust.dated ?? null, book: text(p.deedOfTrust.book), page: text(p.deedOfTrust.page) };
+    for (const k of ['recorded', 'dated']) if (d[k] !== null && !validYmd(d[k])) err(`deedOfTrust.${k} "${d[k]}" is not a date (YYYY-MM-DD)`);
+    if (d.documentNumber || d.recorded || d.dated || (d.book && d.page)) deedOfTrust = d;
   }
+  const salePlace = text(p.salePlace);
+  // Every field not read, an amount whose basis is "not-read" among them.
+  const unread = [...new Set([...(Array.isArray(p.unread) ? p.unread : []), ...AMOUNT_KINDS.filter((k) => amounts[k]?.basis === 'not-read').map((k) => `amounts.${k}`)])].sort();
+  for (const f of unread) if (!READ_FIELDS.includes(f)) err(`unread: "${f}" is not one of ${READ_FIELDS.join(', ')}`);
+  const etag = text(p.etag);
 
-  let link = null;
+  let link = null, listUrl = null;
   try {
     const u = new URL(text(p.url) ?? '');
     if (!['https:', 'http:'].includes(u.protocol)) throw new Error('scheme');
     if (!(source.hosts ?? []).includes(u.host)) err(`the document's link is on ${u.host}, which is not one of the source's hosts`);
     link = u.toString();
   } catch { err(`the document's link "${p.url ?? ''}" is not a web address`); }
+  // Where the list shows the document, for a source whose document links name a person (a Texas notice's file is named for the debtor):
+  // the bank's file and the events carry this link instead of the document's own.
+  if (p.listLink !== undefined && p.listLink !== null) {
+    try {
+      const u = new URL(String(p.listLink));
+      if (!['https:', 'http:'].includes(u.protocol) || !(source.hosts ?? []).includes(u.host)) throw new Error('host');
+      listUrl = u.toString();
+    } catch { err('the list link is not a web address on one of the source\'s hosts'); }
+  }
 
   if (errors.length) return { record: null, errors };
   const record = {
     id, sourceId: source.id, county: { fips: source.county.fips, name: source.county.name }, state: source.state,
-    documentType, documentNumber, dates, parties, property, amounts, deedOfTrust, sources: [{ url: link, fetchedAt }], contextOnly: true,
+    documentType, documentNumber, dates, parties, property, amounts, deedOfTrust, salePlace, unread, sources: [{ url: link, fetchedAt, ...(etag ? { etag } : {}), ...(listUrl ? { listUrl } : {}) }], contextOnly: true,
   };
   record.contentHash = hashDocument(record);
-  record._source = sourceBlock({ source: `county:${source.id}`, endpoint: link, query: { source: source.id }, recordId: id, period: dates.filed ?? dates.recorded, fetchedAt, runId });
+  record._source = sourceBlock({ source: `county:${source.id}`, endpoint: link, query: { source: source.id }, recordId: id, period: dates.filed ?? dates.recorded ?? dates.notice ?? dates.sale, fetchedAt, runId });
   return { record, errors: [] };
 }
 
@@ -170,6 +193,7 @@ export const loansPaths = (dir) => {
     base, docsDir: join(base, 'docs'), banksDir: join(base, 'banks'),
     docs: (sourceId) => join(base, 'docs', `${safeId(sourceId)}.json`),
     bank: (key) => join(base, 'banks', `${paperFileId(key)}.json`),
+    list: (sourceId) => join(base, 'lists', `${safeId(sourceId)}.json`),
     review: join(base, 'review.json'), events: join(base, 'events.json'), state: join(base, 'state.json'),
   };
 };
@@ -223,14 +247,25 @@ export function writeDiff(dir, sourceId, diff, { runId, now = new Date() }) {
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 export const longDate = (s) => (validYmd(s) ? `${MONTHS[Number(s.slice(5, 7)) - 1]} ${Number(s.slice(8, 10))}, ${s.slice(0, 4)}` : String(s ?? ''));
 export const countyLabel = (doc) => `${doc?.county?.name ?? 'an unnamed'} County, ${doc?.state ?? ''}`.replace(/, $/, '');
-export const documentDate = (doc) => ({ date: doc?.dates?.filed ?? doc?.dates?.recorded ?? null, kind: doc?.dates?.filed ? 'filed' : 'recorded' });
+// The date a document is known by: its filing date, else its recording date, else the date the notice itself states, else (a notice of
+// sale whose own date could not be read) the sale date it gives.
+export const documentDate = (doc) => {
+  const d = doc?.dates ?? {};
+  return d.filed ? { date: d.filed, kind: 'filed' } : d.recorded ? { date: d.recorded, kind: 'recorded' } : d.notice ? { date: d.notice, kind: 'notice' }
+    : d.sale ? { date: d.sale, kind: 'sale' } : { date: null, kind: 'recorded' };
+};
+// The link the bank's file and the events carry: where the list shows the document when its own link would name a person.
+export const publicLink = (doc) => doc?.sources?.[0]?.listUrl ?? doc?.sources?.[0]?.url ?? null;
 
 // The event's sentence, a fixed template over the document's type, date, county and the bank's role on it. Example: "A notice of
 // trustee's sale was filed on November 10, 2026 for a loan from this bank on a property in Example County, CO."
 export function eventLabel(doc, roles = []) {
   const t = DOC_TYPES[doc.documentType];
   const { date, kind } = documentDate(doc);
-  const lead = `${/^[aeiou]/i.test(t.lower) ? 'An' : 'A'} ${t.lower} was ${kind} on ${longDate(date)}`;
+  const article = /^[aeiou]/i.test(t.lower) ? 'An' : 'A';
+  // A notice known only by its own date: "A notice of trustee's sale dated November 10, 2026 was posted for a loan ...".
+  const lead = kind === 'notice' ? `${article} ${t.lower} dated ${longDate(date)} was posted` : kind === 'sale' ? `${article} ${t.lower} for a sale on ${longDate(date)} was posted`
+    : `${article} ${t.lower} was ${kind} on ${longDate(date)}`;
   const where = countyLabel(doc);
   if (roles.includes('assignee')) return `${lead} moving a loan on a property in ${where} to this bank.`;
   if (roles.includes('assignor')) return `${lead} moving a loan on a property in ${where} from this bank to another holder.`;
@@ -254,8 +289,8 @@ export function loanRow(doc, roles, how) {
     id: doc.id, sourceId: doc.sourceId, documentType: doc.documentType, typeLabel: DOC_TYPES[doc.documentType]?.label ?? doc.documentType, documentNumber: doc.documentNumber,
     stage, stageLabel: STAGES[stage] ?? null, county: doc.county, countyLabel: countyLabel(doc), state: doc.state, date, dateKind: kind, saleDate: doc.dates?.sale ?? null, roles, how,
     amounts: doc.amounts, propertyType: pt, propertyTypeLabel: pt ? PROPERTY_TYPES[pt] ?? null : null, useCode: doc.property?.useCode ?? null,
-    deedOfTrust: doc.deedOfTrust ? { documentNumber: doc.deedOfTrust.documentNumber, recorded: doc.deedOfTrust.recorded } : null,
-    link: doc.sources?.[0]?.url ?? null, firstSeenAt: doc.firstSeenAt ?? null,
+    deedOfTrust: doc.deedOfTrust ? { documentNumber: doc.deedOfTrust.documentNumber, recorded: doc.deedOfTrust.recorded, dated: doc.deedOfTrust.dated ?? null, book: doc.deedOfTrust.book ?? null, page: doc.deedOfTrust.page ?? null } : null,
+    link: publicLink(doc), firstSeenAt: doc.firstSeenAt ?? null,
   };
 }
 const sansStamp = ({ builtAt, runId, ...rest }) => stable(rest);
@@ -286,8 +321,9 @@ export function buildLoanIndex({ dir, now = new Date(), runId = null, institutio
         const e = mine.get(m.key) ?? { roles: new Set(), how: m.how };
         e.roles.add(party.role); mine.set(m.key, e);
       } else if (m.status === 'set-aside') {
-        const k = `${m.class}:${reviewKey(m.name)}`;
-        const e = aside.get(k) ?? { name: m.name, class: m.class, why: SET_ASIDE[m.class], count: 0 };
+        // A person set aside is counted, never named: the review list holds no person's name.
+        const k = m.class === 'person' ? 'person' : `${m.class}:${reviewKey(m.name)}`;
+        const e = aside.get(k) ?? { name: m.class === 'person' ? PERSON_WITHHELD : m.name, class: m.class, why: SET_ASIDE[m.class], count: 0 };
         e.count++; aside.set(k, e);
       } else {
         const k = reviewKey(m.name);
@@ -342,7 +378,7 @@ export function buildLoanIndex({ dir, now = new Date(), runId = null, institutio
     const { date, kind } = documentDate(doc);
     events[id] = {
       id, kind: 'event', type: 'county_document', key, documentId: doc.id, sourceId: doc.sourceId, documentType: doc.documentType,
-      stage: DOC_TYPES[doc.documentType].stage, roles, date, dateKind: kind, county: doc.county, state: doc.state, link: doc.sources?.[0]?.url ?? null,
+      stage: DOC_TYPES[doc.documentType].stage, roles, date, dateKind: kind, county: doc.county, state: doc.state, link: publicLink(doc),
       label: eventLabel(doc, roles), basis: runId && doc.firstRunId === runId ? 'new-document' : 'new-match',
       firstSeenAt: doc.firstSeenAt ?? null, matchedAt: at, runId, contextOnly: true, scored: false,
     };
