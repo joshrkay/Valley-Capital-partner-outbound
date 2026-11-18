@@ -470,7 +470,9 @@ export function buildLoanIndex({ dir, now = new Date(), runId = null, institutio
       if (!LENDER_ROLES.includes(party.role)) continue;
       lenderParties++;
       const m = matchLender(party, { institutions: inst, aliases: al, documentState: doc.state });
-      if (party.role === 'holder' && !(m.status === 'set-aside' && m.class === 'mers')) holders.push(m);
+      // The parties that hold the loan now: its current holder or an assignee (as cmbslinks.mjs `currentHolders` reads them). MERS alone
+      // is a nominee, not a holder.
+      if ((party.role === 'holder' || party.role === 'assignee') && !(m.status === 'set-aside' && m.class === 'mers')) holders.push(m);
       if (m.status === 'matched') {
         matchedParties++;
         const e = mine.get(m.key) ?? { roles: new Set(), how: m.how };

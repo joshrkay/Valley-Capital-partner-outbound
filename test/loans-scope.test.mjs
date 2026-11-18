@@ -173,11 +173,14 @@ test('a bank named only as the original lender, where the document names another
     ned('J2600304', 'Commercial', [party('holder', 'Mortgage Electronic Registration Systems, Inc.'), party('lender', 'Example Bank, N.A.'), party('grantor', 'Sample Hotel Group LLC')]),
     // The bank is the current holder and the original lender: an event, "a loan from this bank".
     ned('J2600305', 'Commercial', [party('holder', 'Example Bank, N.A.'), party('lender', 'Example Bank, N.A.'), party('grantor', 'Sample Apartments LLC')]),
+    // The loan was assigned to another bank and no holder is named: the assignee holds it now, so the originator gets no event.
+    ned('J2600306', 'Commercial', [party('assignee', 'Sample Community Bank'), party('lender', 'Example Bank, N.A.'), party('grantor', 'Sample Mill LLC')]),
   ]);
   const c = buildLoanIndex({ dir, now: new Date(AT), runId: 'r1' });
-  assert.equal(c.originated, 3);
+  assert.equal(c.originated, 4);
   const rows = Object.fromEntries(readBankLoans({ dir, key: 'fdic:9001' }).loans.map((l) => [l.documentNumber, l]));
-  assert.deepEqual(Object.keys(rows).sort(), ['J2600301/NED', 'J2600302/NED', 'J2600303/NED', 'J2600304/NED', 'J2600305/NED'], 'every document still shows on the originator\'s page');
+  assert.deepEqual(Object.keys(rows).sort(), ['J2600301/NED', 'J2600302/NED', 'J2600303/NED', 'J2600304/NED', 'J2600305/NED', 'J2600306/NED'], 'every document still shows on the originator\'s page');
+  assert.deepEqual([rows['J2600306/NED'].relation, rows['J2600306/NED'].heldBy], ['originated', 'Sample Community Bank']);
   assert.deepEqual([rows['J2600301/NED'].relation, rows['J2600301/NED'].heldBy, rows['J2600301/NED'].relationLabel],
     ['originated', 'Sample Trust Company, N.A., as trustee for Sample Commercial Mortgage Trust 2019-C1', 'Originated by this bank; now held by Sample Trust Company, N.A., as trustee for Sample Commercial Mortgage Trust 2019-C1']);
   assert.equal(rows['J2600302/NED'].relationLabel, 'Originated by this bank; now held by Sample Community Bank');
@@ -186,8 +189,8 @@ test('a bank named only as the original lender, where the document names another
   assert.deepEqual([rows['J2600304/NED'].relation, rows['J2600305/NED'].relation, rows['J2600305/NED'].relationLabel], ['current', 'current', null]);
   // Events: only the matches on the bank that holds the loan now.
   const ev = loanEvents({ dir });
-  assert.deepEqual(ev.map((e) => [e.documentId.replace('jefferson:', ''), e.key]).sort(), [['J2600302/NED', 'fdic:9002'], ['J2600304/NED', 'fdic:9001'], ['J2600305/NED', 'fdic:9001']]);
-  assert.equal(ev.find((e) => e.key === 'fdic:9002').label, 'A notice of election and demand was recorded on November 12, 2026 for a loan this bank holds on a property in Jefferson County, CO.');
+  assert.deepEqual(ev.map((e) => [e.documentId.replace('jefferson:', ''), e.key]).sort(), [['J2600302/NED', 'fdic:9002'], ['J2600304/NED', 'fdic:9001'], ['J2600305/NED', 'fdic:9001'], ['J2600306/NED', 'fdic:9002']]);
+  assert.equal(ev.find((e) => e.key === 'fdic:9002' && e.documentId.endsWith('J2600302/NED')).label, 'A notice of election and demand was recorded on November 12, 2026 for a loan this bank holds on a property in Jefferson County, CO.');
   assert.ok(ev.every((e) => e.relation === 'current'));
 });
 
