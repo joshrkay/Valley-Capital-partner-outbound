@@ -11,20 +11,32 @@
 //   terms            { robotsCheckedOn, termsCheckedOn, decision, by }: the dated check data-sources section 4 asks for. A source runs
 //                    only with decision 'allowed', both dates and who decided; an invented example runs only against its fake
 //   example          true for an invented source (src/sources/counties/example.mjs): never run against the network
-//   requests({ now, state })        the pages to read this run, [{ url }]; `state` is the source's last run (loans/state.json)
-//   parse(text, { url, fetchedAt }) one page to { documents, rows, skipped, missing }: documents in the shape buildDocument
-//                    (src/loans.mjs) takes, the rows read, the rows skipped with a reason (a document type we do not keep), and a count
-//                    per required field the page lacks. A missing field is a format change: the run fails and writes nothing
+//   requests({ now, state })        the pages to read this run, [{ url, kind? }]; `state` is the source's last run (loans/state.json)
+//   parse(text, { url, fetchedAt, kind, state, since })  one page to { documents, rows, skipped, missing, follow, known }: documents in
+//                    the shape buildDocument (src/loans.mjs) takes, the rows read, the rows skipped with a reason (a document type we do
+//                    not keep), and a count per required field the page lacks. A missing field is a format change: the run fails and
+//                    writes nothing. `follow` lists further pages the page links that this run reads too, [{ url, kind, binary?, posted?,
+//                    label?, conditional? }] (a report index's files); `known` counts the linked files left alone because they were read
+//                    before (see `files` below)
+// and, optionally:
+//   parseFile(bytes, { url, fetchedAt, kind, posted, label, etag, lastModified, pdfToText })  a followed file read as bytes (a PDF):
+//                    a promise of the same shape as parse gives, plus `file: { key, ... }`, the file's own key and dates, which the run
+//                    keeps in the source's state on success, so the next run knows which files it has read
+//   backfill         { since, requests({ now, state, since }) }: a one-time read of the source's archive back to `since`, with the
+//                    same gate, robots.txt and pacing as the weekly run (outbound loans backfill)
+//   minIntervalMs    a longer interval between requests than config.counties.minIntervalMs, where the county's own site asks one
 // and, outside the module: a fake with invented data for its tests (test/county-notices-fake.mjs for the example), and its live
 // check, which is verifyNoticeSource below run against the real host once the source is allowed.
 //
 // THE RUN. robots.txt first, for every host (a 404 allows everything; any other failure stops the run, since the rules would be
 // unknown); a disallowed page stops the run. Every request names the firm (config.counties.userAgent) and keeps at least
-// config.counties.minIntervalMs apart, or the host's Crawl-delay if that is longer. Nothing bypasses a block: no login, no CAPTCHA, no
-// challenge page, no second address. Each page is parsed and every document built and checked before anything is written; then the
-// weekly diff (src/loans.mjs) writes what is new or changed, and the index matches lenders to banks and records the events.
+// config.counties.minIntervalMs apart, or the source's own interval or the host's Crawl-delay if that is longer. Nothing bypasses a
+// block: no login, no CAPTCHA, no challenge page, no second address. Each page is parsed and every document built and checked before
+// anything is written; then the weekly diff (src/loans.mjs) writes what is new or changed, and the index matches lenders to banks and
+// records the events. A followed page is read only on one of the source's hosts, after its robots.txt, and at most MAX_DEPTH links from
+// a requested page. A followed file the source read before is asked for with its ETag and Last-Modified, and a 304 is not read again.
 import { readJson, writeJson, safeId } from '../store.mjs';
-import { getText, realSleep, HttpError } from './http.mjs';
+import { getText, getFile, realSleep, HttpError } from './http.mjs';
 import { startRun, finishRun, SOURCE_KEYS } from './runlog.mjs';
 import { parseRobots, robotsFor, robotsAllows } from './fdicsales.mjs';
 import { buildDocument, diffDocuments, writeDiff, buildLoanIndex, loadDocuments, loansPaths, readLoanState, hashDocument, documentId, docNumberKey, DOC_TYPES, RECORD_KEYS, validYmd } from '../loans.mjs';
@@ -36,6 +48,9 @@ export const CHANNELS = Object.freeze({ a: 'an official feed under the county\'s
 export const CADENCES = Object.freeze({ weekly: 7, 'twice-weekly': 4 });
 const HOST = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
 const RUNS_KEPT = 12;
+const FILES_KEPT = 200;
+export const MAX_DEPTH = 3;
+export const MAX_REQUESTS = 100;
 
 // ---- The interface -------------------------------------------------------------------------------------------------------------
 export function defineNoticeSource(spec) {
@@ -49,16 +64,23 @@ export function defineNoticeSource(spec) {
   if (!Array.isArray(spec?.hosts) || !spec.hosts.length || spec.hosts.some((h) => !HOST.test(String(h)))) e.push('hosts must list every host it reads');
   if (!spec?.terms || typeof spec.terms !== 'object') e.push('terms: { robotsCheckedOn, termsCheckedOn, decision, by } is required');
   for (const f of ['requests', 'parse']) if (typeof spec?.[f] !== 'function') e.push(`${f} must be a function`);
+  if (spec?.parseFile !== undefined && typeof spec.parseFile !== 'function') e.push('parseFile must be a function');
+  if (spec?.backfill !== undefined && (typeof spec.backfill?.requests !== 'function' || !validYmd(spec.backfill?.since))) e.push('backfill needs { since: YYYY-MM-DD, requests }');
+  if (spec?.minIntervalMs !== undefined && !(Number.isInteger(spec.minIntervalMs) && spec.minIntervalMs >= 0 && spec.minIntervalMs <= 600000)) e.push('minIntervalMs must be a whole number from 0 to 600000');
   if (e.length) throw new Error(`County source ${spec?.id ?? '(no id)'}: ${e.join('; ')}.`);
-  return Object.freeze({ ...spec, example: !!spec.example, hosts: Object.freeze([...spec.hosts]), terms: Object.freeze({ ...spec.terms }) });
+  return Object.freeze({ ...spec, example: !!spec.example, hosts: Object.freeze([...spec.hosts]), terms: Object.freeze({ ...spec.terms }), ...(spec.backfill ? { backfill: Object.freeze({ ...spec.backfill }) } : {}) });
 }
 
-// Whether a source may run: an example only against its fake; any other only once a principal's dated terms decision allows it.
-export function runnable(source, { allowExample = false } = {}) {
+// Whether a source may run: an example only against its fake; any other only once a principal's dated terms decision allows it, and
+// never while config.counties.sources marks it not enabled.
+export function runnable(source, { allowExample = false, counties = null } = {}) {
   if (source.example) return allowExample ? { ok: true } : { ok: false, reason: `${source.label} is invented. It runs only against its fake, in the tests.` };
   const t = source.terms ?? {};
+  const waiting = String(t.waitingOn ?? '').trim() ? ` Waiting on: ${String(t.waitingOn).trim()}` : '';
   if (t.decision !== 'allowed' || !validYmd(t.robotsCheckedOn) || !validYmd(t.termsCheckedOn) || !String(t.by ?? '').trim())
-    return { ok: false, reason: `${source.label} has no recorded decision that its robots.txt and terms allow automated reading (terms.decision 'allowed', both dates and who decided). Nothing was read.` };
+    return { ok: false, reason: `${source.label} has no recorded decision that its robots.txt and terms allow automated reading (terms.decision 'allowed', both dates and who decided). Nothing was read.${waiting}` };
+  const cfg = counties?.sources?.[source.id];
+  if (cfg && cfg.enabled !== true) return { ok: false, reason: `${source.label} is not enabled in config.counties.sources.${cfg.waitingOn ? ` Waiting on: ${cfg.waitingOn}` : ''} Nothing was read.` };
   return { ok: true };
 }
 
@@ -72,6 +94,16 @@ export function validateCountyConfig(c) {
   int(c.maxBytes, 'maxBytes', 1, 50_000_000);
   int(c.freshDays, 'freshDays', 1, 366);
   if (!Array.isArray(c.watch) || c.watch.some((id) => { try { safeId(id); return false; } catch { return true; } })) errors.push('counties.watch must list source ids');
+  // Each registered real source's switch: enabled true only once a principal has recorded the decision its adapter's terms carry.
+  if (c.sources !== undefined) {
+    if (!c.sources || typeof c.sources !== 'object' || Array.isArray(c.sources)) errors.push('counties.sources must map source ids to { enabled, waitingOn }');
+    else for (const [id, s] of Object.entries(c.sources)) {
+      if (id.startsWith('_')) continue;
+      try { safeId(id); } catch { errors.push(`counties.sources: "${id}" is not a source id`); continue; }
+      if (typeof s?.enabled !== 'boolean') errors.push(`counties.sources.${id}.enabled must be true or false`);
+      if (s?.waitingOn !== undefined && typeof s.waitingOn !== 'string') errors.push(`counties.sources.${id}.waitingOn must be text`);
+    }
+  }
   return errors;
 }
 
@@ -115,28 +147,50 @@ export function parseDate(s) {
 }
 
 // ---- The run ---------------------------------------------------------------------------------------------------------------------
-const stamp = (runId, at, outcome, counts, error) => ({ runId, ranAt: at, outcome, read: counts.read, added: counts.added, changed: counts.changed, unchanged: counts.unchanged, skipped: counts.skipped, ...(error ? { error } : {}) });
-function recordRun(dir, source, entry) {
+const stamp = (runId, at, outcome, counts, error) => ({ runId, ranAt: at, outcome, read: counts.read, added: counts.added, changed: counts.changed, unchanged: counts.unchanged, skipped: counts.skipped,
+  ...(counts.files || counts.filesNotModified || counts.filesKnown ? { files: counts.files, filesNotModified: counts.filesNotModified, filesKnown: counts.filesKnown } : {}), ...(error ? { error } : {}) });
+// The files a source has read (a report index's PDFs), newest first, one per key: what the next run asks for conditionally or leaves.
+const fileKey = (f) => f.key ?? `${f.url}|${f.etag ?? f.lastModified ?? ''}`;
+export function mergeFiles(prev = [], add = []) {
+  const out = [], seen = new Set();
+  for (const f of [...add, ...prev]) { const k = fileKey(f); if (seen.has(k)) continue; seen.add(k); out.push({ ...f, key: k }); }
+  return out.slice(0, FILES_KEPT);
+}
+function recordRun(dir, source, entry, files = []) {
   const state = readLoanState(dir);
   const prev = state.sources?.[source.id] ?? {};
+  const kept = entry.outcome === 'failed' ? prev.files ?? [] : mergeFiles(prev.files ?? [], files);
   const mine = { id: source.id, label: source.label, county: source.county, state: source.state, channel: source.channel, cadence: source.cadence,
-    lastRun: entry, lastOk: entry.outcome === 'ok' ? { runId: entry.runId, ranAt: entry.ranAt } : prev.lastOk ?? null, runs: [entry, ...(prev.runs ?? [])].slice(0, RUNS_KEPT) };
+    lastRun: entry, lastOk: entry.outcome === 'ok' ? { runId: entry.runId, ranAt: entry.ranAt } : prev.lastOk ?? null, runs: [entry, ...(prev.runs ?? [])].slice(0, RUNS_KEPT),
+    ...(kept.length ? { files: kept } : {}) };
   writeJson(loansPaths(dir).state, { ...state, sources: { ...(state.sources ?? {}), [source.id]: mine } });
 }
 
-// One run of one source. Returns counts only (no name, no address), as a job result and the run log may carry.
-export async function runNoticeSource({ dir, source, counties = {}, fetchImpl = globalThis.fetch, now = new Date(), clock = () => new Date(), sleep = realSleep, nowMs = () => Date.now(), allowExample = false }) {
+// A followed page, as the run and the verify check take it from a parse: an address on one of the source's hosts, its kind, and for a
+// file read as bytes the index's posted date and label and, when it was read before, its validators.
+function followed(f, depth) {
+  const u = new URL(String(f?.url ?? ''));
+  if (!['https:', 'http:'].includes(u.protocol)) throw new Error(`a followed link "${f?.url}" is not a web address`);
+  return { url: u.toString(), u, kind: f.kind ?? null, binary: !!f.binary, posted: f.posted ?? null, label: f.label ?? null, conditional: f.conditional ?? null, depth };
+}
+
+// One run of one source. Returns counts only (no name, no address), as a job result and the run log may carry. With `backfill: { since }`
+// it reads the source's archive back to that date instead of the weekly pages (the same gate, robots.txt and pacing).
+export async function runNoticeSource({ dir, source, counties = {}, fetchImpl = globalThis.fetch, now = new Date(), clock = () => new Date(), sleep = realSleep, nowMs = () => Date.now(), allowExample = false, backfill = null, pdfToText }) {
   const cfgErrors = validateCountyConfig(counties);
   if (cfgErrors.length) throw new Error(`config.json: ${cfgErrors.join('; ')}`);
-  const may = runnable(source, { allowExample });
+  const may = runnable(source, { allowExample, counties });
   if (!may.ok) throw new Error(may.reason);
+  if (backfill && !source.backfill) throw new Error(`${source.label} has no archive to backfill from.`);
+  const since = backfill ? backfill.since ?? source.backfill.since : null;
+  if (backfill && !validYmd(since)) throw new Error(`backfill since "${since}" is not a date (YYYY-MM-DD).`);
   if (placeholder(counties.userAgent)) throw new Error('config.counties.userAgent is a placeholder. Every request to a county names the firm and a monitored business contact; a principal fills it.');
   const ua = counties.userAgent.trim();
-  const run = startRun({ source: `county:${source.id}`, query: { source: source.id }, now });
+  const run = startRun({ source: `county:${source.id}`, query: backfill ? { source: source.id, backfill: since } : { source: source.id }, now });
   const fetchedAt = now.toISOString();
   const notes = [];
-  const counts = { requests: 0, pages: 0, rows: 0, read: 0, skipped: 0, added: 0, changed: 0, unchanged: 0, duplicates: 0 };
-  let interval = counties.minIntervalMs;
+  const counts = { requests: 0, pages: 0, files: 0, filesNotModified: 0, filesKnown: 0, rows: 0, read: 0, skipped: 0, added: 0, changed: 0, unchanged: 0, duplicates: 0 };
+  let interval = Math.max(counties.minIntervalMs, source.minIntervalMs ?? 0);
   let last = -Infinity;
   const pace = async () => { const wait = last + interval - nowMs(); if (wait > 0) await sleep(wait); last = nowMs(); };
   const opts = { fetchImpl, userAgent: ua, sleep, retries: 2, timeoutMs: 60000 };
@@ -146,45 +200,78 @@ export async function runNoticeSource({ dir, source, counties = {}, fetchImpl = 
     return { runId: run.runId, outcome: 'failed', ...counts, errors: line.errors, ...(extra.missingFields ? { missingFields: extra.missingFields } : {}) };
   };
   try {
-    const pages = (source.requests({ now, state: readLoanState(dir).sources?.[source.id] ?? null }) ?? []).map((p) => ({ ...p, u: new URL(p.url) }));
+    const prior = readLoanState(dir).sources?.[source.id] ?? null;
+    const first = (backfill ? source.backfill.requests({ now, state: prior, since }) : source.requests({ now, state: prior })) ?? [];
+    const pages = first.map((p) => followed(p, 0));
     for (const p of pages) if (!source.hosts.includes(p.u.host)) return fail(`${p.u.host} is not one of the source's hosts; nothing was read.`);
-    // 1. robots.txt, once per host.
+    // 1. robots.txt, once per host: every requested page's host first, and a followed page's before it is read.
     const robots = new Map();
-    for (const p of pages) {
-      if (robots.has(p.u.host)) continue;
+    const loadRobots = async (u) => {
       await pace(); counts.requests++;
       try {
-        const r = robotsFor(parseRobots((await getText(`${p.u.protocol}//${p.u.host}/robots.txt`, {}, { ...opts, maxBytes: 500_000 })).text), ua);
-        robots.set(p.u.host, r);
+        const r = robotsFor(parseRobots((await getText(`${u.protocol}//${u.host}/robots.txt`, {}, { ...opts, maxBytes: 500_000 })).text), ua);
+        robots.set(u.host, r);
         if (r.crawlDelay) interval = Math.max(interval, r.crawlDelay * 1000);
       } catch (e) {
         if (!(e instanceof HttpError && e.status === 404)) throw e;
-        robots.set(p.u.host, { rules: [], crawlDelay: null });
-        notes.push(`${p.u.host}/robots.txt: none (404), so every path is allowed`);
+        robots.set(u.host, { rules: [], crawlDelay: null });
+        notes.push(`${u.host}/robots.txt: none (404), so every path is allowed`);
       }
-    }
+    };
+    for (const p of pages) if (!robots.has(p.u.host)) await loadRobots(p.u);
     for (const p of pages) if (!robotsAllows(robots.get(p.u.host), `${p.u.pathname}${p.u.search}`)) return fail(`robots.txt on ${p.u.host} disallows ${p.u.pathname}; nothing was read.`);
 
-    // 2. The pages, parsed, and every document built and checked before anything is written.
-    const docs = [], missing = {}, problems = [];
-    for (const p of pages) {
-      await pace(); counts.requests++;
-      const got = await getText(p.url, {}, { ...opts, maxBytes: counties.maxBytes });
-      if (got.truncated) return fail(`${p.u.pathname} was larger than config.counties.maxBytes; nothing was written.`);
-      counts.pages++;
-      const parsed = source.parse(got.text, { url: p.url, fetchedAt }) ?? {};
+    // 2. The pages and the files they link, parsed, and every document built and checked before anything is written.
+    const docs = [], missing = {}, problems = [], files = [], skippedWhy = {};
+    const queue = [...pages], done = new Set();
+    const take = (parsed) => {
       counts.rows += parsed.rows ?? 0;
       counts.skipped += (parsed.skipped ?? []).length;
+      for (const s of parsed.skipped ?? []) skippedWhy[s?.reason ?? 'no reason given'] = (skippedWhy[s?.reason ?? 'no reason given'] ?? 0) + 1;
+      counts.filesKnown += parsed.known ?? 0;
       for (const [f, n] of Object.entries(parsed.missing ?? {})) missing[f] = (missing[f] ?? 0) + n;
       for (const d of parsed.documents ?? []) {
         const b = buildDocument(d, { source, fetchedAt, runId: run.runId });
         if (b.record) docs.push(b.record); else problems.push(`document ${docNumberKey(d?.documentNumber) || '(no number)'}: ${b.errors[0]}`);
       }
+    };
+    while (queue.length) {
+      const p = queue.shift();
+      if (done.has(p.url)) continue;
+      done.add(p.url);
+      if (counts.requests >= MAX_REQUESTS) return fail(`More than ${MAX_REQUESTS} requests in one run; nothing was written.`);
+      if (!robots.has(p.u.host)) await loadRobots(p.u);
+      if (!robotsAllows(robots.get(p.u.host), `${p.u.pathname}${p.u.search}`)) return fail(`robots.txt on ${p.u.host} disallows ${p.u.pathname}; nothing was written.`);
+      await pace(); counts.requests++;
+      let parsed;
+      if (p.binary) {
+        const got = await getFile(p.url, { ...opts, maxBytes: counties.maxBytes, conditional: p.conditional });
+        if (got.notModified) { counts.filesNotModified++; continue; }
+        if (got.truncated) return fail(`${p.u.pathname} was larger than config.counties.maxBytes; nothing was written.`);
+        counts.files++;
+        parsed = (await source.parseFile(got.bytes, { url: p.url, fetchedAt, kind: p.kind, posted: p.posted, label: p.label, etag: got.etag, lastModified: got.lastModified, pdfToText })) ?? {};
+        if (parsed.file) files.push({ ...parsed.file, url: p.url, posted: p.posted, etag: got.etag, lastModified: got.lastModified, readAt: fetchedAt, runId: run.runId });
+      } else {
+        const got = await getText(p.url, {}, { ...opts, maxBytes: counties.maxBytes });
+        if (got.truncated) return fail(`${p.u.pathname} was larger than config.counties.maxBytes; nothing was written.`);
+        counts.pages++;
+        parsed = source.parse(got.text, { url: p.url, fetchedAt, kind: p.kind, state: prior, since }) ?? {};
+      }
+      take(parsed);
+      if (Object.keys(missing).length) break;   // a format change: nothing more is fetched, and the run fails below
+      for (const f of parsed.follow ?? []) {
+        const next = followed(f, p.depth + 1);
+        if (next.depth > MAX_DEPTH) return fail(`A link ${MAX_DEPTH + 1} pages deep was not followed; nothing was written.`);
+        if (!source.hosts.includes(next.u.host)) return fail(`${next.u.host} is not one of the source's hosts; nothing was written.`);
+        if (next.binary && typeof source.parseFile !== 'function') return fail('The source links a file but has no parseFile; nothing was written.');
+        queue.push(next);
+      }
     }
     const gaps = Object.keys(missing).sort();
     if (gaps.length) return fail(`The list lacks field(s): ${gaps.map((f) => `${f} (${missing[f]})`).join(', ')}. Its format may have changed; nothing was written.`, { missingFields: gaps });
     if (problems.length) return fail(`${problems.length} document(s) could not be read, so nothing was written. First: ${problems[0]}`);
-    if (counts.skipped) notes.push(`${counts.skipped} row(s) skipped: a document type the pipeline does not keep`);
+    if (counts.skipped) notes.push(`${counts.skipped} row(s) skipped: ${Object.entries(skippedWhy).map(([why, n]) => `${why} (${n})`).join('; ')}`);
+    if (counts.files || counts.filesNotModified || counts.filesKnown) notes.push(`${counts.files} file(s) read; ${counts.filesNotModified} unchanged since the last read (304); ${counts.filesKnown} listed and read before, not asked for`);
 
     // 3. The weekly diff, then the index (lender match, bank files, review list, events).
     const diff = diffDocuments(loadDocuments(dir, source.id), docs, { now, runId: run.runId });
@@ -192,8 +279,9 @@ export async function runNoticeSource({ dir, source, counties = {}, fetchImpl = 
     writeDiff(dir, source.id, diff, { runId: run.runId, now });
     const index = buildLoanIndex({ dir, now, runId: run.runId });
     notes.push(`${counts.read} document(s) read: ${counts.added} new, ${counts.changed} changed, ${counts.unchanged} unchanged; ${index.eventsNew} new event(s) for banks in the list`);
-    const line = finishRun(dir, run, { rowsRead: counts.rows, rowsWritten: counts.added, rowsChanged: counts.changed, outcome: 'ok', notes, now: clock() });
-    recordRun(dir, source, stamp(run.runId, fetchedAt, line.outcome, counts));
+    const quiet = counts.files === 0 && counts.filesNotModified + counts.filesKnown > 0;
+    const line = finishRun(dir, run, { rowsRead: counts.rows, rowsWritten: counts.added, rowsChanged: counts.changed, outcome: 'ok', notes, quiet, now: clock() });
+    recordRun(dir, source, stamp(run.runId, fetchedAt, line.outcome, counts), files);
     return { runId: run.runId, outcome: line.outcome, ...counts, index };
   } catch (e) {
     return fail(e.message);
@@ -205,7 +293,7 @@ const check = (id, ok, summary, detail) => ({ id, ok: !!ok, summary, ...(detail 
 const ALLOWED_KEYS = new Set(RECORD_KEYS);
 
 // Fresh, sourced, complete against the live list, and every lender name accounted for. Writes nothing.
-export async function verifyNoticeSource({ dir, source, counties = {}, fetchImpl = globalThis.fetch, sleep = realSleep, now = new Date(), sample = 5, allowExample = false }) {
+export async function verifyNoticeSource({ dir, source, counties = {}, fetchImpl = globalThis.fetch, sleep = realSleep, now = new Date(), sample = 5, allowExample = false, pdfToText }) {
   const name = `county:${source.id}`;
   const st = readLoanState(dir).sources?.[source.id] ?? null;
   const stored = loadDocuments(dir, source.id);
@@ -223,24 +311,40 @@ export async function verifyNoticeSource({ dir, source, counties = {}, fetchImpl
     try { if (documentId(source.id, r.documentNumber) !== r.id) return true; } catch { return true; }
     if (r.contentHash !== hashDocument(r)) return true;
     try { if (!source.hosts.includes(new URL(r.sources?.[0]?.url).host)) return true; } catch { return true; }
-    return !validYmd(r.dates?.filed ?? r.dates?.recorded);
+    return !validYmd(r.dates?.filed ?? r.dates?.recorded ?? r.dates?.listed);
   });
   checks.push(check('county.sourced', !bad.length, `${recs.length - bad.length} of ${recs.length} stored documents carry their source, a known type, a date, a link on the source's own host, an id from their number, a matching content hash and no field outside the record.`, bad.length ? { bad: bad.slice(0, 10).map((r) => r?.id) } : undefined));
 
-  // Recall: the list again. Every document on it must be stored, with the same content; one stored and no longer listed is history.
-  const may = runnable(source, { allowExample });
+  // Recall: the list again, with every page and file it links read afresh (no state, so nothing is left as read before). Every document
+  // on it must be stored, with the same content; one stored and no longer listed is history.
+  const may = runnable(source, { allowExample, counties });
   if (!may.ok) checks.push(check('county.recall', false, may.reason));
   else {
     try {
       const ua = placeholder(counties.userAgent) ? undefined : counties.userAgent.trim();
+      const interval = Math.max(counties.minIntervalMs ?? 0, source.minIntervalMs ?? 0);
       let lastAt = -Infinity;
-      const pace = async () => { const wait = lastAt + (counties.minIntervalMs ?? 0) - Date.now(); if (wait > 0) await sleep(wait); lastAt = Date.now(); };
+      const pace = async () => { const wait = lastAt + interval - Date.now(); if (wait > 0) await sleep(wait); lastAt = Date.now(); };
       const live = new Map();
-      for (const p of source.requests({ now, state: st }) ?? []) {
-        if (!source.hosts.includes(new URL(p.url).host)) throw new Error(`${new URL(p.url).host} is not one of the source's hosts`);
+      const fetchedAt = now.toISOString();
+      const queue = (source.requests({ now, state: st }) ?? []).map((p) => followed(p, 0)), done = new Set();
+      let n = 0;
+      while (queue.length) {
+        const p = queue.shift();
+        if (done.has(p.url)) continue;
+        done.add(p.url);
+        if (!source.hosts.includes(p.u.host)) throw new Error(`${p.u.host} is not one of the source's hosts`);
+        if (++n > MAX_REQUESTS) throw new Error(`more than ${MAX_REQUESTS} pages`);
         await pace();
-        const parsed = source.parse((await getText(p.url, {}, { fetchImpl, userAgent: ua, sleep, maxBytes: counties.maxBytes })).text, { url: p.url, fetchedAt: now.toISOString() }) ?? {};
-        for (const d of parsed.documents ?? []) { const b = buildDocument(d, { source, fetchedAt: now.toISOString(), runId: 'verify' }); if (b.record) live.set(b.record.id, b.record); }
+        const http = { fetchImpl, userAgent: ua, sleep, maxBytes: counties.maxBytes };
+        let parsed;
+        if (p.binary) {
+          const got = await getFile(p.url, http);
+          if (got.truncated) throw new Error(`${p.u.pathname} was larger than config.counties.maxBytes`);
+          parsed = (await source.parseFile(got.bytes, { url: p.url, fetchedAt, kind: p.kind, posted: p.posted, label: p.label, etag: got.etag, lastModified: got.lastModified, pdfToText })) ?? {};
+        } else parsed = source.parse((await getText(p.url, {}, http)).text, { url: p.url, fetchedAt, kind: p.kind, state: null, since: null }) ?? {};
+        for (const d of parsed.documents ?? []) { const b = buildDocument(d, { source, fetchedAt, runId: 'verify' }); if (b.record) live.set(b.record.id, b.record); }
+        for (const f of parsed.follow ?? []) if (p.depth < MAX_DEPTH) queue.push(followed(f, p.depth + 1));
       }
       const missingHere = [...live.keys()].filter((id) => !stored[id]);
       const differ = [...live.values()].filter((d) => stored[d.id] && stored[d.id].contentHash !== d.contentHash).map((d) => d.id);

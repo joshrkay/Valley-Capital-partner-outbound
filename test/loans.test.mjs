@@ -29,7 +29,8 @@ test('the record: every field the brief names, with its basis, its sources and a
   assert.deepEqual(Object.keys(r).sort(), RECORD_KEYS.filter((k) => !['firstSeenAt', 'firstRunId', 'updatedAt', 'updatedRunId'].includes(k)).sort());
   assert.equal(r.id, 'example-county:2026-004105');
   assert.deepEqual([r.sourceId, r.county, r.state], ['example-county', { fips: '99001', name: 'Example' }, 'CO']);
-  assert.deepEqual(r.dates, { recorded: '2026-11-11', filed: null, sale: '2026-12-09' });
+  assert.deepEqual(r.dates, { recorded: '2026-11-11', filed: null, listed: null, sale: '2026-12-09' });
+  assert.deepEqual([r.loan, r.foreclosure, r.unread], [null, null, []], 'a list without a loan type or a foreclosure file leaves them empty');
   assert.deepEqual(r.parties.map((p) => p.role), ['beneficiary', 'trustee', 'grantor']);
   assert.deepEqual(r.amounts.unpaidBalance, { value: 7215000, unit: 'dollars', basis: 'document' });
   assert.deepEqual(r.amounts.originalPrincipal.unit, 'dollars');
@@ -41,8 +42,42 @@ test('the record: every field the brief names, with its basis, its sources and a
   // Every type the brief lists, each with a stage; every role; every amount basis.
   assert.deepEqual(Object.keys(DOC_TYPES).sort(), ['assignment', 'deed_of_trust', 'election_and_demand', 'lis_pendens', 'notice_of_default', 'notice_of_trustee_sale', 'release', 'rule_120_notice', 'trustees_deed']);
   for (const t of Object.values(DOC_TYPES)) assert.ok(STAGES[t.stage], t.label);
-  assert.deepEqual([...ROLES], ['lender', 'beneficiary', 'holder', 'assignor', 'assignee', 'trustee', 'attorney', 'borrower', 'grantor']);
+  assert.deepEqual([...ROLES], ['lender', 'beneficiary', 'holder', 'assignor', 'assignee', 'trustee', 'attorney', 'borrower', 'grantor', 'owner']);
   assert.deepEqual(Object.keys(AMOUNT_BASES), ['document', 'index', 'not-stated', 'not-read']);
+});
+
+test('a public trustee\'s list: the date of the list, the loan type and its flag, the foreclosure file, the legal description, and the fields not read', () => {
+  const { record: r, errors } = build({
+    documentType: 'election_and_demand', documentNumber: 'J2699001/NED', dates: { recorded: '2026-11-12', filed: null, sale: '2027-03-10' },
+    parties: [{ role: 'holder', name: 'Example Bank, N.A.' }, { role: 'owner', name: 'Sample Owner LLC' }, { role: 'grantor', name: 'Sample Holdings LLC' }],
+    property: { address: null, apn: null, legal: 'LOT 1, BLOCK 2, SAMPLE FILING NO. 3' },
+    amounts: { originalPrincipal: { value: 1500000, basis: 'index', label: 'Original Note Amt' }, unpaidBalance: { value: 1400000, basis: 'index', label: 'Current Amount', asOf: '2026-10-30' } },
+    deedOfTrust: { documentNumber: '2019009001', recorded: '2019-06-20', dated: '2019-06-15' },
+    loan: { type: 'BPL Commercial', commercial: true },
+    foreclosure: { number: 'J2699001', reception: '2026099001', publication: { first: '2027-01-20', last: '2027-02-17' }, attorneyFileNumber: '26-000001', bid: { value: null, basis: 'not-stated' } },
+    unread: ['property.apn', 'property.apn', 'dates.sale'],
+  });
+  assert.deepEqual(errors, []);
+  assert.equal(r.property.legal, 'LOT 1, BLOCK 2, SAMPLE FILING NO. 3');
+  assert.deepEqual(r.amounts.unpaidBalance, { value: 1400000, unit: 'dollars', basis: 'index', label: 'Current Amount', asOf: '2026-10-30' });
+  assert.deepEqual(r.deedOfTrust, { documentNumber: '2019009001', recorded: '2019-06-20', dated: '2019-06-15', book: null, page: null });
+  assert.deepEqual(r.loan, { type: 'BPL Commercial', commercial: true });
+  assert.deepEqual(r.foreclosure, { number: 'J2699001', reception: '2026099001', attorneyFileNumber: '26-000001', publication: { first: '2027-01-20', last: '2027-02-17' }, amendedPublication: null,
+    bid: { value: null, unit: 'dollars', basis: 'not-stated' }, deficiency: null });
+  assert.deepEqual(r.unread, ['dates.sale', 'property.apn'], 'each field not read named once, in order');
+  // A pre-sale entry is not a recorded document: the date of the list that gave it is its date, and the event says "listed".
+  const sale = build({ documentType: 'notice_of_trustee_sale', documentNumber: 'J2699001/SALE', dates: { recorded: null, filed: null, listed: '2026-11-17', sale: '2026-11-19' }, parties: [{ role: 'holder', name: 'Example Bank, N.A.' }] }).record;
+  assert.equal(sale._source.period, '2026-11-17');
+  assert.equal(eventLabel(sale, ['holder']), 'A notice of trustee\'s sale was listed on November 17, 2026 for a loan this bank holds on a property in Example County, CO.');
+  // Refused: a flag with no type to read it from, a date that is not one, an unread field that is not a field name.
+  const errs = (over) => build(over).errors.join(' | ');
+  assert.match(errs({ loan: { type: null, commercial: true } }), /without the loan type/);
+  assert.match(errs({ loan: { type: 'Commercial', commercial: 'yes' } }), /true, false or null/);
+  assert.match(errs({ foreclosure: { number: 'J1', publication: { first: '1/21/2027' } } }), /foreclosure.publication.first/);
+  assert.match(errs({ foreclosure: { number: 'J1', bid: { value: 5, basis: 'not-read' } } }), /foreclosure.bid: an amount not read yet has no value/);
+  assert.match(errs({ amounts: { unpaidBalance: { value: 5, basis: 'index', asOf: 'Oct 31' } } }), /asOf/);
+  assert.match(errs({ unread: ['borrower phone'] }), /not a field name/);
+  assert.match(errs({ dates: { recorded: null, filed: null, listed: null } }), /nor the date of the list/);
 });
 
 test('a stable id per source and document: case and spaces do not matter, and another source never collides', () => {

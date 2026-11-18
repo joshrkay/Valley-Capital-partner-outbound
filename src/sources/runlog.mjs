@@ -27,12 +27,13 @@ export function startRun({ source, query, now = new Date(), runId }) {
 
 // Appends the run's single line. Outcome is "failed" if told so; otherwise "suspect" when this run read nothing but the previous
 // run of the same source and query did, or when `suspect` is passed (for example a paging count mismatch); otherwise "ok".
-// `nullCounts` records how many returned values were explicit nulls per field (allowed, but worth seeing).
-export function finishRun(dir, run, { rowsRead = 0, rowsWritten = 0, rowsChanged = 0, outcome, missingFields = [], errors = [], notes = [], nullCounts = {}, suspect = false, now = new Date() } = {}) {
+// `nullCounts` records how many returned values were explicit nulls per field (allowed, but worth seeing). `quiet` marks a run that read
+// nothing because everything its source lists was read before (a file answered 304, or one already read): zero rows, and not suspect.
+export function finishRun(dir, run, { rowsRead = 0, rowsWritten = 0, rowsChanged = 0, outcome, missingFields = [], errors = [], notes = [], nullCounts = {}, suspect = false, quiet = false, now = new Date() } = {}) {
   let final = outcome;
   if (final !== 'failed') {
     const prev = readJsonl(RUNS(dir)).filter((r) => r.source === run.source && queryKey(r.query) === queryKey(run.query)).at(-1);
-    final = suspect || (rowsRead === 0 && prev && prev.rowsRead > 0) ? 'suspect' : 'ok';
+    final = suspect || (rowsRead === 0 && !quiet && prev && prev.rowsRead > 0) ? 'suspect' : 'ok';
   }
   const line = scrub({ ...run, finishedAt: now.toISOString(), rowsRead, rowsWritten, rowsChanged, outcome: final, missingFields, errors, notes, nullCounts });
   appendJsonl(RUNS(dir), line);

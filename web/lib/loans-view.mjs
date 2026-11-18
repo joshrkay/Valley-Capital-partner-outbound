@@ -47,7 +47,7 @@ const roleText = (roles = []) => { const s = [...new Set(roles.map((r) => ROLE_W
 export function loanRows(bank) {
   return (bank?.loans ?? []).map((l) => ({
     id: l.id, type: l.typeLabel ?? l.documentType, documentNumber: l.documentNumber ?? '', county: l.countyLabel ?? `${l.county?.name ?? ''} County, ${l.state ?? ''}`,
-    dateKind: l.dateKind === 'filed' ? 'Filed' : 'Recorded', date: longDate(l.date), short: shortDate(l.date), stage: l.stageLabel ?? '', saleDate: l.saleDate ? longDate(l.saleDate) : '',
+    dateKind: l.dateKind === 'filed' ? 'Filed' : l.dateKind === 'listed' ? 'Listed' : 'Recorded', date: longDate(l.date), short: shortDate(l.date), stage: l.stageLabel ?? '', saleDate: l.saleDate ? longDate(l.saleDate) : '',
     saleShort: l.saleDate ? shortDate(l.saleDate) : '', amounts: amountLines(l.amounts), basis: basisLine(amountLines(l.amounts)), propertyType: l.propertyTypeLabel ?? 'Not known yet', propertyKnown: !!l.propertyTypeLabel, role: roleText(l.roles),
     via: /through MERS/.test(String(l.how ?? '')) ? 'Named through MERS as nominee' : /alias/.test(String(l.how ?? '')) ? 'Matched by a principal\'s alias' : '',
     link: safeLink(l.link), deedOfTrust: l.deedOfTrust?.documentNumber ? `${l.deedOfTrust.documentNumber}${l.deedOfTrust.recorded ? `, recorded ${longDate(l.deedOfTrust.recorded)}` : ''}` : '',
