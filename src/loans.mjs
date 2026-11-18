@@ -31,17 +31,20 @@ export const CONTEXT_NOTE = 'Context for the firm\'s principals only: never in a
 //      A stored null is read again from the type, so a type the classifier learns later applies to the documents already stored.
 //   2. A document with no loan type of its own takes its case's: another document of the same foreclosure in the same source that gives
 //      one (a Colorado pre-sale entry and its NED).
-//   3. With no loan type at all (Caldwell, Douglas), every borrower and grantor it names is a natural person, not an entity.
-// Otherwise it is in scope: a type that is unknown or blank, an entity borrower, or none named. A document out of scope stays in
+//   3. With no loan type that says commercial or residential (none at all, as in Caldwell and Douglas, or "Unknown"), every borrower
+//      and grantor it names is a natural person, not an entity: a home loan in all but name.
+// Otherwise it is in scope: a commercial type, an entity among the borrowers, or none named. A document out of scope stays in
 // loans/docs/<source>.json (the weekly diff stays idempotent), and nothing downstream uses it.
-export const OUT_OF_SCOPE = Object.freeze({ 'residential-loan-type': 'a residential loan type', 'individual-borrowers': 'every borrower a person, no loan type' });
+export const OUT_OF_SCOPE = Object.freeze({ 'residential-loan-type': 'a residential loan type', 'individual-borrowers': 'every borrower a person, no commercial loan type' });
 
 // The county's loan type, as written, to the commercial flag: true for a commercial, business-purpose, construction, SBA or multifamily
-// loan; false for the residential programs and labels; null for a blank, "Unknown" or any other type (never guessed). Case, punctuation
-// and spaces are ignored ("F.H.A.", "Fannie-Mae", "CONVENTIONAL RESIDENTIAL").
+// loan; false for the residential programs and labels (a HELOC included); null for a blank, "Unknown" or any other type (never guessed,
+// and then rule 3 decides). Case, punctuation and spaces are ignored ("F.H.A.", "Fannie-Mae", "CONVENTIONAL RESIDENTIAL"), and so is
+// the misspelling "Commerical" that Jefferson's own reports carry.
 const RESIDENTIAL_TYPES = new Set(['fnma', 'fanniemae', 'fhlmc', 'freddiemac', 'fha', 'va', 'usda', 'rhs', 'usdarhs', 'gnma', 'ginniemae',
-  'conventional', 'conv', 'conventionalresidential', 'convresidential', 'residential', 'reverse', 'reversemortgage', 'hecm']);
-const COMMERCIAL_WORDS = /\b(?:commercial|business|construction|multi ?family|sba)\b|^bpl\b/;
+  'conventional', 'conv', 'conventionalresidential', 'convresidential', 'residential', 'reverse', 'reversemortgage', 'hecm',
+  'heloc', 'homeequity', 'homeequityloan', 'homeequityline', 'homeequitylineofcredit']);
+const COMMERCIAL_WORDS = /\b(?:comm?er(?:ci|ic)al|business|construction|multi ?family|sba)\b|^bpl\b/;
 export function commercialFromLoanType(type) {
   const words = String(type ?? '').toLowerCase().replace(/\./g, '').replace(/[^a-z0-9]+/g, ' ').trim();
   if (!words) return null;
@@ -58,13 +61,14 @@ const flagOf = (loan) => (typeof loan?.commercial === 'boolean' ? loan.commercia
 // natural person), 'entity' (at least one is not) or null (none named, or the loan type decided). No name is returned.
 export function loanScope(doc, { caseLoan = null } = {}) {
   const loan = doc?.loan?.type ? doc.loan : caseLoan?.type ? caseLoan : null;
-  if (loan) {
-    const commercial = flagOf(loan);
-    return { inScope: commercial !== false, why: commercial === false ? 'residential-loan-type' : null, loanType: loan.type, commercial, borrowers: null };
+  const commercial = loan ? flagOf(loan) : null;
+  if (commercial !== null) {
+    return { inScope: commercial, why: commercial ? null : 'residential-loan-type', loanType: loan.type, commercial, borrowers: null };
   }
+  // No type, or one that says neither ("Unknown"): the borrowers decide (rule 3).
   const names = (doc?.parties ?? []).filter((p) => p.role === 'borrower' || p.role === 'grantor').map((p) => p.name);
   const borrowers = !names.length ? null : names.every(naturalPerson) ? 'individuals' : 'entity';
-  return { inScope: borrowers !== 'individuals', why: borrowers === 'individuals' ? 'individual-borrowers' : null, loanType: null, commercial: null, borrowers };
+  return { inScope: borrowers !== 'individuals', why: borrowers === 'individuals' ? 'individual-borrowers' : null, loanType: loan?.type ?? null, commercial: null, borrowers };
 }
 
 // Every document's scope, by id: the documents of one source or all, with each case's loan type for rule 2.

@@ -135,17 +135,17 @@ The firm buys commercial real estate loans, and most loans a county's foreclosur
 
 1. **Its loan type** reads as a residential program or label: the flag `loan.commercial` is `false`. A stored `null` is read again from the type, so a type the classifier learns later applies to documents already stored.
 2. **A document with no loan type of its own takes its case's**: another document of the same foreclosure number in the same source that gives one (a Colorado pre-sale entry and its NED).
-3. **With no loan type at all** (Caldwell, Douglas, a pre-sale entry with no NED stored), it is residential when every borrower and grantor it names is a natural person: not an entity by the entity test (`isEntityName`, `src/lenders.mjs`), and read as a person's name (`personName`). A name that is neither is not taken for a person.
+3. **With no loan type that decides**, either none at all (Caldwell, Douglas, a pre-sale entry with no NED stored) or one that reads `null` ("Unknown"), it is residential when every borrower and grantor it names is a natural person: not an entity by the entity test (`isEntityName`, `src/lenders.mjs`), and read as a person's name (`personName`). A name that is neither is not taken for a person.
 
-Otherwise it is in scope: a type that is unknown or blank, an entity among the borrowers, or no borrower named.
+Otherwise it is in scope: a commercial type, or an unknown or blank one with an entity among the borrowers or no borrower named. (After the first rebuild, the 12 remaining events still held 5 "Unknown" loans to individuals and 4 HELOCs; rule 3 now covers the first, and the classifier the second.)
 
 **The classifier** (`commercialFromLoanType`, shared by the Jefferson adapter and the rule; case, punctuation and spaces ignored):
 
 | Loan type | Flag |
 |---|---|
-| Commercial, BPL Commercial, Business, Construction, SBA, Multifamily | `true` |
-| FNMA, Fannie Mae, FHLMC, Freddie Mac, FHA, VA, USDA, RHS, GNMA, Conventional, Conv, Conventional Residential, Residential, Reverse (Mortgage), HECM | `false` |
-| Unknown, blank, anything else | `null` |
+| Commercial (and the misspellings Commerical, Comercial), BPL Commercial, Business, Construction, SBA, Multifamily | `true` |
+| FNMA, Fannie Mae, FHLMC, Freddie Mac, FHA, VA, USDA, RHS, GNMA, Conventional, Conv, Conventional Residential, Residential, Reverse (Mortgage), HECM, HELOC, Home Equity (Line of Credit) | `false` |
+| Unknown, blank, anything else | `null`: rule 3 decides |
 
 **Where it applies.** The index (`buildLoanIndex`) applies it before the lender match: a document out of scope gives no bank row, no review name, no set-aside count and no event. It stays in `loans/docs/<source>.json`, so the weekly diff stays idempotent. Each bank row and event carries the `scope` it was written under (`{ commercial, borrowers }`, no name), and two guards check it again: the triage's county loop (`eventShown`) and the bank page (`inScope` in `web/lib/loans-view.mjs`), as do `outbound loans show` and `outbound loans events`. A row or event written before the rule carries no `scope` and shows nowhere until the rebuild writes it again.
 

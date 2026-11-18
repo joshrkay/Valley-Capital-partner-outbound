@@ -29,9 +29,12 @@ const MAPPINGS = [
   ['Conventional', false], ['CONVENTIONAL', false], ['Conv', false], ['CONV', false], ['Conv.', false],
   ['Conventional Residential', false], ['CONVENTIONAL RESIDENTIAL', false], ['Conventional-Residential', false], ['conventional   residential', false],
   ['Residential', false], ['Reverse', false], ['Reverse Mortgage', false], ['HECM', false],
+  ['HELOC', false], ['Heloc', false], ['H.E.L.O.C.', false], ['Home Equity', false], ['Home Equity Line of Credit', false],
   // Commercial, business-purpose, construction, SBA and multifamily: true.
   ['Commercial', true], ['COMMERCIAL', true], ['BPL Commercial', true], ['BPL-Commercial', true], ['Business', true], ['business purpose', true],
   ['Construction', true], ['SBA', true], ['S.B.A.', true], ['Multifamily', true], ['Multi-Family', true],
+  // The misspellings a county's own reports carry.
+  ['Commerical Real Estate', true], ['COMERCIAL', true],
   // Unknown, blank or unrecognized: null, never guessed.
   ['Unknown', null], ['UNKNOWN', null], ['', null], ['   ', null], [null, null], [undefined, null], ['Seller Carry', null], ['Other', null], ['FHA Commercial Hybrid X', true],
 ];
@@ -83,7 +86,12 @@ test('the scope of one document: its loan type first, then its case\'s, then its
   // Its own loan type. A flag an older classifier left null is read again from the type.
   assert.deepEqual(loanScope(ned('J2600101', 'Commercial', lend)), { inScope: true, why: null, loanType: 'Commercial', commercial: true, borrowers: null });
   assert.deepEqual(loanScope(ned('J2600102', 'FNMA', lend, { flag: null })), { inScope: false, why: 'residential-loan-type', loanType: 'FNMA', commercial: false, borrowers: null });
-  assert.equal(loanScope(ned('J2600103', 'Unknown', [...lend, party('grantor', 'Pat Q. Sampleton')])).inScope, true, 'an unknown type stays in scope, whoever borrows');
+  // A type that says neither ("Unknown"): the borrowers decide, as with no type. Every one a person: out; an entity: in.
+  assert.deepEqual(loanScope(ned('J2600103', 'Unknown', [...lend, party('grantor', 'Pat Q. Sampleton')])),
+    { inScope: false, why: 'individual-borrowers', loanType: 'Unknown', commercial: null, borrowers: 'individuals' });
+  assert.deepEqual(loanScope(ned('J2600104', 'Unknown', [...lend, party('grantor', 'Sample Corvid Storage LLC')])),
+    { inScope: true, why: null, loanType: 'Unknown', commercial: null, borrowers: 'entity' });
+  assert.equal(loanScope(ned('J2600105', 'HELOC', [...lend, party('grantor', 'Sample Corvid Storage LLC')])).why, 'residential-loan-type', 'a HELOC is out whoever borrows');
   // No loan type: the borrowers decide. Every one a person: out; an entity among them, or none named: in.
   assert.deepEqual(loanScope(notice('A1', [...lend, party('borrower', 'Pat Example and Jordan Example'), party('grantor', 'Pat Example and Jordan Example')])),
     { inScope: false, why: 'individual-borrowers', loanType: null, commercial: null, borrowers: 'individuals' });
@@ -107,7 +115,7 @@ function mixed() {
     ned('J2600001', 'Commercial', [party('holder', 'Example Bank, N.A.'), party('lender', 'Example Bank, N.A.'), party('grantor', 'Sample Holdings LLC')], { recorded: '2026-11-12' }),
     ned('J2600002', 'FNMA', [party('holder', 'Sample Community Bank'), party('lender', 'Sample Home Lending Bank'), party('grantor', 'Pat Q. Sampleton')], { recorded: '2026-11-11' }),
     ned('J2600003', 'Conventional Residential', [party('holder', 'Example Mountain Bank'), party('lender', 'Mortgage Electronic Registration Systems, Inc.'), party('grantor', 'Jordan R. Exampleby')], { recorded: '2026-11-10' }),
-    ned('J2600004', 'Unknown', [party('holder', 'Example Bank, N.A.'), party('lender', 'Sample Prairie Bank'), party('grantor', 'Robin K. Inventive')], { recorded: '2026-11-09' }),
+    ned('J2600004', 'Unknown', [party('holder', 'Example Bank, N.A.'), party('lender', 'Sample Prairie Bank'), party('grantor', 'Sample Inventive Works LLC')], { recorded: '2026-11-09' }),
   ]);
   store(dir, CALDWELL_ID, [
     notice('0000000000000A01', [party('lender', 'Example Bank, N.A.'), party('beneficiary', 'Sample Lone Star Bank'), party('holder', 'Example Bank, N.A.'),
@@ -143,7 +151,7 @@ test('a mixed set: only the documents in scope give bank rows, events and review
   assert.equal(Object.keys(readJson(P.docs(CALDWELL_ID))).length, 2);
   // Nothing of a borrower in any bank's file, the review list or the events.
   const out = ['fdic-9001', 'fdic-9002'].map((b) => readFileSync(join(P.banksDir, `${b}.json`), 'utf8')).concat(readFileSync(P.review, 'utf8'), readFileSync(P.events, 'utf8')).join('\n');
-  for (const leak of ['Pat Q. Sampleton', 'Pat Example', 'Robin K. Inventive', 'Sample Holdings LLC', 'Sample Retail Partners LLC', 'Sample Home Lending Bank', 'Sample Lone Star Bank']) assert.ok(!out.includes(leak), leak);
+  for (const leak of ['Pat Q. Sampleton', 'Pat Example', 'Robin K. Inventive', 'Sample Inventive Works LLC', 'Sample Holdings LLC', 'Sample Retail Partners LLC', 'Sample Home Lending Bank', 'Sample Lone Star Bank']) assert.ok(!out.includes(leak), leak);
   // The same again: nothing written.
   const before = [P.events, P.review, P.bank('fdic:9001')].map((p) => readFileSync(p, 'utf8'));
   const again = buildLoanIndex({ dir, now: new Date('2026-11-23T12:00:00Z'), runId: 'r2' });
@@ -254,7 +262,7 @@ test('the command line: outbound loans rebuild on a data folder, reading no coun
   const dir = pulled();
   const env = { ...process.env, OUTBOUND_DATA_DIR: dir };
   const out = execFileSync(process.execPath, [join(REPO, 'cli.mjs'), 'loans', 'rebuild'], { env, encoding: 'utf8' });
-  assert.match(out, /^Rebuilt from 4 stored document\(s\) \(loans-rebuild-\d{8}T\d{6}Z\): 2 in scope, 2 out of scope \(1 a residential loan type, 1 every borrower a person, no loan type\)\./);
+  assert.match(out, /^Rebuilt from 4 stored document\(s\) \(loans-rebuild-\d{8}T\d{6}Z\): 2 in scope, 2 out of scope \(1 a residential loan type, 1 every borrower a person, no commercial loan type\)\./);
   assert.match(out, /Events: 3 removed, 0 new/);
   assert.match(out, /jefferson: 3 stored, 2 in scope, 1 out of scope/);
   assert.doesNotMatch(out, /Pat |Sampleton|Sample Home Lending/, 'counts only, no borrower');
