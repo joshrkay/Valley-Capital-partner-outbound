@@ -1,11 +1,14 @@
 // The county sources (docs/county-loans.md): every adapter the pipeline knows, which counties are watched, and each one's coverage for
-// the Status page and `outbound loans status`. Each real county's adapter is added here once its spike has read and dated its
-// robots.txt and terms (county-data-build-vs-buy 3.4, D-B8) and a principal's decision is recorded in sources.json. The invented example
-// is registered too, for the tests; it never runs against the network.
+// the Status page and `outbound loans status`. Each real county's adapter is registered here once its spike has read and dated its
+// robots.txt and terms (county-data-build-vs-buy 3.4, D-B8); it runs only after a principal records the decision its terms carry and
+// config.counties.sources enables it. Registered: the invented example (for the tests; it never runs against the network); Caldwell
+// County, TX, enabled on a principal's decision of 2026-11-18; and Jefferson and Douglas (GTS), both not enabled.
 import { exampleCounty } from './sources/counties/example.mjs';
 import { caldwellCounty } from './sources/counties/caldwell.mjs';
+import { jefferson } from './sources/counties/jefferson.mjs';
+import { douglas } from './sources/counties/douglas.mjs';
 
-export const COUNTY_SOURCES = Object.freeze({ [exampleCounty.id]: exampleCounty, [caldwellCounty.id]: caldwellCounty });
+export const COUNTY_SOURCES = Object.freeze({ [exampleCounty.id]: exampleCounty, [caldwellCounty.id]: caldwellCounty, [jefferson.id]: jefferson, [douglas.id]: douglas });
 
 export function countySource(id, registry = COUNTY_SOURCES) {
   const s = registry[id];

@@ -40,17 +40,18 @@ export const STAGES = Object.freeze({
   recorded: 'Loan recorded', assigned: 'Loan assigned', default: 'Foreclosure started', court: 'In court', sale: 'Sale scheduled',
   foreclosed: 'Sold at foreclosure', released: 'Released',
 });
-// Party roles as the document names them. LENDER_ROLES (src/lenders.mjs) are the ones matched to a bank. A servicer (a Texas notice
-// names the mortgage servicer apart from the mortgagee) is its own role and never matched: it collects for the lender, it is not one.
-export const ROLES = Object.freeze(['lender', 'beneficiary', 'holder', 'assignor', 'assignee', 'trustee', 'attorney', 'borrower', 'grantor', 'servicer']);
-// recorded: the county's recording date; filed: a court or clerk filing date; sale: the scheduled sale; notice: the date the notice
-// itself states (a Texas notice of sale is dated by its trustee or attorney, and the clerk's filed stamp is often unreadable).
-export const DATE_KINDS = Object.freeze(['recorded', 'filed', 'sale', 'notice']);
-// The fields a reader can fail to read (an OCR misread, a value that fails its check). Each one not read is listed in the record's
-// `unread`, so "not read" is never confused with "not on the document"; an amount not read also has the basis "not-read".
-export const READ_FIELDS = Object.freeze(['dates.recorded', 'dates.filed', 'dates.sale', 'dates.notice', 'salePlace', 'property.address', 'amounts.originalPrincipal',
-  'amounts.unpaidBalance', 'deedOfTrust.reference', 'deedOfTrust.dated', 'deedOfTrust.recorded', 'lender', 'servicer', 'trustee', 'borrower']);
+// Party roles as the document names them. LENDER_ROLES (src/lenders.mjs) are the ones matched to a bank. Neither of the last two is
+// ever matched:
+//   owner     the property's current owner where a list names one apart from the borrower (Colorado's NED reports do): borrower side
+//   servicer  the mortgage servicer, which a Texas notice names apart from the mortgagee: it collects for the lender, it is not one
+export const ROLES = Object.freeze(['lender', 'beneficiary', 'holder', 'assignor', 'assignee', 'trustee', 'attorney', 'borrower', 'grantor', 'owner', 'servicer']);
+// recorded: the county recorded it; filed: a court or clerk filing; listed: the date of the county's own list that gave it, for an entry
+// that is not itself a recorded document (a pre-sale list's run date); sale: the scheduled sale; notice: the date the notice itself
+// states (a Texas notice of sale is dated by its trustee or attorney, and the clerk's filed stamp is often unreadable).
+export const DATE_KINDS = Object.freeze(['recorded', 'filed', 'listed', 'sale', 'notice']);
 export const AMOUNT_KINDS = Object.freeze(['originalPrincipal', 'unpaidBalance']);
+// A Colorado public trustee's foreclosure file: its amounts, read with the same rules as the document's.
+export const FORECLOSURE_AMOUNTS = Object.freeze(['bid', 'deficiency']);
 // Where an amount comes from. A stated amount (document, index) has a value in dollars; the other two have none.
 export const AMOUNT_BASES = Object.freeze({
   document: 'stated on the document', index: 'in the county\'s index', 'not-stated': 'not stated on the document', 'not-read': 'not read yet',
@@ -78,13 +79,22 @@ const stable = (v) => (Array.isArray(v) ? `[${v.map(stable).join(',')}]` : v && 
   ? `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${stable(v[k])}`).join(',')}}` : JSON.stringify(v ?? null));
 // The fields that make a document what it is. The fetch date, the run and the first-seen date are not among them, so reading the same
 // document again gives the same hash.
-const CONTENT = ['sourceId', 'county', 'state', 'documentType', 'documentNumber', 'dates', 'parties', 'property', 'amounts', 'deedOfTrust', 'salePlace', 'unread'];
+//   loan         the county's own loan type, as written ("BPL Commercial"), and the commercial flag its adapter reads from it (null
+//                when the type is blank or one the adapter does not know: never guessed)
+//   foreclosure  a public trustee's foreclosure file, where the list gives one (Colorado): its number, the NED's reception number,
+//                the publication dates, the lender's bid and the deficiency, and the attorney's file number
+//   salePlace    where the sale is held, when the notice says (a Texas notice does)
+//   unread       the fields the source gave but that failed their check (a date that is not a date, an amount that is not money, an OCR
+//                misread): each is left empty and named here by its place in the record, never guessed, so "not read" is never
+//                confused with "not on the document". An amount that failed also says so in its own basis, 'not-read'
+const CONTENT = ['sourceId', 'county', 'state', 'documentType', 'documentNumber', 'dates', 'parties', 'property', 'amounts', 'deedOfTrust', 'loan', 'foreclosure', 'salePlace', 'unread'];
 export const contentOf = (r) => ({ ...Object.fromEntries(CONTENT.map((k) => [k, r?.[k] ?? null])), urls: (r?.sources ?? []).map((s) => s.url).sort() });
 export const hashDocument = (r) => createHash('sha256').update(stable(contentOf(r))).digest('hex').slice(0, 16);
 
 // Every key a stored document may carry. Nothing else is stored, so an adapter cannot add a field (a phone, a note) by accident.
 export const RECORD_KEYS = Object.freeze(['id', ...CONTENT, 'sources', 'contentHash', 'contextOnly', 'firstSeenAt', 'firstRunId', 'updatedAt', 'updatedRunId', '_source']);
-const PARSED_KEYS = new Set(['documentType', 'documentNumber', 'dates', 'parties', 'property', 'amounts', 'deedOfTrust', 'salePlace', 'unread', 'url', 'etag', 'listLink']);
+const PARSED_KEYS = new Set(['documentType', 'documentNumber', 'dates', 'parties', 'property', 'amounts', 'deedOfTrust', 'loan', 'foreclosure', 'salePlace', 'unread', 'url', 'etag', 'listLink']);
+const FIELD_PATH = /^[a-z][A-Za-z]*(\.[a-z][A-Za-z]*){0,2}$/;
 
 // ---- Building a record ---------------------------------------------------------------------------------------------------------
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
@@ -110,7 +120,8 @@ export function buildDocument(parsed, { source, fetchedAt, runId }) {
     if (v !== null && !validYmd(v)) err(`dates.${k} "${v}" is not a date (YYYY-MM-DD)`);
     dates[k] = v;
   }
-  if (!dates.recorded && !dates.filed && !dates.notice && !(documentType === 'notice_of_trustee_sale' && dates.sale)) err('the document has no recording, filing or notice date');
+  if (!dates.recorded && !dates.filed && !dates.listed && !dates.notice && !(documentType === 'notice_of_trustee_sale' && dates.sale))
+    err('the document has neither a recording date nor a filing date, nor a notice date, nor the date of the list that gave it');
 
   const parties = [];
   for (const x of Array.isArray(p.parties) ? p.parties : []) {
@@ -126,33 +137,73 @@ export function buildDocument(parsed, { source, fetchedAt, runId }) {
 
   const pt = p.property?.propertyType ?? null;
   if (pt !== null && !PROPERTY_TYPES[pt]) err(`property type "${pt}" is not one of ${Object.keys(PROPERTY_TYPES).join(', ')}`);
-  const property = { address: text(p.property?.address), apn: text(p.property?.apn), useCode: text(p.property?.useCode), propertyType: pt };
+  // The legal description is kept only where the list gives one, so a source without it keeps the shorter shape.
+  const legal = text(p.property?.legal);
+  const property = { address: text(p.property?.address), apn: text(p.property?.apn), ...(legal ? { legal } : {}), useCode: text(p.property?.useCode), propertyType: pt };
 
-  const amounts = {};
-  for (const k of AMOUNT_KINDS) {
-    const a = p.amounts?.[k] ?? {};
+  // An amount: its value with its basis; with the county's own label for the figure ("Total Indebtedness") and the date it is as of,
+  // where the list gives them.
+  const amountOf = (a = {}, where) => {
     const raw = a.value === undefined || a.value === null || a.value === '' ? null : Number(a.value);
     const basis = a.basis ?? 'not-read';
-    if (!AMOUNT_BASES[basis]) { err(`amounts.${k}: basis "${basis}" is not one of ${Object.keys(AMOUNT_BASES).join(', ')}`); continue; }
+    if (!AMOUNT_BASES[basis]) { err(`${where}: basis "${basis}" is not one of ${Object.keys(AMOUNT_BASES).join(', ')}`); return null; }
     const stated = basis === 'document' || basis === 'index';
-    if (stated && !(Number.isFinite(raw) && raw >= 0)) err(`amounts.${k}: an amount ${AMOUNT_BASES[basis]} needs a value in dollars`);
-    if (!stated && raw !== null) err(`amounts.${k}: an amount ${AMOUNT_BASES[basis]} has no value`);
-    amounts[k] = { value: stated ? raw : null, unit: 'dollars', basis };
-  }
+    if (stated && !(Number.isFinite(raw) && raw >= 0)) err(`${where}: an amount ${AMOUNT_BASES[basis]} needs a value in dollars`);
+    if (!stated && raw !== null) err(`${where}: an amount ${AMOUNT_BASES[basis]} has no value`);
+    const label = text(a.label), asOf = a.asOf ?? null;
+    if (asOf !== null && !validYmd(asOf)) err(`${where}.asOf "${asOf}" is not a date (YYYY-MM-DD)`);
+    return { value: stated ? raw : null, unit: 'dollars', basis, ...(label ? { label } : {}), ...(asOf ? { asOf } : {}) };
+  };
+  const amounts = {};
+  for (const k of AMOUNT_KINDS) { const a = amountOf(p.amounts?.[k] ?? {}, `amounts.${k}`); if (a) amounts[k] = a; }
 
   // The deed of trust the document refers to: its recording number (or book and page; a Texas clerk calls the book a volume), when it
   // was recorded, and the date it was signed (`dated`), which a notice gives apart from the recording.
   let deedOfTrust = null;
   if (p.deedOfTrust) {
-    const d = { documentNumber: text(p.deedOfTrust.documentNumber), recorded: p.deedOfTrust.recorded ?? null, dated: p.deedOfTrust.dated ?? null, book: text(p.deedOfTrust.book), page: text(p.deedOfTrust.page) };
-    for (const k of ['recorded', 'dated']) if (d[k] !== null && !validYmd(d[k])) err(`deedOfTrust.${k} "${d[k]}" is not a date (YYYY-MM-DD)`);
+    const dated = p.deedOfTrust.dated ?? null;
+    const d = { documentNumber: text(p.deedOfTrust.documentNumber), recorded: p.deedOfTrust.recorded ?? null, ...(dated ? { dated } : {}), book: text(p.deedOfTrust.book), page: text(p.deedOfTrust.page) };
+    if (d.recorded !== null && !validYmd(d.recorded)) err(`deedOfTrust.recorded "${d.recorded}" is not a date (YYYY-MM-DD)`);
+    if (dated !== null && !validYmd(dated)) err(`deedOfTrust.dated "${dated}" is not a date (YYYY-MM-DD)`);
     if (d.documentNumber || d.recorded || d.dated || (d.book && d.page)) deedOfTrust = d;
   }
   const salePlace = text(p.salePlace);
-  // Every field not read, an amount whose basis is "not-read" among them.
-  const unread = [...new Set([...(Array.isArray(p.unread) ? p.unread : []), ...AMOUNT_KINDS.filter((k) => amounts[k]?.basis === 'not-read').map((k) => `amounts.${k}`)])].sort();
-  for (const f of unread) if (!READ_FIELDS.includes(f)) err(`unread: "${f}" is not one of ${READ_FIELDS.join(', ')}`);
   const etag = text(p.etag);
+
+  // The county's loan type and the commercial flag read from it. A flag without a type would be a guess.
+  let loan = null;
+  if (p.loan) {
+    const type = text(p.loan.type), commercial = p.loan.commercial ?? null;
+    if (commercial !== null && typeof commercial !== 'boolean') err('loan.commercial must be true, false or null');
+    if (commercial !== null && !type) err('loan.commercial is set without the loan type it is read from');
+    if (type && type.length > 60) err('loan.type is longer than a loan type');
+    if (type || commercial !== null) loan = { type, commercial };
+  }
+
+  let foreclosure = null;
+  if (p.foreclosure) {
+    const f = p.foreclosure;
+    const pair = (x, where) => {
+      if (!x) return null;
+      const o = { first: x.first ?? null, last: x.last ?? null };
+      for (const k of ['first', 'last']) if (o[k] !== null && !validYmd(o[k])) err(`${where}.${k} "${o[k]}" is not a date (YYYY-MM-DD)`);
+      return o.first || o.last ? o : null;
+    };
+    const fc = {
+      number: text(f.number), reception: text(f.reception), attorneyFileNumber: text(f.attorneyFileNumber),
+      publication: pair(f.publication, 'foreclosure.publication'), amendedPublication: pair(f.amendedPublication, 'foreclosure.amendedPublication'),
+    };
+    for (const k of FORECLOSURE_AMOUNTS) fc[k] = f[k] ? amountOf(f[k], `foreclosure.${k}`) : null;
+    for (const k of ['number', 'reception', 'attorneyFileNumber']) if (fc[k] && fc[k].length > 80) err(`foreclosure.${k} is too long to be a number`);
+    if (Object.values(fc).some((v) => v !== null)) foreclosure = fc;
+  }
+
+  const unread = [];
+  for (const u of Array.isArray(p.unread) ? p.unread : []) {
+    if (!FIELD_PATH.test(String(u))) { err(`unread: "${u}" is not a field name`); continue; }
+    if (!unread.includes(u)) unread.push(u);
+  }
+  unread.sort();
 
   let link = null, listUrl = null;
   try {
@@ -174,10 +225,11 @@ export function buildDocument(parsed, { source, fetchedAt, runId }) {
   if (errors.length) return { record: null, errors };
   const record = {
     id, sourceId: source.id, county: { fips: source.county.fips, name: source.county.name }, state: source.state,
-    documentType, documentNumber, dates, parties, property, amounts, deedOfTrust, salePlace, unread, sources: [{ url: link, fetchedAt, ...(etag ? { etag } : {}), ...(listUrl ? { listUrl } : {}) }], contextOnly: true,
+    documentType, documentNumber, dates, parties, property, amounts, deedOfTrust, loan, foreclosure, salePlace, unread,
+    sources: [{ url: link, fetchedAt, ...(etag ? { etag } : {}), ...(listUrl ? { listUrl } : {}) }], contextOnly: true,
   };
   record.contentHash = hashDocument(record);
-  record._source = sourceBlock({ source: `county:${source.id}`, endpoint: link, query: { source: source.id }, recordId: id, period: dates.filed ?? dates.recorded ?? dates.notice ?? dates.sale, fetchedAt, runId });
+  record._source = sourceBlock({ source: `county:${source.id}`, endpoint: link, query: { source: source.id }, recordId: id, period: documentDate(record).date, fetchedAt, runId });
   return { record, errors: [] };
 }
 
@@ -247,12 +299,16 @@ export function writeDiff(dir, sourceId, diff, { runId, now = new Date() }) {
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 export const longDate = (s) => (validYmd(s) ? `${MONTHS[Number(s.slice(5, 7)) - 1]} ${Number(s.slice(8, 10))}, ${s.slice(0, 4)}` : String(s ?? ''));
 export const countyLabel = (doc) => `${doc?.county?.name ?? 'an unnamed'} County, ${doc?.state ?? ''}`.replace(/, $/, '');
-// The date a document is known by: its filing date, else its recording date, else the date the notice itself states, else (a notice of
-// sale whose own date could not be read) the sale date it gives.
+// The date a document is known by: when it was filed, else recorded, else the date the notice itself states, else the date of the
+// county list that gave it, else (a notice of sale whose own date could not be read) the sale date it gives.
 export const documentDate = (doc) => {
   const d = doc?.dates ?? {};
-  return d.filed ? { date: d.filed, kind: 'filed' } : d.recorded ? { date: d.recorded, kind: 'recorded' } : d.notice ? { date: d.notice, kind: 'notice' }
-    : d.sale ? { date: d.sale, kind: 'sale' } : { date: null, kind: 'recorded' };
+  if (d.filed) return { date: d.filed, kind: 'filed' };
+  if (d.recorded) return { date: d.recorded, kind: 'recorded' };
+  if (d.notice) return { date: d.notice, kind: 'notice' };
+  if (d.listed) return { date: d.listed, kind: 'listed' };
+  if (d.sale) return { date: d.sale, kind: 'sale' };
+  return { date: null, kind: 'recorded' };
 };
 // The link the bank's file and the events carry: where the list shows the document when its own link would name a person.
 export const publicLink = (doc) => doc?.sources?.[0]?.listUrl ?? doc?.sources?.[0]?.url ?? null;
@@ -279,8 +335,9 @@ const byNewest = (a, b) => {
   const da = documentDate(a).date ?? '', db = documentDate(b).date ?? '';
   return da !== db ? (da < db ? 1 : -1) : a.id < b.id ? -1 : 1;
 };
-// What the bank page shows for one document: no borrower, no grantor, no address, no APN. The labels are the engine's own words, so
-// the page and the command line say the same.
+// What the bank page shows for one document: no borrower, grantor or owner, no address, legal description or APN, and nothing of the
+// foreclosure file but the loan type and its commercial flag. The labels are the engine's own words, so the page and the command line
+// say the same.
 export function loanRow(doc, roles, how) {
   const { date, kind } = documentDate(doc);
   const stage = DOC_TYPES[doc.documentType]?.stage ?? null;
@@ -289,6 +346,7 @@ export function loanRow(doc, roles, how) {
     id: doc.id, sourceId: doc.sourceId, documentType: doc.documentType, typeLabel: DOC_TYPES[doc.documentType]?.label ?? doc.documentType, documentNumber: doc.documentNumber,
     stage, stageLabel: STAGES[stage] ?? null, county: doc.county, countyLabel: countyLabel(doc), state: doc.state, date, dateKind: kind, saleDate: doc.dates?.sale ?? null, roles, how,
     amounts: doc.amounts, propertyType: pt, propertyTypeLabel: pt ? PROPERTY_TYPES[pt] ?? null : null, useCode: doc.property?.useCode ?? null,
+    loanType: doc.loan?.type ?? null, commercial: doc.loan?.commercial ?? null,
     deedOfTrust: doc.deedOfTrust ? { documentNumber: doc.deedOfTrust.documentNumber, recorded: doc.deedOfTrust.recorded, dated: doc.deedOfTrust.dated ?? null, book: doc.deedOfTrust.book ?? null, page: doc.deedOfTrust.page ?? null } : null,
     link: publicLink(doc), firstSeenAt: doc.firstSeenAt ?? null,
   };

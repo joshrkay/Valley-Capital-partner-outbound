@@ -150,7 +150,7 @@ test('a value that fails its check is not read, never guessed: unread, with the 
   const d = read(await viaPdf(bad)).document;
   assert.deepEqual(d.amounts.originalPrincipal, { value: null, basis: 'not-read' });
   assert.deepEqual([d.dates.sale, d.dates.notice, d.property.address], ['2026-12-01', null, null]);
-  assert.deepEqual(d.unread, ['dates.notice', 'property.address'], 'the amount is listed by its basis when the record is built');
+  assert.deepEqual(d.unread, ['amounts.originalPrincipal', 'dates.notice', 'property.address'], 'each field not read named once, the amount too');
   // A sale date that is not a first Tuesday is not read; with the notice date also unread, the notice cannot be a record: it is held.
   const noDates = bad.replace('on 121112026 at', 'on 12/8/2026 at');
   assert.equal(read(await viaPdf(noDates)).reason, 'neither the sale date nor the notice date could be read');

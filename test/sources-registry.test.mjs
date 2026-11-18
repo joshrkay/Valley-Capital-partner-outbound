@@ -3,7 +3,8 @@
 // only an allowed source is enabled. A rule file: no prospect data. No network.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { loadJson } from './kit.mjs';
+import { loadJson, config } from './kit.mjs';
+import { COUNTY_SOURCES } from '../src/counties.mjs';
 
 const reg = loadJson('sources.json');
 const VERDICTS = ['allowed', 'not_allowed', 'unclear'];
@@ -40,6 +41,25 @@ test('sources.json: only an allowed source is enabled, and only after robots.txt
     assert.equal(s.robots.allowsUs, true, `${s.id}: allowed but robots.txt not shown to allow us`);
     assert.ok(isDate(s.terms?.checkedOn), `${s.id}: allowed without a dated terms check`);
     assert.deepEqual(s.hostsNotReachableHere ?? [], [], `${s.id}: allowed while a host was never read`);
+  }
+});
+
+test('sources.json: a source with an adapter names one that is registered, for its county, and stays not enabled until a principal decides', () => {
+  const withAdapter = reg.sources.filter((s) => s.adapter);
+  assert.deepEqual(withAdapter.map((s) => [s.id, s.adapter]), [['co-jefferson-ned-report', 'jefferson'], ['co-jefferson-presale-list', 'jefferson'], ['co-douglas-presale-list', 'douglas']]);
+  for (const s of withAdapter) {
+    const a = COUNTY_SOURCES[s.adapter];
+    assert.ok(a && !a.example, `${s.id}: adapter ${s.adapter} is registered in src/counties.mjs`);
+    assert.deepEqual([a.county.fips, a.state, a.channel], [s.countyFips, s.state, s.channel], `${s.id}: the adapter is for this county and channel`);
+    for (const h of a.hosts) assert.ok(s.hosts.includes(h), `${s.id}: the adapter reads only the source's hosts (${h})`);
+    assert.equal(a.terms.robotsCheckedOn, s.robots.checkedOn, `${s.id}: the adapter carries the dated robots.txt check`);
+    assert.equal(a.terms.termsCheckedOn, s.terms.checkedOn, `${s.id}: and the dated terms check`);
+    // Not enabled anywhere until the decision is recorded: the registry, the adapter's terms and config.counties.sources agree.
+    const decided = s.principalDecision !== null && s.principalDecision !== undefined;
+    assert.equal(s.enabled, decided, `${s.id}: enabled only with a principal's decision`);
+    assert.equal(a.terms.decision === 'allowed', decided, `${s.id}: the adapter's terms decision matches`);
+    assert.equal(config().counties.sources[s.adapter].enabled, decided, `${s.id}: config.counties.sources.${s.adapter} matches`);
+    if (!decided) assert.ok(s.waitingOn && a.terms.waitingOn, `${s.id}: says what it waits on`);
   }
 });
 

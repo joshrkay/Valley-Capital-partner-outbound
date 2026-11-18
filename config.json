@@ -73,7 +73,13 @@
     "maxDocumentsPerRun": 40,
     "backfillDays": 60,
     "freshDays": 10,
-    "watch": ["tx-caldwell-notices-of-sale"]
+    "watch": ["tx-caldwell-notices-of-sale"],
+    "sources": {
+      "_note": "Each registered real county source, by id (src/counties.mjs), with whether it may run. enabled is false until a principal has recorded the decision the adapter's terms carry (terms.decision 'allowed', with the date and who decided); runNoticeSource refuses a source marked false, and nothing is fetched. waitingOn says what it waits on. The weekly job (loans.watch) reads every enabled source: each one listed in watch that is not marked false here, and each one marked true here.",
+      "tx-caldwell-notices-of-sale": { "enabled": true, "decided": "A principal's decision of 2026-11-18, recorded in sources.json (principalDecision): weekly, lender-level use only, no individual named in a notice contacted, the disclaimer rechecked monthly." },
+      "jefferson": { "enabled": false, "waitingOn": "A principal's recorded decision that Jefferson's GTS reports (the NED report and the pre-sale list) may be read by software, and counsel's note on the county's copyright claim in data compilations (D-B9). The watcher stores extracted fields only." },
+      "douglas": { "enabled": false, "waitingOn": "A principal recording that the firm accepts the Douglas reports page's terms (lawful and ethical use only, a release of liability); opening a report is taken as accepting them." }
+    }
   },
   "sales": {
     "_note": "The who-sells-to-whom ledger (PRD E16, outbound sales build). filingSearches: the saved searches in filings.json whose hit on a bank's filing counts as a disclosed sale (8-K Item 2.01, a completed acquisition or disposition of assets, may also be the bank BUYING: the event says so). acquisitionKinds: the FDIC structure-event kinds that count as a whole-bank acquisition; affiliate-reorganization (224, inside one holding company) is left out, as in scoring.json. Both lists are PLACEHOLDERS for a principal to review.",

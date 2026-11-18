@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { readFileSync, existsSync } from 'node:fs';
 import { makeDir, put, config } from './kit.mjs';
 import { readJson, readJsonl } from '../src/store.mjs';
-import { defineNoticeSource, runnable, validateCountyConfig, runNoticeSource, verifyNoticeSource, htmlTables, parseUsd, parseDate, CHANNELS } from '../src/sources/notices.mjs';
+import { defineNoticeSource, runnable, validateCountyConfig, enabledSourceIds, runNoticeSource, verifyNoticeSource, htmlTables, parseUsd, parseDate, CHANNELS } from '../src/sources/notices.mjs';
 import { exampleCounty, parseExampleList, EXAMPLE_LIST } from '../src/sources/counties/example.mjs';
 import { COUNTY_SOURCES, countySource, watchedCounties, countyCoverage } from '../src/counties.mjs';
 import { loansPaths, loanEvents, readBankLoans, readLoanState } from '../src/loans.mjs';
@@ -38,8 +38,12 @@ test('the interface: an adapter declares its county, channel, cadence, hosts, te
   assert.throws(() => defineNoticeSource({ ...good, readDocument: 'no' }), /readDocument/);
   assert.match(runnable(exampleCounty).reason, /invented/);
   assert.equal(runnable(exampleCounty, { allowExample: true }).ok, true);
-  assert.deepEqual(Object.keys(COUNTY_SOURCES), ['example-county', 'tx-caldwell-notices-of-sale']);
+  assert.deepEqual(Object.keys(COUNTY_SOURCES), ['example-county', 'tx-caldwell-notices-of-sale', 'jefferson', 'douglas']);
   assert.throws(() => countySource('nowhere-county'), /No county source/);
+  // Optional parts are checked too: a file parser, a backfill with its date, a source's own interval.
+  assert.throws(() => defineNoticeSource({ ...good, parseFile: 'x' }), /parseFile/);
+  assert.throws(() => defineNoticeSource({ ...good, backfill: { since: 'January 2025', requests: () => [] } }), /backfill/);
+  assert.throws(() => defineNoticeSource({ ...good, minIntervalMs: -5 }), /minIntervalMs/);
 });
 
 test('config.counties: the firm\'s User-Agent, three requests a minute, and only a county a principal decided on is watched', () => {
@@ -52,6 +56,20 @@ test('config.counties: the firm\'s User-Agent, three requests a minute, and only
   assert.ok(validateCountyConfig({ ...c, maxDocumentsPerRun: 0 }).some((e) => /maxDocumentsPerRun/.test(e)));
   assert.ok(validateCountyConfig({ ...c, minIntervalMs: -1 }).some((e) => /minIntervalMs/.test(e)));
   assert.ok(validateCountyConfig({ ...c, watch: ['Bad Id'] }).some((e) => /watch/.test(e)));
+  // Every registered real county is in config.counties.sources. Caldwell is enabled, on the decision sources.json records; every other is
+  // not enabled, with what it waits on, and is not watched.
+  for (const id of Object.keys(COUNTY_SOURCES).filter((k) => !COUNTY_SOURCES[k].example)) {
+    assert.equal(typeof c.sources[id]?.enabled, 'boolean', `${id} is in config.counties.sources`);
+    if (id === 'tx-caldwell-notices-of-sale') { assert.equal(c.sources[id].enabled, true); assert.match(c.sources[id].decided, /2026-11-18/); continue; }
+    assert.equal(c.sources[id].enabled, false, `${id} is registered as not enabled`);
+    assert.ok(c.sources[id].waitingOn, `${id} says what it waits on`);
+    assert.ok(!c.watch.includes(id), `${id} is not watched`);
+  }
+  assert.ok(validateCountyConfig({ ...c, sources: { jefferson: { enabled: 'yes' } } }).some((e) => /sources.jefferson.enabled/.test(e)));
+  // The weekly job reads every enabled source: Caldwell; Jefferson and Douglas once enabled here, with nothing else changed.
+  assert.deepEqual(enabledSourceIds(c), ['tx-caldwell-notices-of-sale']);
+  assert.deepEqual(enabledSourceIds({ ...c, sources: { ...c.sources, jefferson: { enabled: true } } }), ['tx-caldwell-notices-of-sale', 'jefferson']);
+  assert.deepEqual(enabledSourceIds({ ...c, watch: [...c.watch, 'douglas'] }), ['tx-caldwell-notices-of-sale'], 'listed in watch but not enabled: not read');
 });
 
 test('parse: the list page to documents, a document type not kept skipped, every party with its role, amounts with their basis', () => {

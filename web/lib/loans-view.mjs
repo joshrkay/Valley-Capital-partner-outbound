@@ -15,8 +15,8 @@ export const LOANS_CONTEXT = 'Context for principals only. Never in a message, n
 export const BASIS_WORDS = Object.freeze({ document: 'as stated on the document', index: 'from the county\'s index', 'not-stated': 'Not stated on the document', 'not-read': 'Not read yet' });
 const ROLE_WORDS = Object.freeze({ lender: 'lender', beneficiary: 'lender', holder: 'holder', assignor: 'assigned the loan away', assignee: 'assigned the loan to it' });
 // The date a row is known by (src/loans.mjs documentDate): filed, recorded, the date a notice itself states (a Texas notice of sale),
-// or, when that could not be read, the sale date the notice gives.
-export const DATE_KIND_WORDS = Object.freeze({ filed: 'Filed', recorded: 'Recorded', notice: 'Dated', sale: 'Sale' });
+// the date of the county list that gave it (a Colorado pre-sale list), or, when none could be read, the sale date the notice gives.
+export const DATE_KIND_WORDS = Object.freeze({ filed: 'Filed', recorded: 'Recorded', listed: 'Listed', notice: 'Dated', sale: 'Sale' });
 
 // Only a web address leaves the app: http or https. Anything else (javascript:, a bare path) is dropped.
 export const safeLink = (u) => { try { const x = new URL(String(u ?? '')); return ['https:', 'http:'].includes(x.protocol) ? x.toString() : null; } catch { return null; } };

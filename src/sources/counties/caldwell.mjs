@@ -658,7 +658,7 @@ function finish({ c, layout, fetchedAt, listedDate, flow }) {
 
   // The original principal, the address and the sale place.
   const opP = pick(c.principal, readDollars);
-  mark('originalPrincipal', opP.state, null);
+  mark('originalPrincipal', opP.state, 'amounts.originalPrincipal');
   const addrP = pick(c.address, readAddress, { agree: false });
   mark('address', addrP.state, 'property.address');
   const placeP = pick(c.place, readPlace, { agree: false });
@@ -711,7 +711,7 @@ function finish({ c, layout, fetchedAt, listedDate, flow }) {
     dates: { recorded: null, filed: null, sale, notice },
     parties, property: { address: addrP.value, apn: null, useCode: null, propertyType: null }, amounts,
     deedOfTrust: ref || dated || recorded ? { documentNumber: ref?.documentNumber ?? null, book: ref?.book ?? null, page: ref?.page ?? null, dated, recorded } : null,
-    salePlace: placeP.value, unread,
+    salePlace: placeP.value, unread: [...new Set(unread)].sort(),
   };
   // The layout: the reader that gave the lender.
   // `draft` is the record as far as it was read, for a live check's counts; the run stores only a complete `document`.

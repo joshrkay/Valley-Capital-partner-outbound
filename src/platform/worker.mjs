@@ -21,7 +21,7 @@ import { runDrafter } from '../draft.mjs';
 import { loadContext } from '../guard.mjs';
 import { researchGate } from '../pilot.mjs';
 import { runCallPrep, runCallExtract, callLoads, needDate } from '../calls.mjs';
-import { runNoticeSource } from '../sources/notices.mjs';
+import { runNoticeSource, enabledSourceIds } from '../sources/notices.mjs';
 import { COUNTY_SOURCES } from '../counties.mjs';
 
 export const JOB_KINDS = ['sources.fdic', 'sources.edgar', 'sources.filings', 'sources.fdicsales', 'sources.enforcement', 'sources.mergerapps', 'loans.watch', 'score.run', 'triage.run', 'research.run', 'draft.run', 'call.prep', 'call.extract'];
@@ -33,17 +33,19 @@ const countySummary = (id, r) => ({ source: id, outcome: r.outcome, listed: r.li
   fetched: r.fetched ?? null, held: r.held ?? null, deferred: r.deferred ?? null, requests: r.requests ?? null, blocked: !!r.blocked, missingFields: r.missingFields ?? null,
   matchedDocuments: r.index?.matchedDocuments ?? null, eventsNew: r.index?.eventsNew ?? null, review: r.index?.review ?? null, ...(r.errors?.length ? { error: String(r.errors[0]).slice(0, 300) } : {}) });
 
-// The county watchers: every source config.counties.watch lists, each in its own unit of work, one after another. A source its gate
-// refuses (no decision, the terms recheck date passed, a recorded block) is reported as refused; the others still run.
+// The county watchers: every enabled source (enabledSourceIds: those config.counties.watch lists and config.counties.sources does not
+// mark not enabled, and those it marks enabled), each in its own unit of work, one after another. Jefferson and Douglas, registered and
+// not enabled, are not read; enabling one in config.counties.sources adds it here with no other change. A source its gate refuses (no
+// decision, the terms recheck date passed, a recorded block) is reported as refused; the others still run.
 export async function watchCounties({ client, rules, deps = {}, registry = COUNTY_SOURCES }) {
   const counties = rules.config.counties ?? {};
   const out = [];
-  for (const id of counties.watch ?? []) {
+  for (const id of enabledSourceIds(counties)) {
     const source = registry[id];
     if (!source) { out.push({ source: id, outcome: 'refused', error: `No county source "${id}" is registered (src/counties.mjs).` }); continue; }
     try {
       const { result } = await client.unitOfWork(LOADS.loans, (dir) => runNoticeSource({ dir, source, counties, fetchImpl: deps.fetchImpl ?? globalThis.fetch, now: deps.now?.() ?? new Date(),
-        ...(deps.sleep ? { sleep: deps.sleep } : {}), ...(deps.nowMs ? { nowMs: deps.nowMs } : {}) }), { retries: 0 });
+        ...(deps.sleep ? { sleep: deps.sleep } : {}), ...(deps.nowMs ? { nowMs: deps.nowMs } : {}), ...(deps.pdfToText ? { pdfToText: deps.pdfToText } : {}) }), { retries: 0 });
       out.push(countySummary(id, result));
     } catch (e) { out.push({ source: id, outcome: 'refused', error: String(e.message ?? e).slice(0, 300) }); }
   }

@@ -1,5 +1,5 @@
 {
-  "_note": "The source registry (docs/data-sources.md section 4): one entry per outside source, with its cadence, hosts, whether a key is needed, the dated robots.txt and terms checks, the verdict under the watcher rule (docs/county-data-build-vs-buy.md 3.4) and the principal's decision. This first set is the county foreclosure-notice watchers, from the recon of 2026-11-18 (docs/county-watchers-recon.md). A rule file: sources only, NO prospect data, NO borrower, lender or person names. verdict is allowed, not_allowed or unclear; only an allowed source may be enabled, and enabled means cleared to build and run, not that an adapter exists. fields says where each field of a notice appears: list (on the list page itself), document (only on the linked notice), absent, or not_seen (the source could not be read). Requests send the User-Agent in config.json (fdic.userAgent) and stay at or under 3 a minute per host, or slower where robots.txt sets a Crawl-delay. A terms check older than a year, a new challenge page, a block or a cease-and-desist letter stops the source until a principal decides.",
+  "_note": "The source registry (docs/data-sources.md section 4): one entry per outside source, with its cadence, hosts, whether a key is needed, the dated robots.txt and terms checks, the verdict under the watcher rule (docs/county-data-build-vs-buy.md 3.4) and the principal's decision. This first set is the county foreclosure-notice watchers, from the recon of 2026-11-18 (docs/county-watchers-recon.md). A rule file: sources only, NO prospect data, NO borrower, lender or person names. verdict is allowed, not_allowed or unclear; only an allowed source may be enabled, and enabled means cleared to build and run, not that an adapter exists. adapter names the county adapter in src/counties.mjs that reads the source (one adapter may read several of a county's reports); a source with an adapter stays not enabled, with what it is waitingOn, until a principal records the decision (principalDecision, the adapter's terms and config.counties.sources). fields says where each field of a notice appears: list (on the list page itself), document (only on the linked notice), absent, or not_seen (the source could not be read). Requests send the User-Agent in config.json (fdic.userAgent) and stay at or under 3 a minute per host, or slower where robots.txt sets a Crawl-delay. A terms check older than a year, a new challenge page, a block or a cease-and-desist letter stops the source until a principal decides.",
   "sources": [
     {
       "id": "tx-caldwell-notices-of-sale",
@@ -75,8 +75,8 @@
       "url": "https://countyclerk.traviscountytx.gov/departments/recording/meetings/",
       "documentUrlPattern": null,
       "hosts": ["countyclerk.traviscountytx.gov", "www.tccsearch.org"],
-      "hostsNotReachableHere": ["www.tccsearch.org"],
-      "format": "The clerk's page links 'SEARCH FORECLOSURE NOTICES' to the county's records search app; the app was not reached",
+      "hostsNotReachableHere": [],
+      "format": "The clerk's page links 'SEARCH FORECLOSURE NOTICES' to https://www.tccsearch.org/, which answers a Cloudflare managed challenge (HTTP 403, 'Just a moment...', cf-mitigated: challenge); nothing behind it was read",
       "fields": { "lender": "not_seen", "trusteeOrAttorney": "not_seen", "borrower": "not_seen", "propertyAddress": "not_seen", "apn": "not_seen", "amount": "not_seen", "recordingRef": "not_seen", "saleDate": "not_seen", "documentDate": "not_seen" },
       "cadence": "weekly",
       "history": "Records search: recording index from the mid 1980s, redacted images from December 2005 (clerk's page)",
@@ -89,21 +89,21 @@
         "status": 200,
         "relevant": ["User-agent: *", "Disallow: /wp-admin/", "Allow: /wp-admin/admin-ajax.php"],
         "allowsUs": true,
-        "notRead": ["https://www.tccsearch.org/robots.txt (host not reachable from this environment)"]
+        "alsoRead": ["https://www.tccsearch.org/robots.txt (200, checked 2026-11-18, Cloudflare-managed): User-agent: *, Content-Signal: search=yes,ai-train=no,use=reference, Allow: /; named AI crawlers Disallow: /"]
       },
       "terms": {
         "checkedOn": "2026-11-18",
         "url": null,
-        "automatedAccess": "no terms or disclaimer page found on the clerk's site (none in its sitemap or footer); the search app's terms not read",
+        "automatedAccess": "no terms or disclaimer page found on the clerk's site (none in its sitemap or footer); the search app's terms sit behind its challenge and were not read",
         "quote": null
       },
-      "barriers": ["host not reachable here"],
-      "verdict": "unclear",
-      "verdictBasis": "The notices sit in a search app on a host this environment cannot reach, so its robots.txt, terms and barriers are unknown.",
+      "barriers": ["Cloudflare managed challenge on www.tccsearch.org"],
+      "verdict": "not_allowed",
+      "verdictBasis": "robots.txt allows the search app, but the app answers a challenge page, and the rule never passes a challenge by software. Two requests were sent (robots.txt, then the root) and none after.",
       "conditions": [],
       "enabled": false,
       "principalDecision": null,
-      "toConfirm": ["Allow www.tccsearch.org, then read and date its robots.txt and terms, and check for a login, CAPTCHA or challenge."]
+      "toConfirm": ["Use channel (a) instead: the clerk's 'Daily Real Property Information on CD' ($10 a CD, build-vs-buy 3.1), or ask the clerk for the foreclosure notices by email or for an allowance for the firm's User-Agent."]
     },
     {
       "id": "tx-hays-notices-of-sale",
@@ -131,16 +131,16 @@
         "status": null,
         "relevant": [],
         "allowsUs": null,
-        "notRead": ["hayscountytx.com:443 did not accept connections (five attempts, 03:09 to 03:18 UTC; the proxy reports the host allowed but unreachable); the site probably answers on www.hayscountytx.com, which is not allowed here"]
+        "notRead": ["hayscountytx.com:443 did not accept connections (five attempts, 03:09 to 03:18 UTC)", "www.hayscountytx.com:443, once allowed, did not either (two attempts, 03:43 and 03:48 UTC)", "the proxy reports both as 'host allowed, but the gateway could not connect to it'"]
       },
       "terms": { "checkedOn": null, "url": null, "automatedAccess": "not read", "quote": null },
-      "barriers": ["host not reachable here"],
+      "barriers": ["the county's servers refuse connections from this environment's egress"],
       "verdict": "unclear",
-      "verdictBasis": "Nothing could be read.",
+      "verdictBasis": "Nothing could be read: both hosts refuse connections from this environment, which may be a firewall on the county's side.",
       "conditions": [],
       "enabled": false,
       "principalDecision": null,
-      "toConfirm": ["Allow www.hayscountytx.com, find the clerk's foreclosure-notice page, then read and date its robots.txt and terms."]
+      "toConfirm": ["Read the site from another network (a principal's machine or the worker): find the clerk's foreclosure-notice page, then read and date its robots.txt and terms. If the county blocks the worker's network too, that is a block, and the watcher does not run."]
     },
     {
       "id": "co-denver-public-trustee",
@@ -181,7 +181,7 @@
       "conditions": [],
       "enabled": false,
       "principalDecision": null,
-      "toConfirm": ["Ask the Public Trustee whether automated searching is acceptable and whether the reCAPTCHA is enforced, or whether it will publish a weekly new-foreclosure (NED) report on its GTS reports page, as Jefferson and Douglas do."]
+      "toConfirm": ["Ask the Public Trustee whether automated searching is acceptable and whether the reCAPTCHA is enforced, or whether it will publish a weekly new-foreclosure (NED) report on its GTS reports page, as Jefferson does (the Jefferson parser would then serve it)."]
     },
     {
       "id": "co-adams-public-trustee",
@@ -226,89 +226,148 @@
       "toConfirm": ["Ask the Public Trustee for the weekly New Foreclosure Report by email, a bulk subscription, or an allowance for the firm's User-Agent."]
     },
     {
-      "id": "co-jefferson-public-trustee",
-      "name": "Jefferson County Public Trustee: foreclosure reports (GTS)",
+      "id": "co-jefferson-ned-report",
+      "name": "Jefferson County Public Trustee: weekly Election and Demand Notices Filed (GTS report)",
       "state": "CO",
       "county": "Jefferson",
       "countyFips": "08059",
       "cbsa": "19740",
       "law": "C.R.S. 38-38-101 et seq.",
       "channel": "b",
-      "url": "http://gts.co.jefferson.co.us/AllReports.aspx",
-      "documentUrlPattern": null,
+      "url": "https://gts.co.jefferson.co.us/report?t=7",
+      "documentUrlPattern": "https://gts.co.jefferson.co.us/Report_Files/{file}.pdf",
       "hosts": ["gts.co.jefferson.co.us", "www.jeffco.us"],
-      "hostsNotReachableHere": ["gts.co.jefferson.co.us"],
-      "format": "GTS foreclosure search with a reports page; the county links both over plain http. Not reached.",
-      "fields": { "lender": "not_seen", "trusteeOrAttorney": "not_seen", "borrower": "not_seen", "propertyAddress": "not_seen", "apn": "not_seen", "amount": "not_seen", "recordingRef": "not_seen", "saleDate": "not_seen", "documentDate": "not_seen" },
+      "hostsNotReachableHere": [],
+      "format": "GTS report index (HTML by GET: an h2 per month, then ol > li with span posted date, a[href='Report_Files/{file}.pdf'], span description) linking one text-based PDF a week (Acrobat Distiller, embedded fonts), e.g. 'NED M-D-YYYY.pdf'. The archive index /report?t=14 holds one PDF a month.",
+      "fields": { "lender": "list", "trusteeOrAttorney": "list", "borrower": "list", "propertyAddress": "list", "apn": "list", "amount": "list", "recordingRef": "list", "saleDate": "list", "documentDate": "list" },
+      "fieldNotes": "Each record: Foreclosure Number; NED Date and its Reception #; Original Sale Date; Deed of Trust Date, Recording Date and Reception #; Re-Recording; Legal (an 'APN #:' inside it in 3 of 11 records sampled); Address; Original Note Amt; LoanType (Conventional, FHA, VA, Commercial, BPL Commercial, business seen); Interest Rate and Type; Current Amount and As Of; Current Lender (Beneficiary); Current Owner; Grantee (Lender On Deed of Trust); Grantor (Borrower On Deed of Trust); Publication and its first and last dates; Attorney for Beneficiary, Attorney File Number, Phone. The PDF is the list: no linked documents.",
       "cadence": "weekly",
-      "history": null,
+      "history": "Weekly PDFs for the current month; monthly compilations from January 2025 to October 2026 in the archive (/report?t=14)",
       "keyNeeded": false,
       "signalKind": "event",
       "pacing": { "minIntervalSeconds": 21 },
       "robots": {
         "checkedOn": "2026-11-18",
-        "url": "https://www.jeffco.us/robots.txt",
-        "status": 200,
-        "relevant": ["User-agent: *", "Disallow: /Search", "Disallow: /RSS.aspx", "Disallow: /rss.aspx", "Disallow: /publiclogin.aspx", "Crawl-delay: 10"],
+        "url": "https://gts.co.jefferson.co.us/robots.txt",
+        "status": 404,
+        "relevant": ["404 (IIS 'File or directory not found'): no robots.txt, so no restriction"],
         "allowsUs": true,
-        "notRead": ["http://gts.co.jefferson.co.us/robots.txt (host not reachable from this environment)"]
+        "alsoRead": ["https://www.jeffco.us/robots.txt (200): User-agent: *, Disallow: /Search, /RSS.aspx, /rss.aspx, /publiclogin.aspx and others, Crawl-delay: 10"]
       },
       "terms": {
         "checkedOn": "2026-11-18",
-        "url": "https://www.jeffco.us/2845/Privacy-and-Site-Disclaimer",
-        "automatedAccess": "not addressed; the county claims copyright in the site's content, data compilations included; the GTS site's terms not read",
-        "quote": "All content included on this site, such as text, graphics, logos, button icons, images, audio clips, digital downloads, data compilations, and software, is the property of Jefferson County, Colorado or its content suppliers"
+        "url": "https://gts.co.jefferson.co.us/",
+        "automatedAccess": "not addressed: disclaimers of accuracy only, on the GTS front page, the reports page and the report itself; the county site claims copyright in data compilations (https://www.jeffco.us/2845/Privacy-and-Site-Disclaimer)",
+        "quote": "Jefferson County Public Trustee makes no representation or warranties about the accuracy or adequacy of these reports. You should conduct your own due diligence."
       },
-      "barriers": ["host not reachable here"],
-      "verdict": "unclear",
-      "verdictBasis": "The reports live on a host this environment cannot reach. The county's Alert Center says a Tuesday 'Preliminary Bid Report' for each week's online sale is posted there.",
-      "conditions": [],
+      "barriers": [],
+      "verdict": "allowed",
+      "verdictBasis": "An official weekly report the county links from its own page; no robots.txt on the host; nothing in the terms on automated access; the index and the PDFs are plain GETs with no login, CAPTCHA or challenge. The GTS search page (an 'Accept Terms' POST button and a hidden reCAPTCHA field) is never used.",
+      "conditions": [
+        "Read only the reports index and the PDFs it links, by GET; never the search, never the 'Accept Terms' form.",
+        "Store the extracted fields, not copies of the county's PDFs beyond a run's cache (the data-compilation copyright claim); borrower and owner names stay principal context.",
+        "Find report links by their text ('Election and Demand'), since report type numbers differ by county."
+      ],
+      "adapter": "jefferson",
       "enabled": false,
+      "waitingOn": "A principal's recorded decision (D-B8) and counsel's note on the county's copyright claim in data compilations (D-B9).",
       "principalDecision": null,
-      "toConfirm": ["Allow gts.co.jefferson.co.us, read and date its robots.txt and terms, and list its report types.", "Counsel: whether the county's copyright claim in data compilations limits storing report rows (with D-B9)."]
+      "toConfirm": ["Counsel: that storing extracted fields is untouched by the county's copyright claim in data compilations (with D-B9)."]
     },
     {
-      "id": "co-douglas-public-trustee",
-      "name": "Douglas County Public Trustee: foreclosure search and pre-sale list (GTS)",
+      "id": "co-jefferson-presale-list",
+      "name": "Jefferson County Public Trustee: weekly Pre Sale List (GTS report)",
+      "state": "CO",
+      "county": "Jefferson",
+      "countyFips": "08059",
+      "cbsa": "19740",
+      "law": "C.R.S. 38-38-101 et seq.",
+      "channel": "b",
+      "url": "https://gts.co.jefferson.co.us/report?t=6",
+      "documentUrlPattern": "https://gts.co.jefferson.co.us/Report_Files/{file}.pdf",
+      "hosts": ["gts.co.jefferson.co.us"],
+      "hostsNotReachableHere": [],
+      "format": "GTS report index (as for the NED report) linking one text-based PDF, a Crystal Reports layout printed through Acrobat Distiller. The file name repeats each week ('Preliminary bid report-Tuesday.pdf'), so a run keys on the ETag or Last-Modified and the sale date in the header, not the name.",
+      "fields": { "lender": "list", "trusteeOrAttorney": "absent", "borrower": "list", "propertyAddress": "list", "apn": "list", "amount": "list", "recordingRef": "absent", "saleDate": "list", "documentDate": "list" },
+      "fieldNotes": "Header: '<County> County Pre Sale Foreclosure List', run date and time, 'Sale Date:'. Each record: 'Foreclosure: #:', 'The Grantor:', 'Legal Description:' (a 'PARCEL:' number in 8 of 11 sampled), 'Street Address:', 'Current Beneficiary Name:', 'First Publication:', 'Last Publication:', 'Publication Newspaper:', 'Lender's Bid Amount:', 'Deficiency:', 'Total Indebtedness:'. Trailer 'Total Foreclosures:'.",
+      "cadence": "weekly",
+      "history": "The current week's list only",
+      "keyNeeded": false,
+      "signalKind": "event",
+      "pacing": { "minIntervalSeconds": 21 },
+      "robots": {
+        "checkedOn": "2026-11-18",
+        "url": "https://gts.co.jefferson.co.us/robots.txt",
+        "status": 404,
+        "relevant": ["404: no robots.txt, so no restriction"],
+        "allowsUs": true
+      },
+      "terms": {
+        "checkedOn": "2026-11-18",
+        "url": "https://gts.co.jefferson.co.us/reports",
+        "automatedAccess": "not addressed: a disclaimer on the list's timeliness only",
+        "quote": "THE PROPERTIES THAT APPEAR ON THE WEEKLY SALE/AUCTION LIST OF THE PUBLIC TRUSTEE'S OFFICE ARE TIMELY AND VALID ONLY AS OF THE DATE AND TIME THEY ARE POSTED."
+      },
+      "barriers": [],
+      "verdict": "allowed",
+      "verdictBasis": "As for the NED report: an official weekly list by GET, no robots.txt, nothing in the terms on automated access, no login, CAPTCHA or challenge.",
+      "conditions": [
+        "The same as the NED report. A sale-week signal: it confirms which NED cases reach a sale, and their bid and indebtedness."
+      ],
+      "adapter": "jefferson",
+      "enabled": false,
+      "waitingOn": "The same decision as the NED report: one adapter reads both.",
+      "principalDecision": null,
+      "toConfirm": []
+    },
+    {
+      "id": "co-douglas-presale-list",
+      "name": "Douglas County Public Trustee: weekly Current Pre Sale List (GTS report)",
       "state": "CO",
       "county": "Douglas",
       "countyFips": "08035",
       "cbsa": "19740",
       "law": "C.R.S. 38-38-101 et seq.",
       "channel": "b",
-      "url": "https://apps.douglasco.gov/gts/",
-      "documentUrlPattern": null,
+      "url": "https://apps.douglasco.gov/gts/report?t=1",
+      "documentUrlPattern": "https://apps.douglasco.gov/gts/Report_Files/{file}.pdf",
       "hosts": ["apps.douglasco.gov", "www.douglasco.gov"],
-      "hostsNotReachableHere": ["apps.douglasco.gov"],
-      "format": "GTS foreclosure search; its 'Foreclosure Reports' include a 'Current Pre Sale List' posted after 1:00 pm on the Monday before each Wednesday sale (county page). Not reached.",
-      "fields": { "lender": "not_seen", "trusteeOrAttorney": "not_seen", "borrower": "not_seen", "propertyAddress": "not_seen", "apn": "not_seen", "amount": "not_seen", "recordingRef": "not_seen", "saleDate": "not_seen", "documentDate": "not_seen" },
+      "hostsNotReachableHere": [],
+      "format": "GTS report index (the same HTML as Jefferson's) linking text-based PDFs made by Crystal Reports with embedded fonts: a pre-sale report posted on Monday and an updated sale report on Tuesday, e.g. 'MM-DD-YY PreSale.pdf' and 'UPDATED Sale Report MM-DD-YYYY.pdf'. Served through Cloudflare, which challenged nothing.",
+      "fields": { "lender": "list", "trusteeOrAttorney": "absent", "borrower": "list", "propertyAddress": "list", "apn": "list", "amount": "list", "recordingRef": "absent", "saleDate": "list", "documentDate": "list" },
+      "fieldNotes": "The same template and labels as Jefferson's pre-sale list ('Douglas County Pre Sale Foreclosure List'), plus optional 'Amended First Publication:' and 'Amended Last Publication:'. A parcel number appears inside the legal description in 2 of 5 records sampled ('APN:' or 'PARCEL ID:'). Douglas publishes no new-NED report: this is its only list.",
       "cadence": "weekly",
-      "history": null,
+      "history": "The current week's list only",
       "keyNeeded": false,
       "signalKind": "event",
-      "pacing": { "minIntervalSeconds": 60 },
+      "pacing": { "minIntervalSeconds": 21 },
       "robots": {
         "checkedOn": "2026-11-18",
-        "url": "https://www.douglasco.gov/robots.txt",
-        "status": 200,
-        "relevant": ["User-agent: *", "Disallow: /wp-login.php", "Disallow: /wp-admin/", "Crawl-delay: 60"],
+        "url": "https://apps.douglasco.gov/robots.txt",
+        "status": 404,
+        "relevant": ["404 (Apache 'Not Found'): no robots.txt, so no restriction"],
         "allowsUs": true,
-        "notRead": ["https://apps.douglasco.gov/robots.txt (host not reachable from this environment)"],
-        "alsoRead": ["https://www.douglas.co.us/robots.txt answers 301 to www.douglasco.gov/robots.txt"]
+        "alsoRead": ["https://www.douglasco.gov/robots.txt (200): User-agent: *, Disallow: /wp-login.php, Disallow: /wp-admin/, Crawl-delay: 60", "https://www.douglas.co.us/robots.txt answers 301 to www.douglasco.gov/robots.txt"]
       },
       "terms": {
         "checkedOn": "2026-11-18",
-        "url": "https://www.douglasco.gov/public-trustee/",
-        "automatedAccess": "not forbidden; lawful and ethical use only, no hacking or reverse engineering",
-        "quote": "The User agrees that data from the PUBLIC TRUSTEE website will be used for only lawful and ethical purposes and will not be used to communicate false or incorrect information regarding foreclosure. The User shall not attempt to hack, reverse engineer, break into, or compromise the PUBLIC TRUSTEE website."
+        "url": "https://apps.douglasco.gov/gts/reports",
+        "automatedAccess": "not forbidden; lawful and ethical use only, no hacking or reverse engineering; the reports page asks the user to accept these terms before opening a report",
+        "quote": "The User agrees that data from the TRUSTEE website will be used for only lawful and ethical purposes and will not be used to communicate false or incorrect information regarding foreclosure. The User shall not attempt to hack, reverse engineer, break into, or compromise the TRUSTEE website. If you accept these terms, please click the button below."
       },
-      "barriers": ["host not reachable here"],
-      "verdict": "unclear",
-      "verdictBasis": "The disclaimer on the county's page allows lawful use, but the list lives on a host this environment cannot reach.",
-      "conditions": [],
+      "barriers": [],
+      "verdict": "allowed",
+      "verdictBasis": "An official weekly list the county page points to; no robots.txt on the host; terms that allow lawful use; the index and the PDFs are plain GETs with no login, CAPTCHA or challenge. The GTS search page ('Accept Terms' POST, hidden reCAPTCHA field) is never used.",
+      "conditions": [
+        "A principal records that the firm accepts the reports page's terms (lawful and ethical use, the release of liability), since opening a report is taken as accepting them.",
+        "Read only the reports index and the PDFs it links, by GET. The apps host sets no Crawl-delay; keep 21 seconds or more (the county's main site asks 60).",
+        "Borrower names stay principal context; the signal is the current beneficiary."
+      ],
+      "adapter": "douglas",
       "enabled": false,
+      "waitingOn": "A principal recording that the firm accepts the reports page's terms.",
       "principalDecision": null,
-      "toConfirm": ["Allow apps.douglasco.gov, read and date its robots.txt and terms, and see the pre-sale list's format. Keep the 60-second Crawl-delay unless its own robots.txt says otherwise."]
+      "toConfirm": ["A principal records acceptance of the Douglas reports terms.", "Ask the Public Trustee whether it would publish a new-NED report, as Jefferson does: the pre-sale list comes 110 days or more after the NED."]
     },
     {
       "id": "co-arapahoe-public-trustee",
@@ -348,18 +407,18 @@
     },
     {
       "id": "co-broomfield-public-trustee",
-      "name": "Broomfield Public Trustee: weekly new-foreclosure list",
+      "name": "Broomfield Public Trustee: Foreclosure Property Search and its weekly reports",
       "state": "CO",
       "county": "Broomfield",
       "countyFips": "08014",
       "cbsa": "19740",
       "law": "C.R.S. 38-38-101 et seq.",
       "channel": "b",
-      "url": null,
+      "url": "http://foreclosure.broomfield.org/centralrecords/ForeclosureSearch",
       "documentUrlPattern": null,
-      "hosts": ["egov.broomfield.org"],
-      "hostsNotReachableHere": ["www.broomfield.org"],
-      "format": "not found: egov.broomfield.org answers 404 at its root and at /PTForeclosureSearch/, /publictrustee/ and /gts/; the county's own pages, on www.broomfield.org, are not reachable here",
+      "hosts": ["www.broomfield.org", "foreclosure.broomfield.org"],
+      "hostsNotReachableHere": ["foreclosure.broomfield.org"],
+      "format": "Not reached. The Public Trustee's pages on www.broomfield.org (/255/Public-Trustee, /805/Foreclosure-Information, /807/Foreclosure-Sale) link the 'Foreclosure Property Search' at foreclosure.broomfield.org, over plain http, and say bid information is in 'the Foreclosure Reports section of the Foreclosure Property Search under weekly reports' after 2 p.m. each Monday. No list is posted on www.broomfield.org itself.",
       "fields": { "lender": "not_seen", "trusteeOrAttorney": "not_seen", "borrower": "not_seen", "propertyAddress": "not_seen", "apn": "not_seen", "amount": "not_seen", "recordingRef": "not_seen", "saleDate": "not_seen", "documentDate": "not_seen" },
       "cadence": "weekly",
       "history": null,
@@ -368,19 +427,26 @@
       "pacing": { "minIntervalSeconds": 21 },
       "robots": {
         "checkedOn": "2026-11-18",
-        "url": "https://egov.broomfield.org/robots.txt",
-        "status": 404,
-        "relevant": ["404 Not Found (nginx): no robots.txt, so no restriction"],
-        "allowsUs": true
+        "url": "https://www.broomfield.org/robots.txt",
+        "status": 200,
+        "relevant": ["User-agent: *", "Disallow: /Search, /RSS.aspx, /rss.aspx, /publiclogin.aspx and others (the CivicPlus default, the same file as www.jeffco.us)", "Crawl-delay: 10"],
+        "allowsUs": true,
+        "notRead": ["http://foreclosure.broomfield.org/robots.txt (host not reachable from this environment)"],
+        "alsoRead": ["https://egov.broomfield.org/robots.txt: 404, no restriction; the list is not on that host"]
       },
-      "terms": { "checkedOn": null, "url": null, "automatedAccess": "not read: the list was not found", "quote": null },
-      "barriers": ["list not found on a reachable host"],
+      "terms": {
+        "checkedOn": "2026-11-18",
+        "url": "https://www.broomfield.org/653/Internet-Privacy-Policy",
+        "automatedAccess": "not addressed on the county site; the search's own terms not read",
+        "quote": "some statistical information is collected and retained by the City and County of Broomfield, without any personal identifying information about the user being attached"
+      },
+      "barriers": ["host not reachable here"],
       "verdict": "unclear",
-      "verdictBasis": "The Public Trustee's list was not found on egov.broomfield.org.",
+      "verdictBasis": "The weekly reports live in the Foreclosure Property Search on a host this environment cannot reach.",
       "conditions": [],
       "enabled": false,
       "principalDecision": null,
-      "toConfirm": ["Allow www.broomfield.org, find where the Public Trustee posts its weekly new-foreclosure PDFs, then read and date that host's robots.txt and terms."]
+      "toConfirm": ["Allow foreclosure.broomfield.org, read and date its robots.txt and terms, and see whether its weekly reports open by GET without a login, CAPTCHA or challenge."]
     },
     {
       "id": "co-broomfield-eagleweb",

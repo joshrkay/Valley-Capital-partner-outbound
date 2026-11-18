@@ -195,7 +195,9 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound loans run --source ID                  one county source's weekly read: new documents written, changed ones updated, unchanged
                                                   ones left alone, lenders matched to banks, a dated event per document newly matched.
                                                   Caldwell County, TX (tx-caldwell-notices-of-sale) reads each new notice's PDF with
-                                                  pdftotext (poppler-utils); the worker runs every watched county each Monday (loans.watch)
+                                                  pdftotext (poppler-utils); the worker runs every enabled county each Monday (loans.watch)
+  outbound loans backfill --source ID [--since YYYY-MM-DD]   once: the source's archive back to --since (Jefferson: the monthly NED
+                                                  archive, from January 2025), with the same decision gate, robots.txt and pacing
   outbound loans verify --source ID [--sample N]  fresh, sourced, complete against the live list, every lender name accounted for (read-only)
   outbound loans status                           each watched county: the last run, documents read, new this week, matched to a bank
   outbound loans show --key fdic:CERT             the documents matched to one bank, newest first (no borrower, no address)
@@ -718,6 +720,13 @@ async function main() {
     const money = (a) => (a?.value === null || a?.value === undefined ? AMOUNT_BASES[a?.basis] ?? 'not read yet' : `$${Number(a.value).toLocaleString('en-US')} (${AMOUNT_BASES[a.basis]})`);
     if (sub === 'run') {   // an invented example source is refused here: it runs only against its fake, in the tests
       const r = await runNoticeSource({ dir, source: countySource(need(flags, 'source')), counties });
+      if (r.outcome === 'failed') process.exitCode = 1;
+      return out(r);
+    }
+    if (sub === 'backfill') {   // one-time: the source's archive, gated by the same recorded decision as its weekly run
+      const source = countySource(need(flags, 'source'));
+      const since = flags.since && flags.since !== true ? String(flags.since) : source.backfill?.since;
+      const r = await runNoticeSource({ dir, source, counties, backfill: { since } });
       if (r.outcome === 'failed') process.exitCode = 1;
       return out(r);
     }

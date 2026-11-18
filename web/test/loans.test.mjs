@@ -146,3 +146,13 @@ test('a Texas notice of sale is known by the date it states ("Dated"), or by its
   assert.equal(row({ dateKind: 'sale', date: '2026-12-01' }).dateKind, 'Sale');
   assert.equal(row({ dateKind: 'filed' }).dateKind, 'Filed');
 });
+
+test('a pre-sale list entry is dated by its list: the row says "Listed", and its unpaid balance comes from the county\'s index', () => {
+  const bank = { loans: [{ id: 'jefferson:J2699001/SALE', documentType: 'notice_of_trustee_sale', typeLabel: 'Notice of trustee\'s sale', documentNumber: 'J2699001/SALE', countyLabel: 'Jefferson County, CO',
+    date: '2026-11-17', dateKind: 'listed', stageLabel: 'Sale scheduled', saleDate: '2026-11-19', roles: ['holder'], how: 'exact name',
+    amounts: { originalPrincipal: { value: null, unit: 'dollars', basis: 'not-stated' }, unpaidBalance: { value: 245000, unit: 'dollars', basis: 'index', label: 'Total Indebtedness' } },
+    loanType: null, commercial: null, link: 'https://gts.co.jefferson.co.us/Report_Files/x.pdf' }] };
+  const [row] = loanRows(bank);
+  assert.deepEqual([row.dateKind, row.date, row.saleDate, row.role], ['Listed', 'November 17, 2026', 'November 19, 2026', 'Holder']);
+  assert.deepEqual(row.amounts, [{ id: 'unpaidBalance', label: 'Unpaid balance', text: '$245K', basis: 'from the county\'s index' }]);
+});

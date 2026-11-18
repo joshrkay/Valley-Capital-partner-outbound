@@ -1,6 +1,6 @@
 # County loans: the core of the pipeline
 
-The parts of the county pipeline that do not depend on any county's format (`docs/county-data-build-vs-buy.md` 5.2, components 5 and 9). The goal is to show each bank's individual loans that public records name, on its bank page. The first real county is Caldwell County, Texas (section 8). An invented example stays for the tests and runs only against its fake.
+The parts of the county pipeline that do not depend on any county's format (`docs/county-data-build-vs-buy.md` 5.2, components 5 and 9). The goal is to show each bank's individual loans that public records name, on its bank page. Three real counties are built. Caldwell County, Texas (section 8) is enabled, on a principal's recorded decision. Jefferson and Douglas in Colorado (section 5a) are **not enabled**: each waits on a principal's recorded decision. The invented example runs only against its fake.
 
 **The rule.** Loan and borrower detail is context for the firm's principals only:
 
@@ -57,9 +57,11 @@ One record per public-records document about a loan (`src/loans.mjs`, `buildDocu
   A county's own codes are mapped to these in its adapter.
 - **Roles:**
   - The lender side: `lender`, `beneficiary`, `holder`, `assignor`, `assignee`.
-  - The rest: `trustee`, `attorney`, `borrower`, `grantor`, `servicer`. A Texas notice names the mortgage servicer apart from the mortgagee; the servicer collects for the lender and is never matched.
+  - The rest: `trustee`, `attorney`, `borrower`, `grantor`, `owner`, `servicer`. Neither of the last two is ever matched:
+    - `owner`: the property's current owner where a list names one apart from the borrower (Colorado's NED reports do). Borrower side.
+    - `servicer`: the mortgage servicer, which a Texas notice names apart from the mortgagee. It collects for the lender and is not one.
   - A document must name at least one lender-side party.
-- **Dates:** `recorded`, `filed`, `sale`, and `notice`, the date a notice itself states. A document needs one of the first three or a notice date; a notice of sale whose own date could not be read is known by its sale date.
+- **Dates:** `recorded`, `filed`, `listed` (the date of a county list that gave the entry; see below), `sale`, and `notice`, the date a notice itself states. A document needs a recording, filing, notice or list date. A notice of sale whose own date could not be read is known by its sale date. A document is known by the first of filed, recorded, notice, listed and sale it has; the event says "was filed on", "was recorded on", "dated ... was posted", "was listed on" or "for a sale on ... was posted".
 - **Amounts.** Each amount has a basis:
   - `document`: stated on the document;
   - `index`: in the county's index;
@@ -67,11 +69,19 @@ One record per public-records document about a loan (`src/loans.mjs`, `buildDocu
   - `not-read`: on the image, not read yet.
 
   A stated amount has a value in dollars; the other two have none, and are never zero. An original principal is the size when the loan was made. It is never divided by a reported balance (`docs/paper-estimate.md` Q2).
-- **Not read.** `unread` lists every field the reader could not read (an OCR misread, a value that failed its check), so "not read" is never confused with "not on the document". An amount not read also has the basis `not-read`.
-- **The deed of trust** has its recording number (or book and page), its recording date, and `dated`, the date it was signed.
+- **Not read.** `unread` names, by its place in the record (`dates.sale`, `amounts.unpaidBalance.asOf`), every field the source gave that failed its check: a misread date, an amount that is not money, an OCR error. So "not read" is never confused with "not on the document". An amount not read also has the basis `not-read`, and its adapter names it in `unread` too.
+- **The deed of trust** has its recording number (or book and page) and its recording date, and `dated`, the date it was signed, when the source gives it.
 - **The sale place** (`salePlace`), when the notice gives it.
 - **The source:** the document's own link, its ETag, and `listUrl` when the document's link would name a person (a Texas notice's file is named for the debtor). The bank's file and the events carry `listUrl` instead of the document's link.
 - **Property type** is null until a county's assessor join gives a use code. It is never guessed.
+- **What a public trustee's list adds** (all optional; a source without them keeps the shape above):
+  - `dates.listed`: the date of the county's own list that gave an entry that is not itself a recorded document (a pre-sale list's run date). The event then says "was listed on".
+  - `property.legal`: the legal description, where the list gives one.
+  - an amount's `label` (the county's word for the figure, such as "Total Indebtedness") and `asOf`.
+  - `loan { type, commercial }`: the county's loan type as written ("BPL Commercial") and the flag its adapter reads from it. Unknown or blank types give `null`, never a guess.
+  - `foreclosure { number, reception, attorneyFileNumber, publication, amendedPublication, bid, deficiency }`: the public trustee's file.
+
+  The bank's file carries the loan type and its flag, and none of the rest.
 - **The id** is `<source>:<document number>`, uppercased, with spaces removed. So a weekly re-read lands on the same id, and a new document is new. A list keyed by a case or foreclosure number that carries several documents gives each its own suffix (`FC-2026-0001/NED`).
 - **The content hash** covers the document's content. It leaves out the fetch date and the run. Nothing outside `RECORD_KEYS` is stored: an adapter cannot add a field by accident.
 
@@ -83,13 +93,13 @@ One record per public-records document about a loan (`src/loans.mjs`, `buildDocu
 | `loans/banks/fdic-<CERT>.json` | The bank's matched documents, newest first, with the engine's labels. **No borrower, grantor, address or APN.** The bank page reads only this file. |
 | `loans/review.json` | Names that matched no bank or several, with their candidates; and the names set aside, with their class. |
 | `loans/events.json` | One dated event per document and bank, written the first time they match. |
-| `loans/state.json` | Each source's last run and up to 12 runs: documents read, new, changed, unchanged (and, for a linked-document source, listed, fetched, held and deferred). A recorded block. Also the index's counts. |
+| `loans/state.json` | Each source's last run and up to 12 runs: documents read, new, changed, unchanged (and, for a linked-document source, listed, fetched, held and deferred). For a source that reads report files, the files it has read (address, posted date, ETag, Last-Modified and the report's dates; up to 200), never their contents. A recorded block. Also the index's counts. |
 | `loans/lists/<source>.json` | A linked-document source's list: each page's ETag, the documents recorded as history on its first run, and the documents held as unreadable, by id and reason. **No name and no link.** |
 
 **The platform.** Every path fits the existing `documents` table (a test checks each path against the table's own path rule).
 
 - The bank page loads `loans/banks/fdic-<CERT>.json` and `loans/state.json` with the principal's token, as it loads `paper/fdic-<CERT>.json`.
-- **The worker job `loans.watch`** runs every county in `config.counties.watch`, each in its own unit of work (`LOADS.loans`). Its result holds counts only. A county its gate refuses, or whose run fails, fails the job, which turns the workflow red. The jobs table's kind list needs the migration `supabase/migrations/20261118120000_jobs_loans_watch.sql`.
+- **The worker job `loans.watch`** runs every enabled county, each in its own unit of work (`LOADS.loans`): each source `config.counties.watch` lists that `config.counties.sources` does not mark not enabled, and each one it marks enabled (`enabledSourceIds`). So enabling Jefferson or Douglas there adds it to the weekly run with no other change. Its result holds counts only. A county its gate refuses, or whose run fails, fails the job, which turns the workflow red. The jobs table's kind list needs the migration `supabase/migrations/20261118120000_jobs_loans_watch.sql`.
 
 ## 3. The lender match (component 5)
 
@@ -154,16 +164,22 @@ Former names and holding companies from FDIC history or FFIEC NIC are not added 
 - `cadence`: `weekly`, or `twice-weekly` for Texas.
 - `hosts`: every host it reads. Nothing else is fetched.
 - `terms { robotsCheckedOn, termsCheckedOn, decision, by, nextRecheckOn }`. A real source runs only with `decision: 'allowed'`, both dates and who decided (county-data-build-vs-buy D-B8), a terms read under a year old, and only until `nextRecheckOn` when the decision sets one. A real county's terms come from its principal decision in `sources.json`. An `example` source runs only against its fake.
-- `minIntervalMs`, optional: the source's own spacing between requests when its registry entry asks for more than the config's.
 - `requests({ now, state })`: the pages to read.
-- `parse(text, { url, fetchedAt })`, which returns:
+- `parse(text, { url, fetchedAt, kind, state, since })`, which returns:
   - `documents`, in `buildDocument`'s shape;
   - `rows`;
   - `skipped`, each with a reason;
-  - `missing`: a count per required field. One is a format change: the run fails and writes nothing.
-- **A linked-document source** (a list that only links each document, as a Texas clerk's posted notices do) also provides `readDocument(bytes, { url, item, fetchedAt })`, async, and `parserVersion`. Its `parse` returns `items` (`documentNumber`, `url`, `listedDate`, `listLink`) instead of documents.
-- **A fake** with invented data (`test/county-notices-fake.mjs`; `test/caldwell-fake.mjs` for Caldwell).
+  - `missing`: a count per required field. One is a format change: the run fails and writes nothing;
+  - optionally `follow`: further pages or files the page links, which the same run reads (at most three links deep, only on the source's hosts, after their robots.txt), and `known`, the linked files left alone because they were read before;
+  - optionally `items`: for a linked-document source, one per listed document (`documentNumber`, `url`, `listedDate`, `listLink`).
+- Optionally:
+  - `parseFile(bytes, ctx)` for a followed file read as bytes (a PDF report holding many documents). It also returns `file { key }`, which the run keeps in the source's state on success. A file read before is asked for again with its ETag and Last-Modified, and a 304 is not read.
+  - `readDocument(bytes, ctx)`, async, and `parserVersion`, for a list that links one document per file, as a Texas clerk's posted notices do. Each new file is fetched once and read into one record.
+  - `backfill { since, requests }`: a one-time read of the source's archive (`outbound loans backfill --source ID [--since DATE]`), with the same gate.
+  - `minIntervalMs`: a longer interval than the config's, where the county or its registry entry asks one.
+- **A fake** with invented data (`test/county-notices-fake.mjs`; `test/caldwell-fake.mjs` for Caldwell; `test/gts-fake.mjs` for Jefferson and Douglas).
 - **Its live check:** `outbound loans verify --source ID`, run once from an open network before the source is listed in `config.counties.watch`.
+- **Its switch:** `config.counties.sources.<id>` `{ enabled, waitingOn }`. A source marked `enabled: false` is refused even with a recorded decision.
 
 **The shared run** (`runNoticeSource`):
 
@@ -182,6 +198,60 @@ Former names and holding companies from FDIC history or FFIEC NIC are not added 
 - **recall:** every listed document is stored, with the same content (a linked-document source: stored, held as unreadable, or history from before its first run);
 - **matched:** every lender name is matched, set aside, or on the review list.
 
+## 5a. The GTS counties: Jefferson and Douglas
+
+Colorado's public trustees in Jefferson and Douglas run GTS (`docs/county-watchers-recon.md`, section 3). `src/sources/counties/gts.mjs` holds what their reports share; `jefferson.mjs` and `douglas.mjs` are the adapters.
+
+- **The reports page** (`{base}/reports`) is read first, and each report is found by its link's text, never its type number (Jefferson's pre-sale list is `t=6`, Douglas's `t=1`).
+- **Each report's index:** the month heading, then one item per file with its posted date, its `Report_Files/{file}.pdf` link and a description. Files are read oldest first, so a later update wins.
+- **Files are keyed** on the server's ETag (or Last-Modified) and the report's own dates, never the name alone: Jefferson's pre-sale file has the same name every week.
+  - A file already read with the same posted date is not asked for.
+  - The same name under a new posted date is asked for with its ETag; a 304 is not read.
+- **The text** comes from `pdftotext -layout` (poppler-utils), run as a child process with the PDF on stdin. No PDF is written to disk.
+- **Every amount and date is checked:**
+  - a field that fails is left empty and named in `unread`;
+  - a label a record lacks leaves its field empty;
+  - a label no record has, a missing title, or a pre-sale count that differs from the list's own `Total Foreclosures:` is a format change, and the run writes nothing;
+  - a two-digit year is not read, since its century would be a guess.
+
+**Jefferson's NED report** (`election_and_demand`, id `<foreclosure number>/NED`):
+
+| Label | Record |
+|---|---|
+| `Current Lender (Beneficiary)` | party `holder` |
+| `Grantee (Lender On Deed of Trust)` | party `lender` (MERS as nominee is read as the nominee's principal) |
+| `Grantor (Borrower On Deed of Trust)`, `Current Owner` | parties `grantor`, `owner` |
+| `Attorney for Beneficiary`, `Attorney File Number` | party `attorney`; `foreclosure.attorneyFileNumber` |
+| `Address`, `Legal` (with `APN #:` inside it) | `property.address`, `legal`, `apn` |
+| `Original Note Amt` | `amounts.originalPrincipal` (basis `index`) |
+| `Current Amount`, `As Of` | `amounts.unpaidBalance` with its `asOf` |
+| `Deed of Trust Date`, `Recording Date`, `Reception #` | `deedOfTrust.dated`, `recorded`, `documentNumber` |
+| `NED Date`, its `Reception #` | `dates.recorded`; `foreclosure.reception` |
+| `Original Sale Date` | `dates.sale` |
+| `LoanType` | `loan.type`, and `loan.commercial`: true for Commercial, BPL Commercial or business; false for Conventional, Conv, FHA, VA, USDA and reverse; null otherwise |
+| `First` and `Last Publication Date` | `foreclosure.publication` |
+
+**The pre-sale list, one parser for both counties** (`notice_of_trustee_sale`, id `<foreclosure number>/SALE`):
+
+| Label | Record |
+|---|---|
+| `Current Beneficiary Name` | party `holder` |
+| `The Grantor` | party `grantor` |
+| `Legal Description` (with `PARCEL:`, `PARCEL ID:` or `APN:` inside it), `Street Address` | `property.legal`, `apn`, `address` |
+| `Total Indebtedness` | `amounts.unpaidBalance`, labelled "Total Indebtedness" |
+| `Lender's Bid Amount`, `Deficiency` | `foreclosure.bid`, `deficiency` |
+| `First`/`Last Publication`, `Amended First`/`Last Publication` | `foreclosure.publication`, `amendedPublication` |
+| the header's run date and `Sale Date:` | `dates.listed`, `dates.sale` |
+
+**Not kept:** interest rate and type, the re-recording date and number, the newspaper, and the attorney's phone and fax.
+
+**Not enabled.** Both are registered in `src/counties.mjs`, `sources.json` (`adapter`) and `config.counties.sources` with `enabled: false`, and their adapters' `terms.decision` is unset:
+
+- Jefferson waits on a principal's decision and counsel's note on its "data compilations" copyright claim.
+- Douglas waits on a principal accepting its reports page's terms.
+
+The backfill of Jefferson's NED archive (`report?t=14`, monthly from January 2025) sits behind the same gate.
+
 ## 6. Where it shows
 
 - **The bank page:**
@@ -189,10 +259,11 @@ Former names and holding companies from FDIC history or FFIEC NIC are not added 
   - a **Loans we can see** tab: each document's type, county, date, stage, amounts with their basis, property type and a link to the source document.
   - With none, the page says which counties are watched and that none has a document for this bank yet.
 - **System status:** a **County records** row per watched county: the last run, documents read, new this week, matched to a bank, and names to review.
-- **The command line:** `outbound loans run | verify | status | show | review | alias | match | events`.
+- **The command line:** `outbound loans run | backfill | verify | status | show | review | alias | match | events`.
 
 ## 7. Not built yet
 
+- Enabling Jefferson and Douglas: each waits on a principal (section 5a). The other counties in the recon.
 - The image reader (component 4).
 - The commercial filter and the assessor join that gives `useCode` and `propertyType` (component 3).
 - The loan chain to the current holder (component 6).
