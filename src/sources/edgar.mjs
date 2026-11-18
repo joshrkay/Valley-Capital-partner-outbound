@@ -172,7 +172,8 @@ export function toLoan({ asset, trust, idx, sectors, src }) {
   return {
     key: `cmbs:${trust.cik}:${f.assetNumber}`, cik: trust.cik, trust: trust.name, assetNumber: f.assetNumber,
     period: mdy(f.reportingPeriodEndDate), originated: mdy(f.originationDate), originalBalance: num(f.originalLoanAmount),
-    balance: num(f.reportPeriodEndActualBalanceAmount), rate: num(f.reportPeriodInterestRatePercentage ?? f.originalInterestRatePercentage),
+    balance: num(f.reportPeriodEndActualBalanceAmount), paidThrough: mdy(f.paidThroughDate),   // the CMBS link's block (src/cmbslinks.mjs)
+    rate: num(f.reportPeriodInterestRatePercentage ?? f.originalInterestRatePercentage),
     maturity: mdy(f.maturityDate), postModificationMaturity: mdy(f.postModificationMaturityDate),
     paymentStatus: code('paymentStatus', f.paymentStatusLoanCode), workout: code('workout', f.workoutStrategyCode),
     workouts: workoutList.map((w) => code('workout', w)),   // the full list: the schema lets the code repeat

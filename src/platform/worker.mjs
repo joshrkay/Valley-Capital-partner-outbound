@@ -23,6 +23,7 @@ import { researchGate } from '../pilot.mjs';
 import { runCallPrep, runCallExtract, callLoads, needDate } from '../calls.mjs';
 import { runNoticeSource, enabledSourceIds } from '../sources/notices.mjs';
 import { COUNTY_SOURCES } from '../counties.mjs';
+import { buildCmbsLinks } from '../cmbslinks.mjs';
 
 export const JOB_KINDS = ['sources.fdic', 'sources.edgar', 'sources.filings', 'sources.fdicsales', 'sources.enforcement', 'sources.mergerapps', 'loans.watch', 'score.run', 'triage.run', 'research.run', 'draft.run', 'call.prep', 'call.extract'];
 const ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -52,6 +53,16 @@ export async function watchCounties({ client, rules, deps = {}, registry = COUNT
   return out;
 }
 
+// The CMBS links of county filings (docs/county-loans.md section 9, src/cmbslinks.mjs), rebuilt in their own unit of work from what the
+// county watchers and the EDGAR pull stored: after loans.watch and after sources.edgar, as the sale ledger is after the pull. No network.
+// Counts only; a failure is reported as one, with its message, and fails the job.
+export async function rebuildCmbsLinks({ client, deps = {} }) {
+  try {
+    const { result } = await client.unitOfWork(LOADS.cmbs, (dir) => buildCmbsLinks({ dir, now: deps.now?.() ?? new Date() }));
+    return { outcome: 'ok', documents: result.documents, named: result.named, linked: result.linked, notFound: result.notFound, unconfirmed: result.unconfirmed, outOfScope: result.outOfScope, byReason: result.byReason, written: result.written };
+  } catch (e) { return { outcome: 'failed', error: String(e.message ?? e).slice(0, 300) }; }
+}
+
 // Counts only, for a job's stored result.
 const ledgerSummary = (l) => (l ? { outcome: l.outcome, events: l.events ?? null, added: l.added ?? null, unsupported: l.unsupported ?? null, byKind: l.byKind ?? null } : null);
 
@@ -78,7 +89,9 @@ export async function runJob({ client, job, rules, deps = {} }) {
         if (ledger && ledger.outcome !== 'failed') writeRegistry({ dir, config: rules.config, now: deps.now?.() ?? new Date() });   // next-five E19-S1
         return { ...r, ledger };
       }, { retries: 0 });
-      return { ok: result.outcome !== 'failed' && result.ledger?.outcome !== 'failed', summary: { outcome: result.outcome, cmbsTrusts: result.cmbsTrusts, loansRead: result.loansRead, loansKept: result.loansKept, servicers: result.servicers, dispositions: result.dispositions, dispositionsNew: result.dispositionsNew, notes: result.notes, changed: result.changed, ledger: ledgerSummary(result.ledger) } };
+      // Then the CMBS links of county filings, from this month's loans (docs/county-loans.md section 9).
+      const cmbsLinks = result.outcome === 'failed' ? null : await rebuildCmbsLinks({ client, deps });
+      return { ok: result.outcome !== 'failed' && result.ledger?.outcome !== 'failed' && cmbsLinks?.outcome !== 'failed', summary: { outcome: result.outcome, cmbsTrusts: result.cmbsTrusts, loansRead: result.loansRead, loansKept: result.loansKept, servicers: result.servicers, dispositions: result.dispositions, dispositionsNew: result.dispositionsNew, notes: result.notes, changed: result.changed, ledger: ledgerSummary(result.ledger), cmbsLinks } };
     }
     case 'sources.fdicsales': {   // FDIC loan-sale announcements (PRD E16-S2); refused while config.fdic.userAgent is a placeholder
       const { result } = await client.unitOfWork(LOADS.sales, async (dir) => {
@@ -114,9 +127,11 @@ export async function runJob({ client, job, rules, deps = {} }) {
     }
     case 'loans.watch': {   // the county watchers (docs/county-loans.md), weekly: every county in config.counties.watch
       const counties = await watchCounties({ client, rules, deps });
+      // Then the CMBS links of county filings, from the documents now stored (docs/county-loans.md section 9).
+      const cmbsLinks = await rebuildCmbsLinks({ client, deps });
       // Done only when every watched county ran: a refusal (the terms recheck is due, a block) or a failure turns the workflow red,
       // which is how a principal hears of it.
-      return { ok: counties.every((c) => c.outcome === 'ok'), summary: { watched: counties.length, counties } };
+      return { ok: counties.every((c) => c.outcome === 'ok') && cmbsLinks.outcome === 'ok', summary: { watched: counties.length, counties, cmbsLinks } };
     }
     case 'score.run': {
       const { result } = await client.unitOfWork(LOADS.score, (dir) => runScoring({ dir, buybox: rules.buybox, scoring: rules.scoring, metros: rules.metros, allowPlaceholders: !!p.draftBuybox, now: deps.now?.() ?? new Date() }));

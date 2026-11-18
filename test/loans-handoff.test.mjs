@@ -50,7 +50,7 @@ test('LOADS: loans/ is out of the drafter\'s list, every other model-facing list
   for (const p of LOAN_PATHS) assert.ok(!LOADS.score.some((x) => covers(x, p)), `scoring covers ${p}`);
   assert.ok(!LOADS.draft.some((p) => p === '' || 'loans/'.startsWith(p) || p.startsWith('loans')), `LOADS.draft: ${LOADS.draft.join(', ')}`);
   assert.deepEqual(LOADS.loans, ['loans/', 'sources/fdic/institutions.json', 'candidates/aliases.json', 'sources/runs.jsonl']);
-  assert.deepEqual(LOADS.triage.filter((p) => p.startsWith('loans')), ['loans/events.json'], 'the triage reads the events only, never the documents');
+  assert.deepEqual(LOADS.triage.filter((p) => p.startsWith('loans')), ['loans/events.json', 'loans/cmbs.json'], 'the triage reads the events and the CMBS links only, never the documents');
   // Scoring's rules name no county signal.
   assert.doesNotMatch(JSON.stringify(rules.scoring.signals ?? []), /county|trustee|loan document|lis pendens/i);
 });

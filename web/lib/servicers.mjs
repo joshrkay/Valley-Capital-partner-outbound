@@ -47,3 +47,36 @@ export function edgarStatus({ state, runs = [], jobs = [] }) {
     lastOutcome: run?.outcome ?? null, suspect: run?.outcome === 'suspect', failure,
   };
 }
+
+// ---- County filings on a servicer's loans (docs/county-loans.md section 9) --------------------------------------------------------
+// loans/cmbs.json (src/cmbslinks.mjs) links a county filing whose current holder is a CMBS trust to the trust's own record of the loan.
+// The servicer's page lists the filings linked to its loans. Each row holds what the link file holds: the county document's type, county,
+// date and public link, and the loan's block from the trust's filing. No borrower, no address, no servicer commentary: the file has none.
+// The scope guard is the bank page's (loans-view.mjs inScope): only a link the scope rule wrote, not known to be residential.
+const CODE_WORDS = { filed: 'Filed', recorded: 'Recorded', listed: 'Listed', notice: 'Dated', sale: 'Sale' };
+const shownScope = (e) => !!e?.scope && typeof e.scope === 'object' && e.scope.commercial !== false && e.scope.borrowers !== 'individuals';
+const webLink = (u) => { try { const x = new URL(String(u ?? '')); return ['https:', 'http:'].includes(x.protocol) ? x.toString() : null; } catch { return null; } };
+const secLink = (u) => (typeof u === 'string' && /^https:\/\/www\.sec\.gov\/Archives\/edgar\/data\/\d+\/\d{18}\/[\w.-]*$/.test(u) ? u : null);
+const coded = (c) => (c ? `${c.label} (${c.code})` : null);
+
+export function countyFilingsFor(file, name) {
+  const want = String(name ?? '');
+  return Object.values(file?.links ?? {})
+    .filter((e) => e?.status === 'linked' && e.cmbs && shownScope(e) && (e.cmbs.specialServicer || 'Unknown') === want)
+    .sort((a, b) => String(b.date ?? '').localeCompare(String(a.date ?? '')) || String(a.id).localeCompare(String(b.id)))
+    .map((e) => {
+      const b = e.cmbs;
+      return {
+        id: e.id, label: e.label ?? '', type: e.typeLabel ?? e.documentType, county: e.countyLabel ?? '', date: e.date ?? null, dateKind: CODE_WORDS[e.dateKind] ?? 'Recorded',
+        link: webLink(e.link), originalPrincipal: e.originalPrincipal ?? null, matchedOn: e.matchedOn ?? [], disagreed: e.disagreed ?? [],
+        trust: b.trust, cik: b.cik, assetNumber: b.assetNumber, loanKey: b.loanKey, reportingPeriod: b.reportingPeriod ?? null,
+        property: [b.property?.name, b.property?.type?.label].filter(Boolean).join(', '), place: [b.property?.city, b.property?.state].filter(Boolean).join(', '),
+        balance: b.balance ?? null, paidThrough: b.paidThrough ?? null, paymentStatus: coded(b.paymentStatus),
+        specialServicing: b.inSpecialServicing ? `since ${b.specialServicingSince}` : b.specialServicingSince ? `returned ${b.returnedToMasterOn ?? ''}`.trim() : null,
+        workout: (b.workouts?.length ? b.workouts : b.workout ? [b.workout] : []).map(coded).join(', ') || null,
+        valuation: b.valuation ?? null, valuationDate: b.valuationDate ?? null, occupancy: b.occupancy ?? null, noi: b.noi ?? null, dscr: b.dscr ?? null,
+        masterServicer: b.masterServicer ?? null, specialServicer: b.specialServicer ?? null,
+        ex102: secLink(b.filings?.ex102), absEe: secLink(b.filings?.absEe), distributionReport: secLink(b.filings?.distributionReport),
+      };
+    });
+}

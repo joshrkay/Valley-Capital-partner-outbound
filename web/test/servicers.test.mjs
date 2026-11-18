@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { fakePostgrest } from '../../test/postgrest-fake.mjs';
 import { platformClient } from '../../src/platform/client.mjs';
-import { sortServicers, loansFor, filingUrl, sourceLine, edgarStatus, CONTEXT_ONLY } from '../lib/servicers.mjs';
+import { sortServicers, loansFor, filingUrl, sourceLine, edgarStatus, countyFilingsFor, CONTEXT_ONLY } from '../lib/servicers.mjs';
 import { moneyDollars } from '../lib/format.mjs';
 import * as ops from '../lib/ops.mjs';
 
@@ -84,4 +84,54 @@ test('the servicer page shows the context-only banner on every path it renders, 
   assert.match(page, /return \(\s*<>\s*<ContextOnlyBanner \/>/, 'the main view starts with the banner');
   const ui = readFileSync(fileURLToPath(new URL('../app/ui.jsx', import.meta.url)), 'utf8');
   assert.match(ui, /export function ContextOnlyBanner\(\) \{\s*return <div className="banner warn context-only" role="note">\{CONTEXT_ONLY\}<\/div>;/);
+});
+
+// County filings on a servicer's loans (docs/county-loans.md section 9): loans/cmbs.json, written by src/cmbslinks.mjs. Invented names.
+const block = (over = {}) => ({ trust: 'Example 2019-X1 Mortgage Trust', cik: '1900001', assetNumber: '37', loanKey: 'cmbs:1900001:37', reportingPeriod: '2026-10-13',
+  property: { name: 'Example Inn Anytown', type: { code: 'LO', label: 'Lodging' }, city: 'Anytown', state: 'CO', county: 'Arapahoe' }, properties: 1,
+  originalBalance: 7460000, balance: 6912345.67, paidThrough: '2026-01-01', paymentStatus: { code: '3', label: '90 or more days delinquent' }, inSpecialServicing: true, specialServicingSince: '2026-03-04',
+  returnedToMasterOn: null, workout: { code: '2', label: 'Foreclosure' }, workouts: [{ code: '2', label: 'Foreclosure' }], valuation: 6100000, valuationDate: '2026-05-01', occupancy: 0.64, noi: 410000, dscr: 0.78,
+  masterServicer: 'Example Master Servicer', specialServicer: 'Sample Special Servicing LLC', filings: { absEe: 'https://www.sec.gov/Archives/edgar/data/1900001/000190000126000102/', ex102: 'https://www.sec.gov/Archives/edgar/data/1900001/000190000126000102/exh_102.xml', distributionReport: 'javascript:alert(1)' }, ...over });
+const link = (id, over = {}) => ({ id: `cmbs:${id}`, documentId: id, status: 'linked', documentType: 'election_and_demand', typeLabel: 'Notice of election and demand', countyLabel: 'Arapahoe County, CO', date: '2026-11-03', dateKind: 'recorded',
+  link: 'https://publictrustee.example/foreclosures/FC-2026-0101', originalPrincipal: 7460000, matchedOn: ['originalAmount', 'state', 'county'], disagreed: [], scope: { commercial: true, borrowers: null },
+  label: 'A notice of election and demand was recorded on November 3, 2026 in Arapahoe County, CO on a $7.5M hotel loan held by a CMBS trust (Example 2019-X1 Mortgage Trust, loan 37); it has been with special servicer Sample Special Servicing LLC since March 4, 2026.', cmbs: block(), ...over });
+
+test('a servicer\'s county filings: its linked filings in scope, newest first, with the loan\'s figures and only safe links', () => {
+  const file = { links: {
+    a: link('a'), b: link('b', { date: '2026-11-10' }),
+    other: link('other', { cmbs: block({ specialServicer: 'Placeholder Special Servicer Inc' }) }),
+    residential: link('residential', { scope: { commercial: false, borrowers: null } }),
+    unscoped: link('unscoped', { scope: undefined }),
+    notFound: { ...link('notFound'), status: 'not-found', cmbs: undefined },
+    unknown: link('unknown', { cmbs: block({ specialServicer: null }) }),
+  } };
+  const rows = countyFilingsFor(file, 'Sample Special Servicing LLC');
+  assert.deepEqual(rows.map((r) => r.id), ['cmbs:b', 'cmbs:a']);
+  const r = rows[1];
+  assert.deepEqual([r.trust, r.assetNumber, r.property, r.place, r.balance, r.paidThrough, r.paymentStatus, r.specialServicing, r.workout, r.valuation, r.occupancy, r.noi, r.dscr, r.masterServicer],
+    ['Example 2019-X1 Mortgage Trust', '37', 'Example Inn Anytown, Lodging', 'Anytown, CO', 6912345.67, '2026-01-01', '90 or more days delinquent (3)', 'since 2026-03-04', 'Foreclosure (2)', 6100000, 0.64, 410000, 0.78, 'Example Master Servicer']);
+  assert.equal(r.ex102, 'https://www.sec.gov/Archives/edgar/data/1900001/000190000126000102/exh_102.xml');
+  assert.equal(r.distributionReport, null, 'only an sec.gov filing address is a link');
+  assert.equal(r.link, 'https://publictrustee.example/foreclosures/FC-2026-0101');
+  assert.deepEqual(countyFilingsFor(file, 'Unknown').map((x) => x.id), ['cmbs:unknown']);
+  assert.deepEqual(countyFilingsFor(null, 'Sample Special Servicing LLC'), []);
+});
+
+test('one servicer\'s page loads the CMBS link file with the loans; the list still loads neither', async () => {
+  const fake = fakePostgrest({ principals: ['pat@example.test'] });
+  const client = platformClient({ url: 'https://example-project.supabase.test', key: 'anon-key', accessToken: 'user:pat@example.test', fetchImpl: fake.fetchImpl });
+  const put = (path, body) => fake.docs.set(path, { path, kind: 'json', body, text: null, version: 1 });
+  put('sources/edgar/servicers.json', { 'Sample Special Servicing LLC': svc('Sample Special Servicing LLC', { specialServicing: 1 }) });
+  put('sources/edgar/loans.json', { 'cmbs:1900001:37': loan('cmbs:1900001:37', 'Sample Special Servicing LLC') });
+  put('loans/cmbs.json', { links: { a: link('a') } });
+  put('loans/docs/example-arapahoe.json', { a: { id: 'a', parties: [{ role: 'grantor', name: 'Zephyrine Hospitality LLC' }] } });
+  await ops.listServicers(client);
+  assert.ok(fake.calls.filter((c) => c.path === 'documents').every((c) => !(c.query.or ?? '').includes('cmbs.json')), 'the list never loads the link file');
+  const d = await ops.servicerDetail(client, 'Sample Special Servicing LLC');
+  assert.deepEqual(d.filings.map((f) => f.id), ['cmbs:a']);
+  const queries = fake.calls.filter((c) => c.path === 'documents').map((c) => c.query.or ?? '');
+  assert.ok(queries.some((q) => q.includes('loans/cmbs.json')) && queries.every((q) => !q.includes('loans/docs')), 'the link file, never a county document');
+  assert.doesNotMatch(JSON.stringify(d), /Zephyrine/);
+  const page = readFileSync(fileURLToPath(new URL('../app/servicers/[name]/page.jsx', import.meta.url)), 'utf8');
+  assert.match(page, /County filings on its loans/);
 });

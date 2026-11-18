@@ -1,6 +1,6 @@
 # County loans: the core of the pipeline
 
-The parts of the county pipeline that do not depend on any county's format (`docs/county-data-build-vs-buy.md` 5.2, components 5 and 9). The goal is to show each bank's individual loans that public records name, on its bank page. Three real counties are built. Caldwell County, Texas (section 8) is enabled, on a principal's recorded decision. Jefferson and Douglas in Colorado (section 5a) are **not enabled**: each waits on a principal's recorded decision. The invented example runs only against its fake.
+The parts of the county pipeline that do not depend on any county's format (`docs/county-data-build-vs-buy.md` 5.2, components 5 and 9). The goal is to show each bank's individual loans that public records name, on its bank page. Three real counties are built, and all three are enabled, each on a principal's recorded decision: Caldwell County, Texas (section 8), and Jefferson and Douglas in Colorado (section 5a, decided 2026-11-18). The weekly job still runs only once a principal sets `COUNTIES_ENABLED`. The invented example runs only against its fake.
 
 **The rule.** Loan and borrower detail is context for the firm's principals only:
 
@@ -94,6 +94,7 @@ One record per public-records document about a loan (`src/loans.mjs`, `buildDocu
 | `loans/review.json` | Names on documents in scope that matched no bank or several, with their candidates; and the names set aside, with their class. |
 | `loans/events.json` | One dated event per document in scope and bank that holds the loan now, written the first time they match. |
 | `loans/state.json` | Each source's last run and up to 12 runs: documents read, new, changed, unchanged (and, for a linked-document source, listed, fetched, held and deferred). For a source that reads report files, the files it has read (address, posted date, ETag, Last-Modified and the report's dates; up to 200), never their contents. A recorded block. Also the index's counts. |
+| `loans/cmbs.json` | One entry per document in scope whose current holder is a CMBS trust: linked to the trust's own loan record from SEC EDGAR, or "trust named, loan not found" with the reason (section 9). **No borrower, address or servicer commentary.** The triage and the special servicer's page read it. |
 | `loans/lists/<source>.json` | A linked-document source's list: each page's ETag, the documents recorded as history on its first run, and the documents held as unreadable, by id and reason. **No name and no link.** |
 
 **The platform.** Every path fits the existing `documents` table (a test checks each path against the table's own path rule).
@@ -280,10 +281,10 @@ Colorado's public trustees in Jefferson and Douglas run GTS (`docs/county-watche
 
 **Not kept:** interest rate and type, the re-recording date and number, the newspaper, and the attorney's phone and fax.
 
-**Not enabled.** Both are registered in `src/counties.mjs`, `sources.json` (`adapter`) and `config.counties.sources` with `enabled: false`, and their adapters' `terms.decision` is unset:
+**Enabled**, on a principal's decision of 2026-11-18, recorded on each adapter's `terms` (`decision: 'allowed'`) and in `sources.json`, and both are `enabled: true` in `config.counties.sources`:
 
-- Jefferson waits on a principal's decision and counsel's note on its "data compilations" copyright claim.
-- Douglas waits on a principal accepting its reports page's terms.
+- Jefferson: its GTS reports may be read weekly by software; only the facts read out are stored, never the county's PDFs. Its "data compilations" copyright claim goes to counsel (D-B9).
+- Douglas: the firm accepts its reports page's terms (lawful and ethical use only, a release of liability).
 
 The backfill of Jefferson's NED archive (`report?t=14`, monthly from January 2025) sits behind the same gate.
 
@@ -295,11 +296,12 @@ The backfill of Jefferson's NED archive (`report?t=14`, monthly from January 202
   - Only rows in scope show (section 3a).
   - With none, the page says which counties are watched and that none has a document for this bank yet.
 - **System status:** a **County records** row per watched county: the last run, documents read, new this week, matched to a bank, and names to review.
-- **The command line:** `outbound loans run | backfill | verify | status | show | review | alias | match | rebuild | events`.
+- **The command line:** `outbound loans run | backfill | verify | status | show | review | alias | match | rebuild | events | cmbs`.
+- **CMBS links** (section 9): a filing whose current holder is a CMBS trust shows on the special servicer's page and as a Watch line in the triage.
 
 ## 7. Not built yet
 
-- Enabling Jefferson and Douglas: each waits on a principal (section 5a). The other counties in the recon.
+- The other counties in the recon.
 - The image reader (component 4).
 - The assessor join that gives `useCode` and `propertyType` (component 3). The scope rule (section 3a) is the commercial filter until then: it reads the loan type and the borrowers, never the property.
 - The loan chain to the current holder (component 6).
@@ -364,3 +366,35 @@ A notice with no lender, or with neither date read, is held, not stored.
 
 **The worker** runs `loans.watch` each Monday, queued by the 13:41 UTC cron before scoring and the triage, once a principal sets the repository variable `COUNTIES_ENABLED` to `true`. That is safe only after the migration is applied. The workflow installs poppler-utils on every run.
 
+
+## 9. The CMBS link
+
+A county filing whose current holder is a CMBS trust (Jefferson's "Current Lender (Beneficiary)" reads "<trustee bank>, as Trustee for the registered holders of <shelf> <series> Mortgage Trust, Commercial Mortgage Pass-Through Certificates, Series <series>") is linked to the trust's own record of the loan in its monthly SEC filing (Form ABS-EE, exhibit 102), which `sources.edgar` stores. The principal then sees the loan's servicing status and the special servicer to call next to the county event. On such a document the index writes no event for the originating bank (section 3a, relation `originated`): the link is its event. `src/cmbslinks.mjs`.
+
+**1. The name** (`cmbsTrustOf`). From each current-holder party (the `holder` or an `assignee`; the `beneficiary` only when no one else holds the loan now; MERS alone is not a holder) it reads the trust and its series (a year, a hyphen and a token: `2020-B21`, `2019-C7`, `2017-SMP`) and the shelf's own words. A residential or consumer securitization is never read as CMBS: "Mortgage Pass-Through Certificates" without "Commercial", Mortgage-Backed, Mortgage Loan Trust, Asset-Backed, Home Equity, Alternative Loan, Residential, Home Loan, ARM trusts and the like. The name only picks candidates. **The proof is `sources/edgar/trusts.json`**, which holds only trusts whose EX-102 is in the SEC's CMBS namespace: the trust must be there, with the same series and, when the name gives one, the same shelf. A name not there is recorded as not found only when it says "Commercial"; otherwise it is left alone (it could be residential).
+
+**2. The asset** (`matchCmbsAsset`), from `sources/edgar/loans.json`, no network:
+
+- required: the trust, the original amount to the dollar (the document's stated `originalPrincipal` against EX-102 `originalLoanAmount`), and a property in the document's state;
+- and also: that property's city (from the document's address, read only to match and never stored) or county agrees, or the trust's `originatorName` is the document's original lender (`lender`, MERS as nominee read through), compared after the lender match's normalising (legal phrases, a leading "The" and the legal form cut). Nothing fuzzy.
+- Two or more candidates, or a missing key: **no link**. The document is recorded as "trust named, loan not found" with the reason (`edgar-not-run`, `trust-not-in-edgar`, `trust-ambiguous`, `no-original-amount`, `no-asset`, `ambiguous`) for a principal to look up by hand. `loans.json` keeps only loans in our metros and sectors, and a pari passu note's trust share is not the whole loan, so a true loan can be not found; it is never guessed.
+
+**3. The block.** A linked entry carries `cmbs`: the trust, CIK, asset number, the property's name and type, the original and current balance, the paid-through date, the payment status, whether it is in special servicing and since when (the transfer date), the workout strategy decoded from the CREFC codes (1 Modification, 2 Foreclosure, 3 Bankruptcy, 4 Extension, 5 Note sale, 6 Discounted payoff, 7 REO, 8 Resolved, 9 Pending return to master servicer, 10 Deed in lieu, 11 Full payoff, 12 Reps and warranties, 13 To be determined, 98 Other), the latest valuation and its date, occupancy, NOI and DSCR, the master servicer (`primaryServicerName`) and the special servicer (the trust's distribution report), and the SEC links (the ABS-EE filing, its EX-102, the 10-D). Every field is picked by name, so **no servicer commentary** (it can name borrowers and people) and **no borrower** is ever stored or shown.
+
+**Where it lives:** `loans/cmbs.json`, one entry per document in scope whose current holder is a CMBS trust, keyed by document id: the document's type, county, date and public link, its stated original amount, the trust as named, the outcome with its reason, what agreed (`matchedOn`) and what differed (`disagreed`), the block, the scope it was written under, and a fixed sentence. No borrower, grantor or owner, no address, APN or legal description. Like every county event it is context only (`scored: false`): no score, weight or tier reads it, and no model-facing action loads it (`LOADS.cmbs`, `test/cmbslinks.test.mjs`).
+
+**The scope rule** (section 3a) applies as everywhere: a document out of scope is never linked, and each entry carries its `scope`, which the triage and the servicer page check again.
+
+**When it is rebuilt.** Whenever either side changes, from stored data only, in its own unit of work (`LOADS.cmbs`, flushed through `flush_uow` like the other jobs), and rewritten only when an entry changed:
+
+- after the county runs of the worker's `loans.watch`;
+- after `sources.edgar`, as the sale ledger is;
+- on the command line after `loans run`, `backfill`, `match`, `alias` and `rebuild`, and `sources run edgar`.
+
+Each job's result carries the link counts only.
+
+**Where it shows:**
+
+- **The weekly triage**, under **Watch** and never act now (`triage.json` strength `county-cmbs`): one line per newly linked document, under its special servicer (as the CMBS findings are), with no signal id. For example (invented): "A notice of election and demand was recorded on November 3, 2026 in Example County, CO on a $7.5M hotel loan held by a CMBS trust (Example 2019-X1 Mortgage Trust, loan 37); it has been with special servicer Sample Special Servicing LLC since March 4, 2026."
+- **The special servicer's page** (`/servicers/<name>`): "County filings on its loans", each with the county filing, the trust's loan, its servicing figures and the SEC links.
+- **The command line:** `outbound loans cmbs`, linked and not found.

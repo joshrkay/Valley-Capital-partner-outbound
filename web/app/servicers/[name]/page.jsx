@@ -12,13 +12,36 @@ export default async function Servicer({ params }) {
   let d;
   try { d = await servicerDetail(ctx.client, name); } catch (e) { return <><ContextOnlyBanner /><Problem text={`This servicer could not be loaded: ${e.message}`} /></>; }
   if (!d) return <><ContextOnlyBanner /><Problem text={`No special servicer named ${name} in the latest EDGAR pull.`} /></>;
-  const { summary: s, loans } = d;
+  const { summary: s, loans, filings = [] } = d;
   return (
     <>
       <ContextOnlyBanner />
       <h1>{s.name}</h1>
       <label className="check codes-toggle" htmlFor="codes"><input type="checkbox" id="codes" /> Show the filing&apos;s field names</label>
       <p className="sub">{s.loans} loans in our metros and sectors · {moneyDollars(s.balance)} · {s.specialServicing} in special servicing · {s.noteSale} coded for a note sale · {s.delinquent} delinquent · {s.maturing} maturing</p>
+      {filings.length ? (
+        <div className="panel">
+          <h3>County filings on its loans <span className="muted small">{filings.length}</span></h3>
+          <p className="src">Foreclosure filings in the counties we watch whose current holder is a CMBS trust, linked to the trust&apos;s own record of the loan (SEC Form ABS-EE, exhibit 102) by the original amount, the state, and the city, county or originator. Context only: never scored, never in a message.</p>
+          {filings.map((f) => (
+            <div key={f.id} className="mt8">
+              <p>{f.label}</p>
+              <dl className="kv small">
+                <dt>County filing</dt><dd>{f.type}, {f.county} · {f.dateKind} {f.date ?? '–'}{f.originalPrincipal !== null ? ` · original amount ${moneyDollars(f.originalPrincipal)}` : ''}{f.link ? <> · <a href={f.link} rel="noopener noreferrer nofollow" target="_blank">county record</a></> : null}</dd>
+                <dt>Trust&apos;s loan</dt><dd>{f.trust} · loan {f.assetNumber}{f.property ? ` · ${f.property}` : ''}{f.place ? ` · ${f.place}` : ''}<span className="code">matched on {f.matchedOn.join(', ')}{f.disagreed.length ? `; differs on ${f.disagreed.join(', ')}` : ''}</span></dd>
+                <dt>Balance</dt><dd>{moneyDollars(f.balance)}{f.paidThrough ? ` · paid through ${f.paidThrough}` : ''}<span className="code">reportPeriodEndActualBalanceAmount, paidThroughDate · period {f.reportingPeriod ?? '–'}</span></dd>
+                <dt>Payment status</dt><dd>{f.paymentStatus ?? '–'}<span className="code">paymentStatusLoanCode</span></dd>
+                <dt>Special servicing</dt><dd>{f.specialServicing ?? 'not in special servicing'}<span className="code">mostRecentSpecialServicerTransferDate</span></dd>
+                <dt>Workout</dt><dd>{f.workout ?? '–'}<span className="code">workoutStrategyCode</span></dd>
+                <dt>Valuation</dt><dd>{moneyDollars(f.valuation)}{f.valuationDate ? ` as of ${f.valuationDate}` : ''}<span className="code">mostRecentValuationAmount, mostRecentValuationDate</span></dd>
+                <dt>Occupancy · NOI · DSCR</dt><dd>{f.occupancy === null ? '–' : pct(f.occupancy, 0)} · {moneyDollars(f.noi)} · {f.dscr === null ? '–' : `${num(f.dscr, 2)}x`}<span className="code">mostRecentPhysicalOccupancyPercentage, mostRecentNetOperatingIncomeAmount, mostRecentDebtServiceCoverage</span></dd>
+                <dt>Servicers</dt><dd>master {f.masterServicer ?? '–'} · special {f.specialServicer ?? '–'}<span className="code">primaryServicerName; the trust&apos;s distribution report</span></dd>
+                <dt>SEC filings</dt><dd>{[[f.ex102, 'EX-102'], [f.absEe, 'ABS-EE filing'], [f.distributionReport, 'distribution report (10-D)']].filter(([u]) => u).map(([u, t], i) => <span key={t}>{i ? ' · ' : ''}<a href={u} rel="noopener noreferrer nofollow" target="_blank">{t}</a></span>)}</dd>
+              </dl>
+            </div>
+          ))}
+        </div>
+      ) : null}
       {loans.map((l) => {
         const src = sourceLine(l._source);
         const url = filingUrl(l._source, l.cik);
