@@ -26,7 +26,14 @@ Start with `docs/prd-signal-pipeline.md` for the pipeline, and `docs/research-ag
 - **Enforcement orders have run live from the Federal Reserve and the OCC** (2026-11-16). **FDIC orders are built blind and run on a principal's machine** (see below); their first run there is the test. State orders were checked and not built (PRD next-five E18-S2). Orders add no points (D-E1).
 - **The platform is built but not deployed.** The migrations and their access rules pass 16 tests on Postgres 16 (`npm run test:db`). The client, worker and web app are tested against a fake of Supabase's REST API; the first run against a real project is E12-S7, which needs a Supabase project and a Vercel team (PRD Q17, Q18).
 - **Not built yet:**
-  - county records (PRD E5; the spike first);
+  - county records beyond Caldwell (PRD E5). Built (`docs/county-loans.md`):
+    - the document record and its weekly diff;
+    - the lender match to `fdic:CERT`;
+    - the notice-list adapter interface with an invented example;
+    - "Loans we can see" on the bank page and county rows on Status;
+    - the first real county, Caldwell County, TX (its posted notices of trustee's sale, read weekly on a principal's decision of 2026-11-18, each notice's OCR text read with `pdftotext` from poppler-utils), and the weekly worker job `loans.watch`, whose migration is written but not applied.
+
+    No other county adapter exists yet;
   - servicers as scored candidates (E4-S3);
   - a contact-data vendor's API (E7-S2 tests a vendor's exported results; no vendor is wired in);
   - deploying the platform (E12-S7);

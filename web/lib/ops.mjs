@@ -81,17 +81,28 @@ async function listCandidateRows(client, { tier, metro } = {}) {
   });
 }
 
-// The candidate, its decision, and its paper estimate (PRD E14-S1): one document, paper/fdic-<CERT>.json, read with the principal's own
-// token like every other document, so row-level security decides. Only that one record is loaded, never the whole paper/ folder.
+// The candidate, its decision, its paper estimate (PRD E14-S1) and the loans we can see in county records (docs/county-loans.md): the
+// documents paper/fdic-<CERT>.json and loans/banks/fdic-<CERT>.json, and the small loans/state.json that names the watched counties,
+// read with the principal's own token like every other document, so row-level security decides. Only this bank's two records are
+// loaded, never the whole paper/ or loans/ folder, and never a county document itself (its borrower and address stay out of the page).
 export async function candidateDetail(client, key) {
   const item = await client.candidate(need(key, 'A candidate key'));
   if (!item) return null;
-  const { candidates, paper } = await mods();
-  let rel = null;
-  try { rel = paper.paperRel(key); } catch { rel = null; }   // not a bank key: no record
-  const snap = await client.load(['suppression.json', 'candidates/decisions.json', 'candidates/aliases.json', ...(rel ? [rel] : [])]);
+  const [{ candidates, paper }, loansMod, counties, rules] = await Promise.all([mods(), engine('src/loans.mjs'), engine('src/counties.mjs'), loadRules()]);
+  let rel = null, loanRel = null;
+  try { rel = paper.paperRel(key); loanRel = loansMod.loanBankRel(key); } catch { rel = null; loanRel = null; }   // not a bank key: no record
+  const snap = await client.load(['suppression.json', 'candidates/decisions.json', 'candidates/aliases.json', ...(rel ? [rel, loanRel, loansMod.LOAN_STATE_REL] : [])]);
   const suppressed = !!candidates.suppressedBy(item, snap.docs['suppression.json']?.entries ?? [], snap.docs['candidates/aliases.json'] ?? {});
-  return { item, decision: (snap.docs['candidates/decisions.json'] ?? {})[key] ?? null, suppressed, paper: rel ? snap.docs[rel] ?? null : null };
+  const watched = counties.watchedCounties({ config: rules.config.counties, state: snap.docs[loansMod.LOAN_STATE_REL] ?? {} });
+  return { item, decision: (snap.docs['candidates/decisions.json'] ?? {})[key] ?? null, suppressed, paper: rel ? snap.docs[rel] ?? null : null, loans: loanRel ? snap.docs[loanRel] ?? null : null, watched };
+}
+
+// The county rows for System status (docs/county-loans.md): each watched county's last run, documents read, new this week and matched to
+// a bank, from one small document (loans/state.json). Counts only: no name, no document.
+export async function countyCoverage(client, { now = new Date() } = {}) {
+  const [loansMod, counties, rules] = await Promise.all([engine('src/loans.mjs'), engine('src/counties.mjs'), loadRules()]);
+  const snap = await client.load([loansMod.LOAN_STATE_REL]);
+  return counties.countyCoverage({ config: rules.config.counties, state: snap.docs[loansMod.LOAN_STATE_REL] ?? {}, now });
 }
 
 export async function promote(client, { key, by }) {

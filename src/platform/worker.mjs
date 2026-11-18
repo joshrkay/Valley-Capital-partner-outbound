@@ -21,10 +21,36 @@ import { runDrafter } from '../draft.mjs';
 import { loadContext } from '../guard.mjs';
 import { researchGate } from '../pilot.mjs';
 import { runCallPrep, runCallExtract, callLoads, needDate } from '../calls.mjs';
+import { runNoticeSource, enabledSourceIds } from '../sources/notices.mjs';
+import { COUNTY_SOURCES } from '../counties.mjs';
 
-export const JOB_KINDS = ['sources.fdic', 'sources.edgar', 'sources.filings', 'sources.fdicsales', 'sources.enforcement', 'sources.mergerapps', 'score.run', 'triage.run', 'research.run', 'draft.run', 'call.prep', 'call.extract'];
+export const JOB_KINDS = ['sources.fdic', 'sources.edgar', 'sources.filings', 'sources.fdicsales', 'sources.enforcement', 'sources.mergerapps', 'loans.watch', 'score.run', 'triage.run', 'research.run', 'draft.run', 'call.prep', 'call.extract'];
 const ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const CHANNELS = ['email', 'letter', 'call', 'linkedin_note'];
+
+// One county's run, in counts only: no name, no address, no document link (docs/county-loans.md).
+const countySummary = (id, r) => ({ source: id, outcome: r.outcome, listed: r.listed ?? null, read: r.read ?? null, added: r.added ?? null, changed: r.changed ?? null,
+  fetched: r.fetched ?? null, held: r.held ?? null, deferred: r.deferred ?? null, requests: r.requests ?? null, blocked: !!r.blocked, missingFields: r.missingFields ?? null,
+  matchedDocuments: r.index?.matchedDocuments ?? null, eventsNew: r.index?.eventsNew ?? null, review: r.index?.review ?? null, ...(r.errors?.length ? { error: String(r.errors[0]).slice(0, 300) } : {}) });
+
+// The county watchers: every enabled source (enabledSourceIds: those config.counties.watch lists and config.counties.sources does not
+// mark not enabled, and those it marks enabled), each in its own unit of work, one after another. Jefferson and Douglas, registered and
+// not enabled, are not read; enabling one in config.counties.sources adds it here with no other change. A source its gate refuses (no
+// decision, the terms recheck date passed, a recorded block) is reported as refused; the others still run.
+export async function watchCounties({ client, rules, deps = {}, registry = COUNTY_SOURCES }) {
+  const counties = rules.config.counties ?? {};
+  const out = [];
+  for (const id of enabledSourceIds(counties)) {
+    const source = registry[id];
+    if (!source) { out.push({ source: id, outcome: 'refused', error: `No county source "${id}" is registered (src/counties.mjs).` }); continue; }
+    try {
+      const { result } = await client.unitOfWork(LOADS.loans, (dir) => runNoticeSource({ dir, source, counties, fetchImpl: deps.fetchImpl ?? globalThis.fetch, now: deps.now?.() ?? new Date(),
+        ...(deps.sleep ? { sleep: deps.sleep } : {}), ...(deps.nowMs ? { nowMs: deps.nowMs } : {}), ...(deps.pdfToText ? { pdfToText: deps.pdfToText } : {}) }), { retries: 0 });
+      out.push(countySummary(id, result));
+    } catch (e) { out.push({ source: id, outcome: 'refused', error: String(e.message ?? e).slice(0, 300) }); }
+  }
+  return out;
+}
 
 // Counts only, for a job's stored result.
 const ledgerSummary = (l) => (l ? { outcome: l.outcome, events: l.events ?? null, added: l.added ?? null, unsupported: l.unsupported ?? null, byKind: l.byKind ?? null } : null);
@@ -85,6 +111,12 @@ export async function runJob({ client, job, rules, deps = {} }) {
     case 'sources.mergerapps': {   // merger applications (PRD next-five E18-S3): the Federal Reserve's weekly H.2
       const { result } = await client.unitOfWork(LOADS.mergers, (dir) => runMergerApps({ dir, mergers: rules.config.mergers, fetchImpl: deps.fetchImpl ?? globalThis.fetch, now: deps.now?.() ?? new Date(), ...(deps.sleep ? { sleep: deps.sleep } : {}) }), { retries: 0 });
       return { ok: result.outcome !== 'failed', summary: { outcome: result.outcome, weeks: result.weeks, rowsRead: result.rowsRead, kept: result.kept, applications: result.applications, applicationsNew: result.applicationsNew, outcomes: result.outcomes, closed: result.closed, requests: result.requests, changed: result.changed, missingFields: result.missingFields } };
+    }
+    case 'loans.watch': {   // the county watchers (docs/county-loans.md), weekly: every county in config.counties.watch
+      const counties = await watchCounties({ client, rules, deps });
+      // Done only when every watched county ran: a refusal (the terms recheck is due, a block) or a failure turns the workflow red,
+      // which is how a principal hears of it.
+      return { ok: counties.every((c) => c.outcome === 'ok'), summary: { watched: counties.length, counties } };
     }
     case 'score.run': {
       const { result } = await client.unitOfWork(LOADS.score, (dir) => runScoring({ dir, buybox: rules.buybox, scoring: rules.scoring, metros: rules.metros, allowPlaceholders: !!p.draftBuybox, now: deps.now?.() ?? new Date() }));

@@ -8,5 +8,6 @@ data/
 /backtest/
 /intermediaries/
 /market/
+/loans/
 KILL
 .DS_Store

@@ -45,10 +45,18 @@ async function readCapped(res, maxBytes) {
   return { text: bytes.toString('utf8'), truncated };
 }
 
-async function request(url, params, { as, maxBytes, accept, fetchImpl = globalThis.fetch, timeoutMs = 60000, retries = 3, backoffMs = 1000, maxBackoffMs = 30000, userAgent, sleep = realSleep } = {}) {
+// The server's validators, for a conditional request next time, and the body's type.
+const validators = (res) => ({ etag: res?.headers?.get?.('etag') ?? null, lastModified: res?.headers?.get?.('last-modified') ?? null, contentType: res?.headers?.get?.('content-type') ?? null });
+
+// `conditional: { etag, lastModified }` (text, bytes and file only) sends a conditional GET: a server with nothing newer answers 304,
+// and this returns { notModified: true } with no body, so an unchanged page or file costs no download.
+async function request(url, params, { as, maxBytes, accept, fetchImpl = globalThis.fetch, timeoutMs = 60000, retries = 3, backoffMs = 1000, maxBackoffMs = 30000, userAgent, sleep = realSleep, conditional = null } = {}) {
   const full = buildUrl(url, params);
   const headers = { accept };
   if (userAgent) headers['user-agent'] = userAgent;
+  const ask = as !== 'json' && conditional && (conditional.etag || conditional.lastModified);
+  if (ask && conditional.etag) headers['if-none-match'] = String(conditional.etag);
+  if (ask && conditional.lastModified) headers['if-modified-since'] = String(conditional.lastModified);
   let lastErr;
   for (let attempt = 1; attempt <= retries + 1; attempt++) {
     let res;
@@ -61,9 +69,10 @@ async function request(url, params, { as, maxBytes, accept, fetchImpl = globalTh
       await sleep(Math.min(backoffMs * 2 ** (attempt - 1), maxBackoffMs));
       continue;
     }
+    if (ask && res.status === 304) return { status: 304, notModified: true, text: '', bytes: null, truncated: false, ...validators(res) };
     if (res.ok) {
-      if (as === 'text') return readCapped(res, maxBytes);
-      if (as === 'bytes') return readCappedBytes(res, maxBytes);
+      if (as === 'text') return { status: res.status, notModified: false, ...(await readCapped(res, maxBytes)), ...validators(res) };
+      if (as === 'bytes' || as === 'file') return { status: res.status, notModified: false, ...(await readCappedBytes(res, maxBytes)), ...validators(res) };
       try { return await res.json(); } catch (e) { throw new HttpError(`Response from ${url} was not JSON: ${e.message}`, { status: res.status, url, attempts: attempt }); }
     }
     lastErr = new HttpError(`HTTP ${res.status} from ${url}`, { status: res.status, url, attempts: attempt });
@@ -76,11 +85,18 @@ async function request(url, params, { as, maxBytes, accept, fetchImpl = globalTh
 
 export const getJson = (url, params = {}, opts = {}) => request(url, params, { ...opts, as: 'json', accept: 'application/json' });
 
-// Text (XML, HTML, an index file). Returns { text, truncated }. With maxBytes, stops reading once that much has arrived.
+// Text (XML, HTML, an index file). Returns { text, truncated, status, notModified, etag, lastModified, contentType }. With maxBytes,
+// stops reading once that much has arrived.
 export const getText = (url, params = {}, opts = {}) => request(url, params, { ...opts, as: 'text', accept: opts.accept ?? '*/*' });
 
-// Raw bytes (a PDF). Returns { bytes: Buffer, truncated }. With maxBytes, stops reading once that much has arrived.
+// Raw bytes (a PDF). Returns { bytes: Buffer, truncated, status, notModified, etag, lastModified, contentType }. With maxBytes, stops
+// reading once that much has arrived.
 export const getBytes = (url, params = {}, opts = {}) => request(url, params, { ...opts, as: 'bytes', accept: opts.accept ?? '*/*' });
+
+// A file whose version matters (a report re-posted under the same name each week): its bytes with the server's ETag and Last-Modified.
+// With `conditional: { etag, lastModified }` from an earlier read, a server that has nothing newer answers 304, and this returns
+// { notModified: true, bytes: null } without a body. Returns { status, notModified, bytes, truncated, etag, lastModified, contentType }.
+export const getFile = (url, opts = {}) => request(url, {}, { ...opts, as: 'file', accept: opts.accept ?? '*/*' });
 
 // Spaces calls at least `minIntervalMs` apart. Sources are read sequentially, so this is the whole rate limit.
 export function pacer(minIntervalMs = 0, { sleep = realSleep, now = () => Date.now() } = {}) {

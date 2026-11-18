@@ -97,19 +97,19 @@ test('Q7 on the page, with the shipped buy box: the status rule (D-P3), each sec
 });
 
 // The bank page in its new order (docs/design-redesign.md, 5.3): the short answer first and "What to ask for" last, across the tabs.
-const SECTION_FILES = ['paper-estimate.jsx', 'answer.jsx', 'holdings.jsx', 'fit-ranges.jsx', 'more-detail.jsx', 'ask-for.jsx', 'where.jsx', 'sidebar.jsx', 'highlights.jsx', 'bank-record.jsx', 'page.jsx'];
+const SECTION_FILES = ['paper-estimate.jsx', 'answer.jsx', 'holdings.jsx', 'fit-ranges.jsx', 'loans.jsx', 'more-detail.jsx', 'ask-for.jsx', 'where.jsx', 'sidebar.jsx', 'highlights.jsx', 'bank-record.jsx', 'page.jsx'];
 const bankSrc = (f) => readFileSync(new URL(`../app/candidates/[key]/${f}`, import.meta.url), 'utf8');
 
 test('the bank page renders from the record only, in its new section order, as server components with no secret', async () => {
   for (const f of SECTION_FILES) assert.doesNotMatch(bankSrc(f), /'use client'|"use client"|process\.env|SERVICE|fetch\(|dangerouslySetInnerHTML/, `${f}: a server component with no secrets, fetches or raw HTML`);
   const { SECTIONS, TABS } = await import('../lib/bank-view.mjs');
-  assert.deepEqual(SECTIONS.map(([, title]) => title), ['The short answer', 'Why now', 'What it holds', 'How much could we buy?', 'More detail', 'What to ask for']);
-  assert.deepEqual(TABS.map(([k]) => k), ['overview', 'holdings', 'fit', 'details']);
+  assert.deepEqual(SECTIONS.map(([, title]) => title), ['The short answer', 'Why now', 'What it holds', 'How much could we buy?', 'Loans we can see', 'More detail', 'What to ask for']);
+  assert.deepEqual(TABS.map(([k]) => k), ['overview', 'holdings', 'fit', 'loans', 'details']);
   assert.deepEqual([...new Set(SECTIONS.map(([, , tab]) => tab))], TABS.map(([k]) => k), 'the sections run through the tabs in order');
   // The composer places the sections in that order: the short answer first, What to ask for last.
   const src = bankSrc('paper-estimate.jsx');
   const at_ = (s) => { const i = src.indexOf(s); assert.ok(i > 0, s); return i; };
-  const order = ['<Answer ', '<WhyNow ', '<Holdings ', '<FitRanges ', '<MoreDetail ', '<AskFor '].map(at_);
+  const order = ['<Answer ', '<WhyNow ', '<Holdings ', '<FitRanges ', '<LoansSection ', '<MoreDetail ', '<AskFor '].map(at_);
   assert.deepEqual(order, [...order].sort((a, b) => a - b), 'the short answer first; what to ask for last');
   assert.match(bankSrc('answer.jsx'), /The short answer/);
   assert.match(bankSrc('ask-for.jsx'), /What to ask for[\s\S]*the loan tape/);

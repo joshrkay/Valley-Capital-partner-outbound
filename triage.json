@@ -15,7 +15,7 @@
     "requirePassesFilters": true
   },
   "watch": {
-    "_note": "What counts as WATCH: every other new signal (other SEC filings, acquisitions, CMBS loans newly in special servicing), Tier B movements (a new Tier B candidate, a move down from Tier A), and state signals that turned on. stateSignalTiers: state signals are compared only for banks in these tiers now or at the last triage. signalsOff: also list state signals that turned off. droppedOut: also list candidates that left Tiers A and B. All PLACEHOLDERS.",
+    "_note": "What counts as WATCH: every other new signal (other SEC filings, acquisitions, CMBS loans newly in special servicing), a county document newly matched to a bank (docs/county-loans.md; always watch, never act now, and never a signal), Tier B movements (a new Tier B candidate, a move down from Tier A), and state signals that turned on. stateSignalTiers: state signals are compared only for banks in these tiers now or at the last triage. signalsOff: also list state signals that turned off. droppedOut: also list candidates that left Tiers A and B. All PLACEHOLDERS.",
     "stateSignalTiers": ["A", "B"],
     "signalsOff": true,
     "droppedOut": true
@@ -42,6 +42,7 @@
     "new-tier-b": 45,
     "tier-down-b": 40,
     "state-on": 35,
+    "county-document": 30,
     "dropped": 20,
     "state-off": 10
   },

@@ -7,12 +7,14 @@ import { priorityOf, bestCeiling, sectorWord, AXES, axesOf, axisMax, tierGap, ti
 
 // ---- Layout ---------------------------------------------------------------------------------------------------------------------
 // Tabs are links rendered on the server (?tab=...), so the page needs no client script.
-export const TABS = Object.freeze([['overview', 'Overview'], ['holdings', 'What it holds'], ['fit', 'How much could fit'], ['details', 'Details']]);
+// "Loans we can see" (docs/county-loans.md) is its own tab: individual loans from county records, a different kind of evidence from
+// the reported figures on the tabs before it.
+export const TABS = Object.freeze([['overview', 'Overview'], ['holdings', 'What it holds'], ['fit', 'How much could fit'], ['loans', 'Loans we can see'], ['details', 'Details']]);
 export const tabOf = (sp) => { const t = Array.isArray(sp?.tab) ? sp.tab[0] : sp?.tab; return TABS.some(([k]) => k === t) ? t : 'overview'; };
 // The page's sections top to bottom across the tabs: the short answer first, What to ask for last.
 export const SECTIONS = Object.freeze([
   ['answer', 'The short answer', 'overview'], ['why', 'Why now', 'overview'], ['holdings', 'What it holds', 'holdings'],
-  ['fit', 'How much could we buy?', 'fit'], ['more', 'More detail', 'details'], ['ask', 'What to ask for', 'details'],
+  ['fit', 'How much could we buy?', 'fit'], ['loans', 'Loans we can see', 'loans'], ['more', 'More detail', 'details'], ['ask', 'What to ask for', 'details'],
 ]);
 
 // ---- Names --------------------------------------------------------------------------------------------------------------------

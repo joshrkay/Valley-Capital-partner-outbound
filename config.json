@@ -64,6 +64,23 @@
     "minIntervalMs": 1000,
     "minRowsPerWeek": 5
   },
+  "counties": {
+    "_note": "County records watchers (docs/county-loans.md; county-data-build-vs-buy 3.4 and 5.2, component 9). Each county's adapter is registered in src/counties.mjs; a county is watched once a principal lists its source id in watch, after its robots.txt and terms are read and dated (D-B8) and its decision is recorded in sources.json. Caldwell County, TX (tx-caldwell-notices-of-sale) is watched from 2026-11-18, on a principal's decision of that date; the worker reads every watched county each Monday (job loans.watch). userAgent: the firm's name and a monitored business contact, sent with every request. minIntervalMs: at least this long between requests to a county host (the county playbook's 3 a minute); a source's own pacing (Caldwell: 21 seconds) or a longer Crawl-delay in robots.txt wins. maxBytes: the most of one list page read. maxDocumentBytes: the most of one linked document (a scanned notice) read. maxDocumentsPerRun: the most linked documents fetched in one run; the rest wait for the next. backfillDays: on a source's first run, only documents its list dates within this many days are read; older ones are recorded as history and never fetched. freshDays: the verify check fails when a source's last good run is older. PLACEHOLDERS for a principal to review.",
+    "userAgent": "Valley Capital Partners josh@valleycapitalpartner.com",
+    "minIntervalMs": 20000,
+    "maxBytes": 5000000,
+    "maxDocumentBytes": 15000000,
+    "maxDocumentsPerRun": 40,
+    "backfillDays": 60,
+    "freshDays": 10,
+    "watch": ["tx-caldwell-notices-of-sale"],
+    "sources": {
+      "_note": "Each registered real county source, by id (src/counties.mjs), with whether it may run. enabled is false until a principal has recorded the decision the adapter's terms carry (terms.decision 'allowed', with the date and who decided); runNoticeSource refuses a source marked false, and nothing is fetched. waitingOn says what it waits on. The weekly job (loans.watch) reads every enabled source: each one listed in watch that is not marked false here, and each one marked true here.",
+      "tx-caldwell-notices-of-sale": { "enabled": true, "decided": "A principal's decision of 2026-11-18, recorded in sources.json (principalDecision): weekly, lender-level use only, no individual named in a notice contacted, the disclaimer rechecked monthly." },
+      "jefferson": { "enabled": false, "waitingOn": "A principal's recorded decision that Jefferson's GTS reports (the NED report and the pre-sale list) may be read by software, and counsel's note on the county's copyright claim in data compilations (D-B9). The watcher stores extracted fields only." },
+      "douglas": { "enabled": false, "waitingOn": "A principal recording that the firm accepts the Douglas reports page's terms (lawful and ethical use only, a release of liability); opening a report is taken as accepting them." }
+    }
+  },
   "sales": {
     "_note": "The who-sells-to-whom ledger (PRD E16, outbound sales build). filingSearches: the saved searches in filings.json whose hit on a bank's filing counts as a disclosed sale (8-K Item 2.01, a completed acquisition or disposition of assets, may also be the bank BUYING: the event says so). acquisitionKinds: the FDIC structure-event kinds that count as a whole-bank acquisition; affiliate-reorganization (224, inside one holding company) is left out, as in scoring.json. Both lists are PLACEHOLDERS for a principal to review.",
     "filingSearches": ["8k-acquisition", "loan-sale-cre", "note-sale-cre"],

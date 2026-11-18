@@ -643,6 +643,22 @@ pre.text { white-space: pre-wrap; word-wrap: break-word; font-family: var(--font
 .stopwatch .clock { font-size: 1.6rem; font-weight: 700; }
 details.panel summary { cursor: pointer; }
 
+/* Loans we can see (docs/county-loans.md): a table on a wide screen, one block per document on a phone, each value under its label. */
+table.plain.loans td { min-width: 0; }
+table.plain.loans td > div + div { margin-top: 2px; }
+table.plain.loans td.nowrap, table.plain.loans td.amount > div:not(.small) { white-space: nowrap; }
+@media (max-width: 760px) {
+  table.plain.loans thead { display: none; }
+  table.plain.loans, table.plain.loans tbody, table.plain.loans tr, table.plain.loans td { display: block; width: auto; }
+  table.plain.loans tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px 14px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+  table.plain.loans tbody tr:first-child { padding-top: 4px; }
+  table.plain.loans td { padding: 0; border: 0; }
+  table.plain.loans td:first-child, table.plain.loans td:last-child, table.plain.loans td.amount { grid-column: 1 / -1; }
+  table.plain.loans td .kind { display: none; }
+  table.plain.loans td::before { content: attr(data-label); display: block; font-size: .6875rem; font-weight: 700; color: var(--muted); }
+  table.plain.loans td:first-child::before { display: none; }
+}
+
 @media (max-width: 1080px) {
   .rec-grid, .home-grid { grid-template-columns: minmax(0, 1fr); }
 }

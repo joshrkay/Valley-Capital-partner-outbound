@@ -1,6 +1,7 @@
 import { requirePrincipal } from '../../lib/session.mjs';
-import { statusOverview, coverageOverview, registrationReminders } from '../../lib/ops.mjs';
+import { statusOverview, coverageOverview, registrationReminders, countyCoverage } from '../../lib/ops.mjs';
 import { coverageCard } from '../../lib/coverage-view.mjs';
+import { countyRows } from '../../lib/loans-view.mjs';
 import { NotAuthorized, Problem } from '../ui.jsx';
 import { Outcomes } from './outcomes.jsx';
 import StatusView from './status-view.jsx';
@@ -19,6 +20,9 @@ export default async function Status() {
   // Buyer-list re-certifications due soon (next-five E19-S3); a failure hides only this card.
   let reminders = [];
   try { reminders = await registrationReminders(ctx.client); } catch { reminders = []; }
-  return <StatusView s={s} cov={cov} covError={covError} reminders={reminders} outcomes={<Outcomes client={ctx.client} />}
+  // A row per watched county (docs/county-loans.md), from one small document; a failure hides only this table.
+  let counties = [], countiesError = null;
+  try { counties = countyRows(await countyCoverage(ctx.client)); } catch (e) { countiesError = e.message; }
+  return <StatusView s={s} cov={cov} covError={covError} reminders={reminders} counties={counties} countiesError={countiesError} outcomes={<Outcomes client={ctx.client} />}
     scoreCheck={<a href="/calibration">Score check</a>} />;
 }
