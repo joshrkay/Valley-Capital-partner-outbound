@@ -50,7 +50,7 @@ test('LOADS: loans/ is out of the drafter\'s list, every other model-facing list
   for (const p of LOAN_PATHS) assert.ok(!LOADS.score.some((x) => covers(x, p)), `scoring covers ${p}`);
   assert.ok(!LOADS.draft.some((p) => p === '' || 'loans/'.startsWith(p) || p.startsWith('loans')), `LOADS.draft: ${LOADS.draft.join(', ')}`);
   assert.deepEqual(LOADS.loans, ['loans/', 'sources/fdic/institutions.json', 'candidates/aliases.json', 'sources/runs.jsonl']);
-  assert.deepEqual(LOADS.triage.filter((p) => p.startsWith('loans')), ['loans/events.json'], 'the triage reads the events only, never the documents');
+  assert.deepEqual(LOADS.triage.filter((p) => p.startsWith('loans')), ['loans/events.json', 'loans/cmbs.json'], 'the triage reads the events and the CMBS links only, never the documents');
   // Scoring's rules name no county signal.
   assert.doesNotMatch(JSON.stringify(rules.scoring.signals ?? []), /county|trustee|loan document|lis pendens/i);
 });
@@ -137,4 +137,29 @@ test('the weekly triage: each new event is a Watch line in the event\'s own sent
   await county(dir2, new Date('2026-11-15T12:00:00Z'));
   const t3 = runTriage({ dir: dir2, rules: rules.triage, now: NOW, metros: rules.metros, scoring: rules.scoring });
   assert.ok(![...t3.actNow, ...t3.watch].some((i) => i.key === 'fdic:101'), 'the dismissed bank is not brought back by a county event');
+});
+
+test('the weekly triage lists only what the scope rule allows: no home mortgage, no bank that only originated the loan, nothing written before the rule', async () => {
+  const dir = await world();
+  const rows = () => [
+    ROWS()[0],
+    // Every grantor a person and no loan type: a home mortgage, out of scope.
+    { ...ROWS()[1], number: '2026-777003', grantor: 'Pat Example and Jordan Example' },
+    // The bank made the loan; a CMBS trust's trustee holds it now: on the bank's page, never This week.
+    { ...ROWS()[1], number: '2026-777004', holder: 'Sample Trust Company, N.A., as trustee for Sample Commercial Mortgage Trust 2019-C1', grantor: 'Zephyrine Retail LLC' },
+  ];
+  const at = new Date('2026-11-15T12:00:00Z');
+  const r = await runNoticeSource({ dir, source: exampleCounty, counties: rules.config.counties, fetchImpl: fakeCounty({ rows: rows() }).fetchImpl, sleep: async () => {}, now: at, clock: () => at, allowExample: true });
+  assert.deepEqual([r.outcome, r.inScope, r.outOfScope, r.index.originated, r.index.eventsNew], ['ok', 2, 1, 1, 1], JSON.stringify(r));
+  assert.equal(readBankLoans({ dir, key: 'fdic:101' }).loans.find((l) => l.documentNumber === '2026-777004').relationLabel,
+    'Originated by this bank; now held by Sample Trust Company, N.A., as trustee for Sample Commercial Mortgage Trust 2019-C1');
+  // An event written before the scope rule (no scope, no relation), as a folder pulled before the rebuild holds: the guard keeps it off.
+  const events = readJson(join(dir, 'loans', 'events.json'));
+  const stale = { ...Object.values(events)[0], id: 'county:example-county:2026-777009:fdic:101', documentId: 'example-county:2026-777009', label: 'A stale event written before the scope rule.' };
+  delete stale.scope;
+  delete stale.relation;
+  writeJson(join(dir, 'loans', 'events.json'), { ...events, [stale.id]: stale });
+  const t = runTriage({ dir, rules: rules.triage, now: NOW, metros: rules.metros, scoring: rules.scoring });
+  const mine = [...t.actNow, ...t.watch].flatMap((i) => i.findings).filter((f) => f.type === 'county-document');
+  assert.deepEqual(mine.map((f) => f.reason), ['A notice of trustee\'s sale was recorded on November 11, 2026 for a loan from this bank on a property in Example County, CO.']);
 });

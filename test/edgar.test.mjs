@@ -92,6 +92,8 @@ test('the special servicer: the reviewed name when it matches, otherwise only th
   assert.deepEqual(unknown, { name: 'Other Asset Management LLC', matched: false, all: ['Other Asset Management LLC'] });
   assert.doesNotMatch(JSON.stringify(unknown), /Pat Person|555|@/);
   assert.equal(specialServicerFromReport('<p>No such label here</p>').name, null);
+  // A cell split before its suffix ("Other Asset Management," | "LLC") leaves no trailing comma on the name.
+  assert.equal(specialServicerFromReport('<table><tr><td>Special Servicer</td><td>Other Asset Management,</td><td>LLC</td></tr></table>').name, 'Other Asset Management');
 });
 
 test('a full run: CMBS trusts only, metro loans only, servicer named, every request identified, big non-CMBS files never fetched', async () => {

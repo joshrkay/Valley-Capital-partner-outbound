@@ -172,7 +172,8 @@ export function toLoan({ asset, trust, idx, sectors, src }) {
   return {
     key: `cmbs:${trust.cik}:${f.assetNumber}`, cik: trust.cik, trust: trust.name, assetNumber: f.assetNumber,
     period: mdy(f.reportingPeriodEndDate), originated: mdy(f.originationDate), originalBalance: num(f.originalLoanAmount),
-    balance: num(f.reportPeriodEndActualBalanceAmount), rate: num(f.reportPeriodInterestRatePercentage ?? f.originalInterestRatePercentage),
+    balance: num(f.reportPeriodEndActualBalanceAmount), paidThrough: mdy(f.paidThroughDate),   // the CMBS link's block (src/cmbslinks.mjs)
+    rate: num(f.reportPeriodInterestRatePercentage ?? f.originalInterestRatePercentage),
     maturity: mdy(f.maturityDate), postModificationMaturity: mdy(f.postModificationMaturityDate),
     paymentStatus: code('paymentStatus', f.paymentStatusLoanCode), workout: code('workout', f.workoutStrategyCode),
     workouts: workoutList.map((w) => code('workout', w)),   // the full list: the schema lets the code repeat
@@ -295,7 +296,7 @@ export function specialServicerFromReport(html, known = []) {
   for (const m of [...cells.matchAll(/Special(?: \| | )Servicer\b/gi)].slice(0, 25)) {
     const cell = cells.slice(m.index + m[0].length).replace(/^[\s:|-]+/, '').split(' | ')[0];
     if (!/[A-Za-z]/.test(cell) || heading.test(cell)) continue;
-    const firm = cell.split(new RegExp(`\\s(?:${COVER_LABELS.join('|')}|Attention|Attn|Contact|Phone|Tel|Email|E-mail|Fax|www\\.|\\(\\d{3}\\)|\\d{3}[-.]\\d{3})`, 'i'))[0].trim().slice(0, 80);
+    const firm = cell.split(new RegExp(`\\s(?:${COVER_LABELS.join('|')}|Attention|Attn|Contact|Phone|Tel|Email|E-mail|Fax|www\\.|\\(\\d{3}\\)|\\d{3}[-.]\\d{3})`, 'i'))[0].trim().slice(0, 80).replace(/[\s,;:]+$/, '');
     if (firm) return { name: firm, matched: false, all: [firm] };
   }
   return { name: null, matched: false, all: [] };

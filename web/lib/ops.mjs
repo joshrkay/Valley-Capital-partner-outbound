@@ -4,7 +4,7 @@
 import { join } from 'node:path';
 import { engine, loadRules } from './engine.mjs';
 import { visibleCandidates } from './candidates-view.mjs';
-import { sortServicers, loansFor, edgarStatus } from './servicers.mjs';
+import { sortServicers, loansFor, edgarStatus, countyFilingsFor } from './servicers.mjs';
 import { partyLink, sellerRow } from './sales-view.mjs';
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -459,12 +459,14 @@ export async function listServicers(client) {
   return { servicers: sortServicers(snap.docs['sources/edgar/servicers.json'] ?? {}), state: snap.docs['sources/edgar/state.json'] ?? null };
 }
 
+// One servicer's page also lists the county filings linked to its loans (docs/county-loans.md section 9): loans/cmbs.json, one small
+// file read with the principal's token, never a county document itself (its borrower and address stay out of the page).
 export async function servicerDetail(client, name) {
   const n = need(name, 'A servicer name');
-  const snap = await client.load(['sources/edgar/servicers.json', 'sources/edgar/loans.json']);
+  const snap = await client.load(['sources/edgar/servicers.json', 'sources/edgar/loans.json', 'loans/cmbs.json']);
   const summary = (snap.docs['sources/edgar/servicers.json'] ?? {})[n] ?? null;
   if (!summary) return null;
-  return { summary, loans: loansFor(snap.docs['sources/edgar/loans.json'] ?? {}, n) };
+  return { summary, loans: loansFor(snap.docs['sources/edgar/loans.json'] ?? {}, n), filings: countyFilingsFor(snap.docs['loans/cmbs.json'] ?? null, n) };
 }
 export const queueScore = (client, { draftBuybox }) => client.enqueue('score.run', { draftBuybox: !!draftBuybox });
 

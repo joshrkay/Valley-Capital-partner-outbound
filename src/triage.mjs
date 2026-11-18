@@ -17,12 +17,13 @@ import { contentHash } from './score.mjs';
 import { filingSignals, loadFilingRules } from './sources/filings.mjs';
 import { FDIC_LOAN_SALES_URL } from './sources/fdic.mjs';
 import { LOADS } from './uow.mjs';
+import { eventShown, scopeShown } from './loans.mjs';
 
 export const CATEGORIES = Object.freeze(['actNow', 'watch', 'inConversation']);
 export const CATEGORY_LABELS = Object.freeze({ actNow: 'Act now', watch: 'Watch', inConversation: 'Already in conversation' });
 // Every kind of finding, each with its own fixed template below. Which are act now is decided by triage.json `actNow`.
 export const FINDING_TYPES = Object.freeze(['cmbs-note-sale', 'failure-in-metros', 'sec-filing-strong', 'new-tier-a', 'tier-up-a', 'concentration-tier-a',
-  'sec-filing', 'acquisition', 'cmbs-special-servicing', 'new-tier-b', 'tier-down-b', 'state-on', 'county-document', 'dropped', 'state-off']);
+  'sec-filing', 'acquisition', 'cmbs-special-servicing', 'new-tier-b', 'tier-down-b', 'state-on', 'county-cmbs', 'county-document', 'dropped', 'state-off']);
 export const HEALTH_SOURCES = Object.freeze(['fdic', 'edgar', 'filings']);
 const TOUCH_EVENTS = ['reply', 'opt_out', 'bounce', 'meeting', 'handoff'];
 export const INTERNAL_NOTE = 'Internal: for the firm\'s principals only. It is never sent to anyone and never given to the drafter. The calendar decides when to look, never what a message says.';
@@ -218,6 +219,7 @@ export function runTriage({ dir, rules, now = new Date(), since, metros, scoring
   const failed = readJson(join(dir, 'sources', 'fdic', 'failed.json'), {});
   const loans = readJson(join(dir, 'sources', 'edgar', 'loans.json'), {});
   const countyEvents = readJson(join(dir, 'loans', 'events.json'), {});
+  const cmbsLinks = readJson(join(dir, 'loans', 'cmbs.json'), null)?.links ?? {};
   const filings = filingSignals({ dir, rules: filingRules ?? loadFilingRules() });
 
   const labelOf = (c) => metros?.metros?.find((m) => m.cbsa === String(c))?.label ?? `CBSA ${c}`;
@@ -298,10 +300,24 @@ export function runTriage({ dir, rules, now = new Date(), since, metros, scoring
   // County loan documents (docs/county-loans.md): each document newly matched to a bank is a dated event, for a principal's context.
   // Always watch, never act now (no rule in triage.json makes it one), and it carries no signal id, so it never brings back a bank a
   // principal dismissed: an event is context, not a signal, and nothing scores it. Its line is the event's own fixed template.
-  for (const e of Object.values(countyEvents).filter((x) => x && typeof x.id === 'string' && /^fdic:\d+$/.test(String(x.key))).sort((a, b) => cmp(a.id, b.id))) {
+  // The scope guard (src/loans.mjs, eventShown): only an event the scope rule wrote, about a document not known to be residential, on
+  // the bank that holds the loan now. An event written before the rule waits for `outbound loans rebuild`.
+  for (const e of Object.values(countyEvents).filter((x) => x && typeof x.id === 'string' && /^fdic:\d+$/.test(String(x.key)) && eventShown(x)).sort((a, b) => cmp(a.id, b.id))) {
     const n = newness({ seenKey: e.id, date: e.date, at: e.matchedAt });
     if (!n) continue;
     add({ key: e.key, name: nameOf(e.key), type: 'county-document', act: false, reason: `${e.label}${lateNote(n, e.date)}`, ids: [e.id], dates: [e.date] });
+  }
+
+  // County filings on CMBS loans (docs/county-loans.md section 9, src/cmbslinks.mjs): a document whose current holder is a CMBS trust,
+  // linked to the trust's own record of the loan. The special servicer is the institution, as for the CMBS findings above. The same
+  // rules as a county event: always watch, no signal id, the scope guard (scopeShown), and its line is the link's own fixed template.
+  for (const l of Object.values(cmbsLinks).filter((x) => x && x.status === 'linked' && typeof x.documentId === 'string' && x.cmbs?.loanKey && scopeShown(x)).sort((a, b) => cmp(a.id, b.id))) {
+    const servicer = typeof l.cmbs.specialServicer === 'string' && l.cmbs.specialServicer ? l.cmbs.specialServicer : 'Unknown';
+    const id = `cmbs-link:${l.documentId}:${l.cmbs.loanKey}`;
+    const n = newness({ seenKey: id, date: l.date, at: l.firstSeenAt });
+    if (!n) continue;
+    add({ key: `servicer:${servicer}`, name: servicer === 'Unknown' ? 'Special servicer not identified' : servicer, type: 'county-cmbs', act: false, exempt: true,
+      reason: `${l.label}${lateNote(n, l.date)}`, ids: [id], dates: [l.date], links: { servicer: `/servicers/${encodeURIComponent(servicer)}` } });
   }
 
   // Changes against the snapshot: new candidates, tier changes, candidates that dropped out, state signals on and off.

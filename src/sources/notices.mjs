@@ -62,7 +62,7 @@ import { readJson, writeJson, safeId } from '../store.mjs';
 import { getText, getBytes, getFile, realSleep, HttpError } from './http.mjs';
 import { startRun, finishRun, SOURCE_KEYS } from './runlog.mjs';
 import { parseRobots, robotsFor, robotsAllows } from './fdicsales.mjs';
-import { buildDocument, diffDocuments, writeDiff, buildLoanIndex, loadDocuments, loansPaths, readLoanState, hashDocument, documentId, docNumberKey, documentDate, DOC_TYPES, RECORD_KEYS, validYmd } from '../loans.mjs';
+import { buildDocument, diffDocuments, writeDiff, buildLoanIndex, scopeAll, loadDocuments, loansPaths, readLoanState, hashDocument, documentId, docNumberKey, documentDate, DOC_TYPES, RECORD_KEYS, validYmd } from '../loans.mjs';
 import { matchLender, reviewKey, LENDER_ROLES } from '../lenders.mjs';
 import { loadAliases } from '../candidates.mjs';
 import { fdicPaths } from './fdic.mjs';
@@ -226,7 +226,7 @@ export function parseDate(s) {
 const LINKED_COUNTS = ['listed', 'fetched', 'held', 'deferred'];
 const stamp = (runId, at, outcome, counts, error) => ({ runId, ranAt: at, outcome, read: counts.read, added: counts.added, changed: counts.changed, unchanged: counts.unchanged, skipped: counts.skipped,
   ...(counts.files || counts.filesNotModified || counts.filesKnown ? { files: counts.files, filesNotModified: counts.filesNotModified, filesKnown: counts.filesKnown } : {}),
-  ...(counts.listed !== undefined ? Object.fromEntries(LINKED_COUNTS.map((k) => [k, counts[k]])) : {}), ...(error ? { error } : {}) });
+  ...(counts.listed !== undefined ? Object.fromEntries(LINKED_COUNTS.map((k) => [k, counts[k]])) : {}), ...(counts.inScope !== undefined ? { inScope: counts.inScope, outOfScope: counts.outOfScope } : {}), ...(error ? { error } : {}) });
 // The files a source has read (a report index's PDFs), newest first, one per key: what the next run asks for conditionally or leaves.
 const fileKey = (f) => f.key ?? `${f.url}|${f.etag ?? f.lastModified ?? ''}`;
 export function mergeFiles(prev = [], add = []) {
@@ -452,7 +452,11 @@ export async function runNoticeSource({ dir, source, counties = {}, fetchImpl = 
     writeDiff(dir, source.id, diff, { runId: run.runId, now });
     if (listOut && stable(listOut) !== stable(list)) writeJson(P.list(source.id), listOut);
     const index = buildLoanIndex({ dir, now, runId: run.runId });
-    notes.push(`${counts.read} document(s) read: ${counts.added} new, ${counts.changed} changed, ${counts.unchanged} unchanged; ${index.eventsNew} new event(s) for banks in the list`);
+    // The scope rule (src/loans.mjs, loanScope), over this source's stored documents: those known to be residential stay stored and
+    // reach no bank's file, review list or event.
+    const scoped = index.bySource?.[source.id] ?? { inScope: 0, outOfScope: 0 };
+    Object.assign(counts, { inScope: scoped.inScope, outOfScope: scoped.outOfScope });
+    notes.push(`${counts.read} document(s) read: ${counts.added} new, ${counts.changed} changed, ${counts.unchanged} unchanged; of ${counts.inScope + counts.outOfScope} stored, ${counts.inScope} in scope and ${counts.outOfScope} out of scope (known residential); ${index.eventsNew} new event(s) for banks in the list`);
     // Quiet: a run that read nothing because everything its source lists was read before (a file answered 304, or one already read).
     const quiet = counts.files === 0 && counts.filesNotModified + counts.filesKnown > 0;
     const line = finishRun(dir, run, { rowsRead: counts.rows, rowsWritten: counts.added, rowsChanged: counts.changed, outcome: 'ok', suspect, quiet, notes, now: clock() });
@@ -544,13 +548,16 @@ export async function verifyNoticeSource({ dir, source, counties = {}, fetchImpl
     } catch (e) { checks.push(check('county.recall', false, `The list could not be read: ${e instanceof HttpError ? `HTTP ${e.status}` : String(e.message).slice(0, 120)}`)); }
   }
 
-  // Every lender-side name is matched to a bank, set aside, or on the review list. One that is none of these is a bug.
+  // Every lender-side name of a document in scope is matched to a bank, set aside, or on the review list. One that is none of these is a
+  // bug. A document out of scope (known residential, src/loans.mjs loanScope) is counted apart: its names reach no list.
   const institutions = readJson(fdicPaths(dir).institutions, {});
   const aliases = loadAliases(dir);
   const reviewKeys = new Set((readJson(loansPaths(dir).review, { entries: [] }).entries ?? []).map((e) => reviewKey(e.name)));
+  const scopes = scopeAll(recs);
+  const inScope = recs.filter((r) => scopes.get(r.id).inScope);
   let matched = 0, aside = 0, onReview = 0;
   const neither = [];
-  for (const r of recs) for (const p of r.parties ?? []) {
+  for (const r of inScope) for (const p of r.parties ?? []) {
     if (!LENDER_ROLES.includes(p.role)) continue;
     const m = matchLender(p, { institutions, aliases, documentState: r.state });
     if (m.status === 'matched') matched++;
@@ -558,10 +565,10 @@ export async function verifyNoticeSource({ dir, source, counties = {}, fetchImpl
     else if (reviewKeys.has(reviewKey(m.name))) onReview++;
     else neither.push(r.id);
   }
-  checks.push(check('county.matched', !neither.length, `${matched + aside + onReview + neither.length} lender, beneficiary or holder name(s): ${matched} matched to a bank in the list, ${aside} set aside (MERS, trustees, servicers, law firms, people), ${onReview} on the review list (outbound loans review).${neither.length ? ` ${neither.length} are none of these: a bug. Run: outbound loans match` : ''}`, neither.length ? { neither: [...new Set(neither)].slice(0, 10) } : undefined));
+  checks.push(check('county.matched', !neither.length, `${matched + aside + onReview + neither.length} lender, beneficiary or holder name(s) on the ${inScope.length} document(s) in scope: ${matched} matched to a bank in the list, ${aside} set aside (MERS, trustees, servicers, law firms, people), ${onReview} on the review list (outbound loans review).${neither.length ? ` ${neither.length} are none of these: a bug. Run: outbound loans rebuild` : ''} ${recs.length - inScope.length} document(s) are out of scope (known residential) and reach no list.`, neither.length ? { neither: [...new Set(neither)].slice(0, 10) } : undefined));
 
   // The sample links to where the list shows each document when its own link would name a person.
-  const rows = recs.filter((r) => (r.parties ?? []).some((p) => matchLender(p, { institutions, aliases, documentState: r.state }).status === 'matched'))
+  const rows = inScope.filter((r) => (r.parties ?? []).some((p) => matchLender(p, { institutions, aliases, documentState: r.state }).status === 'matched'))
     .sort((a, b) => (a.id < b.id ? -1 : 1)).slice(0, sample)
     .map((r) => ({ id: r.id, type: r.documentType, recorded: r.dates?.recorded ?? null, date: documentDate(r).date, check: r.sources?.[0]?.listUrl ?? r.sources?.[0]?.url ?? null }));
   return { source: name, checks, sample: rows };

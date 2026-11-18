@@ -1,6 +1,6 @@
 # County loans: the core of the pipeline
 
-The parts of the county pipeline that do not depend on any county's format (`docs/county-data-build-vs-buy.md` 5.2, components 5 and 9). The goal is to show each bank's individual loans that public records name, on its bank page. Three real counties are built. Caldwell County, Texas (section 8) is enabled, on a principal's recorded decision. Jefferson and Douglas in Colorado (section 5a) are **not enabled**: each waits on a principal's recorded decision. The invented example runs only against its fake.
+The parts of the county pipeline that do not depend on any county's format (`docs/county-data-build-vs-buy.md` 5.2, components 5 and 9). The goal is to show each bank's individual loans that public records name, on its bank page. Three real counties are built, and all three are enabled, each on a principal's recorded decision: Caldwell County, Texas (section 8), and Jefferson and Douglas in Colorado (section 5a, decided 2026-11-18). The weekly job still runs only once a principal sets `COUNTIES_ENABLED`. The invented example runs only against its fake.
 
 **The rule.** Loan and borrower detail is context for the firm's principals only:
 
@@ -78,7 +78,7 @@ One record per public-records document about a loan (`src/loans.mjs`, `buildDocu
   - `dates.listed`: the date of the county's own list that gave an entry that is not itself a recorded document (a pre-sale list's run date). The event then says "was listed on".
   - `property.legal`: the legal description, where the list gives one.
   - an amount's `label` (the county's word for the figure, such as "Total Indebtedness") and `asOf`.
-  - `loan { type, commercial }`: the county's loan type as written ("BPL Commercial") and the flag its adapter reads from it. Unknown or blank types give `null`, never a guess.
+  - `loan { type, commercial }`: the county's loan type as written ("BPL Commercial") and the flag its adapter reads from it (`commercialFromLoanType`, section 3a). Unknown or blank types give `null`, never a guess.
   - `foreclosure { number, reception, attorneyFileNumber, publication, amendedPublication, bid, deficiency }`: the public trustee's file.
 
   The bank's file carries the loan type and its flag, and none of the rest.
@@ -90,10 +90,11 @@ One record per public-records document about a loan (`src/loans.mjs`, `buildDocu
 | Path | What |
 |---|---|
 | `loans/docs/<source>.json` | Every document a source has given, by id. Only the watcher writes it. |
-| `loans/banks/fdic-<CERT>.json` | The bank's matched documents, newest first, with the engine's labels. **No borrower, grantor, address or APN.** The bank page reads only this file. |
-| `loans/review.json` | Names that matched no bank or several, with their candidates; and the names set aside, with their class. |
-| `loans/events.json` | One dated event per document and bank, written the first time they match. |
+| `loans/banks/fdic-<CERT>.json` | The bank's matched documents in scope (section 3a), newest first, with the engine's labels, each with its `scope` and `relation`. **No borrower, grantor, address or APN.** The bank page reads only this file. |
+| `loans/review.json` | Names on documents in scope that matched no bank or several, with their candidates; and the names set aside, with their class. |
+| `loans/events.json` | One dated event per document in scope and bank that holds the loan now, written the first time they match. |
 | `loans/state.json` | Each source's last run and up to 12 runs: documents read, new, changed, unchanged (and, for a linked-document source, listed, fetched, held and deferred). For a source that reads report files, the files it has read (address, posted date, ETag, Last-Modified and the report's dates; up to 200), never their contents. A recorded block. Also the index's counts. |
+| `loans/cmbs.json` | One entry per document in scope whose current holder is a CMBS trust: linked to the trust's own loan record from SEC EDGAR, or "trust named, loan not found" with the reason (section 9). **No borrower, address or servicer commentary.** The triage and the special servicer's page read it. |
 | `loans/lists/<source>.json` | A linked-document source's list: each page's ETag, the documents recorded as history on its first run, and the documents held as unreadable, by id and reason. **No name and no link.** |
 
 **The platform.** Every path fits the existing `documents` table (a test checks each path against the table's own path rule).
@@ -129,6 +130,41 @@ One record per public-records document about a loan (`src/loans.mjs`, `buildDocu
 
 Former names and holding companies from FDIC history or FFIEC NIC are not added yet. A principal's alias covers them meanwhile.
 
+## 3a. Scope: commercial loans only
+
+The firm buys commercial real estate loans, and most loans a county's foreclosure list names are home mortgages (the first Jefferson backfill: of 137 documents matched to a bank, 76 were flagged residential, 58 had a loan type the classifier did not know, and 3 were commercial). One rule, `loanScope` in `src/loans.mjs`: **a document is in scope unless it is known to be residential.**
+
+1. **Its loan type** reads as a residential program or label: the flag `loan.commercial` is `false`. A stored `null` is read again from the type, so a type the classifier learns later applies to documents already stored.
+2. **A document with no loan type of its own takes its case's**: another document of the same foreclosure number in the same source that gives one (a Colorado pre-sale entry and its NED).
+3. **With no loan type that decides**, either none at all (Caldwell, Douglas, a pre-sale entry with no NED stored) or one that reads `null` ("Unknown"), it is residential when every borrower and grantor it names is a natural person: not an entity by the entity test (`isEntityName`, `src/lenders.mjs`), and read as a person's name (`personName`). A name that is neither is not taken for a person.
+
+Otherwise it is in scope: a commercial type, or an unknown or blank one with an entity among the borrowers or no borrower named. (After the first rebuild, the 12 remaining events still held 5 "Unknown" loans to individuals and 4 HELOCs; rule 3 now covers the first, and the classifier the second.)
+
+**The classifier** (`commercialFromLoanType`, shared by the Jefferson adapter and the rule; case, punctuation and spaces ignored):
+
+| Loan type | Flag |
+|---|---|
+| Commercial (and the misspellings Commerical, Comercial), BPL Commercial, Business, Construction, SBA, Multifamily | `true` |
+| FNMA, Fannie Mae, FHLMC, Freddie Mac, FHA, VA, USDA, RHS, GNMA, Conventional, Conv, Conventional Residential, Residential, Reverse (Mortgage), HECM, HELOC, Home Equity (Line of Credit) | `false` |
+| Unknown, blank, anything else | `null`: rule 3 decides |
+
+**Where it applies.** The index (`buildLoanIndex`) applies it before the lender match: a document out of scope gives no bank row, no review name, no set-aside count and no event. It stays in `loans/docs/<source>.json`, so the weekly diff stays idempotent. Each bank row and event carries the `scope` it was written under (`{ commercial, borrowers }`, no name), and two guards check it again: the triage's county loop (`eventShown`) and the bank page (`inScope` in `web/lib/loans-view.mjs`), as do `outbound loans show` and `outbound loans events`. A row or event written before the rule carries no `scope` and shows nowhere until the rebuild writes it again.
+
+**The counts.** The run result, the job result and the run's state carry `inScope` and `outOfScope` (this source's stored documents); the index's counts add `outOfScopeWhy` (`residential-loan-type`, `individual-borrowers`), `originated` and `eventsRemoved`. The verify check's `matched` counts only documents in scope.
+
+**The current holder.** A document can name the loan's original lender (`lender`, or `beneficiary` on the deed of trust) apart from its current holder (`holder`: Jefferson's "Current Lender (Beneficiary)", a Texas notice's current mortgagee). Each bank row has a `relation`:
+
+- `current`: the bank holds the loan by the document: as its current holder, a party to an assignment, or as lender or beneficiary when the document names no separate current holder. MERS alone as holder is a nominee, not a separate holder.
+- `originated`: the bank is named only as the original lender and the document names another current holder, as `holder` or as an assignee (a CMBS trust's trustee, a fund, another bank). The CMBS link reads the current holder the same way (`currentHolders`, section 9). The row shows "Originated by this bank; now held by <holder>" (`relationLabel`, `heldBy`; a person is never named: "a person (name withheld)"), and **no event is written**: "a loan from this bank" would mislead.
+
+**The rebuild** (`outbound loans rebuild`, `rebuildLoanIndex`): every bank's file, the review list and the events written again from the stored documents under the rule, reading no county and leaving the documents untouched. An event whose document is now out of scope, or whose bank only originated the loan, is removed; one that remains is written again from its document and keeps its `matchedAt`, `runId` and `basis`, so the triage does not list it twice. It refuses a folder with no stored document, or with no bank list (which would empty every bank's file). On a folder pulled from the platform:
+
+```sh
+npm run outbound -- platform pull --to ~/valley-outbound-pulled
+OUTBOUND_DATA_DIR=~/valley-outbound-pulled npm run outbound -- loans rebuild
+npm run outbound -- platform push --from ~/valley-outbound-pulled
+```
+
 ## 4. The weekly watcher (component 9) and its event
 
 `diffDocuments` and `buildLoanIndex` in `src/loans.mjs`.
@@ -139,7 +175,7 @@ Former names and holding companies from FDIC history or FFIEC NIC are not added 
   - an unchanged one is left exactly as it was;
   - a document no longer listed stays, as history.
 - **Re-reading the same week** writes no document, no bank file and no event.
-- **An event** is written for each document newly matched to a bank. Its sentence is a fixed template:
+- **An event** is written for each document in scope newly matched to a bank that holds the loan by the document (section 3a: a match on the current holder, or on the sole lender when the document names no separate holder; never on a bank that only originated it). Its sentence is a fixed template:
 
   > A notice of trustee's sale was filed on November 10, 2026 for a loan from this bank on a property in Example County, CO.
 
@@ -228,7 +264,7 @@ Colorado's public trustees in Jefferson and Douglas run GTS (`docs/county-watche
 | `Deed of Trust Date`, `Recording Date`, `Reception #` | `deedOfTrust.dated`, `recorded`, `documentNumber` |
 | `NED Date`, its `Reception #` | `dates.recorded`; `foreclosure.reception` |
 | `Original Sale Date` | `dates.sale` |
-| `LoanType` | `loan.type`, and `loan.commercial`: true for Commercial, BPL Commercial or business; false for Conventional, Conv, FHA, VA, USDA and reverse; null otherwise |
+| `LoanType` | `loan.type`, and `loan.commercial` by the shared classifier (section 3a): true for Commercial, BPL Commercial, Business, Construction, SBA or Multifamily; false for FNMA, FHLMC, FHA, VA, USDA, RHS, GNMA, Conventional, Conventional Residential, Residential, Reverse or HECM; null otherwise |
 | `First` and `Last Publication Date` | `foreclosure.publication` |
 
 **The pre-sale list, one parser for both counties** (`notice_of_trustee_sale`, id `<foreclosure number>/SALE`):
@@ -245,10 +281,10 @@ Colorado's public trustees in Jefferson and Douglas run GTS (`docs/county-watche
 
 **Not kept:** interest rate and type, the re-recording date and number, the newspaper, and the attorney's phone and fax.
 
-**Not enabled.** Both are registered in `src/counties.mjs`, `sources.json` (`adapter`) and `config.counties.sources` with `enabled: false`, and their adapters' `terms.decision` is unset:
+**Enabled**, on a principal's decision of 2026-11-18, recorded on each adapter's `terms` (`decision: 'allowed'`) and in `sources.json`, and both are `enabled: true` in `config.counties.sources`:
 
-- Jefferson waits on a principal's decision and counsel's note on its "data compilations" copyright claim.
-- Douglas waits on a principal accepting its reports page's terms.
+- Jefferson: its GTS reports may be read weekly by software; only the facts read out are stored, never the county's PDFs. Its "data compilations" copyright claim goes to counsel (D-B9).
+- Douglas: the firm accepts its reports page's terms (lawful and ethical use only, a release of liability).
 
 The backfill of Jefferson's NED archive (`report?t=14`, monthly from January 2025) sits behind the same gate.
 
@@ -256,16 +292,18 @@ The backfill of Jefferson's NED archive (`report?t=14`, monthly from January 202
 
 - **The bank page:**
   - a **Loans we can see** card in the sidebar: the count, the newest three and the watched counties;
-  - a **Loans we can see** tab: each document's type, county, date, stage, amounts with their basis, property type and a link to the source document.
+  - a **Loans we can see** tab: each document's type, county, date, stage, amounts with their basis, property type and a link to the source document; for a loan the bank only originated, "Originated by this bank; now held by ...".
+  - Only rows in scope show (section 3a).
   - With none, the page says which counties are watched and that none has a document for this bank yet.
 - **System status:** a **County records** row per watched county: the last run, documents read, new this week, matched to a bank, and names to review.
-- **The command line:** `outbound loans run | backfill | verify | status | show | review | alias | match | events`.
+- **The command line:** `outbound loans run | backfill | verify | status | show | review | alias | match | rebuild | events | cmbs`.
+- **CMBS links** (section 9): a filing whose current holder is a CMBS trust shows on the special servicer's page and as a Watch line in the triage.
 
 ## 7. Not built yet
 
-- Enabling Jefferson and Douglas: each waits on a principal (section 5a). The other counties in the recon.
+- The other counties in the recon.
 - The image reader (component 4).
-- The commercial filter and the assessor join that gives `useCode` and `propertyType` (component 3).
+- The assessor join that gives `useCode` and `propertyType` (component 3). The scope rule (section 3a) is the commercial filter until then: it reads the loan type and the borrowers, never the property.
 - The loan chain to the current holder (component 6).
 - The observed layer's figures (E14-S4).
 - Removing a document a county later marks confidential.
@@ -328,3 +366,35 @@ A notice with no lender, or with neither date read, is held, not stored.
 
 **The worker** runs `loans.watch` each Monday, queued by the 13:41 UTC cron before scoring and the triage, once a principal sets the repository variable `COUNTIES_ENABLED` to `true`. That is safe only after the migration is applied. The workflow installs poppler-utils on every run.
 
+
+## 9. The CMBS link
+
+A county filing whose current holder is a CMBS trust (Jefferson's "Current Lender (Beneficiary)" reads "<trustee bank>, as Trustee for the registered holders of <shelf> <series> Mortgage Trust, Commercial Mortgage Pass-Through Certificates, Series <series>") is linked to the trust's own record of the loan in its monthly SEC filing (Form ABS-EE, exhibit 102), which `sources.edgar` stores. The principal then sees the loan's servicing status and the special servicer to call next to the county event. On such a document the index writes no event for the originating bank (section 3a, relation `originated`): the link is its event. `src/cmbslinks.mjs`.
+
+**1. The name** (`cmbsTrustOf`). From each current-holder party (the `holder` or an `assignee`; the `beneficiary` only when no one else holds the loan now; MERS alone is not a holder) it reads the trust and its series (a year, a hyphen and a token: `2020-B21`, `2019-C7`, `2017-SMP`) and the shelf's own words. A residential or consumer securitization is never read as CMBS: "Mortgage Pass-Through Certificates" without "Commercial", Mortgage-Backed, Mortgage Loan Trust, Asset-Backed, Home Equity, Alternative Loan, Residential, Home Loan, ARM trusts and the like. The name only picks candidates. **The proof is `sources/edgar/trusts.json`**, which holds only trusts whose EX-102 is in the SEC's CMBS namespace: the trust must be there, with the same series and, when the name gives one, the same shelf. A name not there is recorded as not found only when it says "Commercial"; otherwise it is left alone (it could be residential).
+
+**2. The asset** (`matchCmbsAsset`), from `sources/edgar/loans.json`, no network:
+
+- required: the trust, the original amount to the dollar (the document's stated `originalPrincipal` against EX-102 `originalLoanAmount`), and a property in the document's state;
+- and also: that property's city (from the document's address, read only to match and never stored) or county agrees, or the trust's `originatorName` is the document's original lender (`lender`, MERS as nominee read through), compared after the lender match's normalising (legal phrases, a leading "The" and the legal form cut). Nothing fuzzy.
+- Two or more candidates, or a missing key: **no link**. The document is recorded as "trust named, loan not found" with the reason (`edgar-not-run`, `trust-not-in-edgar`, `trust-ambiguous`, `no-original-amount`, `no-asset`, `ambiguous`) for a principal to look up by hand. `loans.json` keeps only loans in our metros and sectors, and a pari passu note's trust share is not the whole loan, so a true loan can be not found; it is never guessed.
+
+**3. The block.** A linked entry carries `cmbs`: the trust, CIK, asset number, the property's name and type, the original and current balance, the paid-through date, the payment status, whether it is in special servicing and since when (the transfer date), the workout strategy decoded from the CREFC codes (1 Modification, 2 Foreclosure, 3 Bankruptcy, 4 Extension, 5 Note sale, 6 Discounted payoff, 7 REO, 8 Resolved, 9 Pending return to master servicer, 10 Deed in lieu, 11 Full payoff, 12 Reps and warranties, 13 To be determined, 98 Other), the latest valuation and its date, occupancy, NOI and DSCR, the master servicer (`primaryServicerName`) and the special servicer (the trust's distribution report), and the SEC links (the ABS-EE filing, its EX-102, the 10-D). Every field is picked by name, so **no servicer commentary** (it can name borrowers and people) and **no borrower** is ever stored or shown.
+
+**Where it lives:** `loans/cmbs.json`, one entry per document in scope whose current holder is a CMBS trust, keyed by document id: the document's type, county, date and public link, its stated original amount, the trust as named, the outcome with its reason, what agreed (`matchedOn`) and what differed (`disagreed`), the block, the scope it was written under, and a fixed sentence. No borrower, grantor or owner, no address, APN or legal description. Like every county event it is context only (`scored: false`): no score, weight or tier reads it, and no model-facing action loads it (`LOADS.cmbs`, `test/cmbslinks.test.mjs`).
+
+**The scope rule** (section 3a) applies as everywhere: a document out of scope is never linked, and each entry carries its `scope`, which the triage and the servicer page check again.
+
+**When it is rebuilt.** Whenever either side changes, from stored data only, in its own unit of work (`LOADS.cmbs`, flushed through `flush_uow` like the other jobs), and rewritten only when an entry changed:
+
+- after the county runs of the worker's `loans.watch`;
+- after `sources.edgar`, as the sale ledger is;
+- on the command line after `loans run`, `backfill`, `match`, `alias` and `rebuild`, and `sources run edgar`.
+
+Each job's result carries the link counts only.
+
+**Where it shows:**
+
+- **The weekly triage**, under **Watch** and never act now (`triage.json` strength `county-cmbs`): one line per newly linked document, under its special servicer (as the CMBS findings are), with no signal id. For example (invented): "A notice of election and demand was recorded on November 3, 2026 in Example County, CO on a $7.5M hotel loan held by a CMBS trust (Example 2019-X1 Mortgage Trust, loan 37); it has been with special servicer Sample Special Servicing LLC since March 4, 2026."
+- **The special servicer's page** (`/servicers/<name>`): "County filings on its loans", each with the county filing, the trust's loan, its servicing figures and the SEC links.
+- **The command line:** `outbound loans cmbs`, linked and not found.

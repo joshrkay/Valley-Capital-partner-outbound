@@ -16,6 +16,7 @@
 // with "LoanType:" and "Interest Rate:"; "Current Amount:" with "As Of:" and "Interest Type:". The names and the legal description wrap
 // onto indented lines. A parcel number sits inside the legal description in some records ("APN #:").
 import { defineNoticeSource } from '../notices.mjs';
+import { commercialFromLoanType } from '../../loans.mjs';
 import { layoutLines, readLayout, fieldReader, readApn, longYmd, parsePreSaleText, gtsPageParser, pdfToText, fileKey, FORECLOSURE_NUMBER, RECEPTION_NUMBER, NAME } from './gts.mjs';
 
 export const JEFFERSON_HOST = 'gts.co.jefferson.co.us';
@@ -48,15 +49,10 @@ const NED_TITLE = /^\s*Notices of Election and Demand Filed in (.+?) County\s*$/
 const NED_RANGE = /^\s*From\s+(.+?)\s+Through\s+(.+?)\s*$/;
 const NED_FURNITURE = [NED_TITLE, NED_RANGE, /makes no representation or warranties about the accuracy/, /^\s*reports\. You should conduct your own due diligence\.?\s*$/, /^\s*Page\s+\d+\s+of\s+\d+\s*$/];
 
-// The loan type, as the county writes it, to the commercial flag: true for a commercial or business-purpose loan, false for the
-// residential programs, null for a blank or unknown type (never guessed).
-const RESIDENTIAL = new Set(['conventional', 'conv', 'fha', 'va', 'usda', 'rhs', 'reverse', 'reverse mortgage', 'hecm']);
-export function commercialFromLoanType(type) {
-  const t = String(type ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
-  if (!t) return null;
-  if (/\b(commercial|business)\b/.test(t) || /^bpl\b/.test(t)) return true;
-  return RESIDENTIAL.has(t) ? false : null;
-}
+// The loan type, as the county writes it, to the commercial flag: the shared classifier (src/loans.mjs), which the scope rule also
+// applies to the documents already stored. True for a commercial, business-purpose, construction, SBA or multifamily loan; false for the
+// residential programs and labels (FNMA, FHA, VA, Conventional...); null for a blank, unknown or other type (never guessed).
+export { commercialFromLoanType };
 const LOAN_TYPE = /^[A-Za-z][A-Za-z0-9 .\/&()-]{0,39}$/;
 
 // One NED report's text to documents. Returns { documents, rows, skipped, missing, stats, reportDates }.

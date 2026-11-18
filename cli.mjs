@@ -45,7 +45,8 @@ import { buildLabels } from './src/backtest/labels.mjs';
 import { runBacktest, readReport, summarize } from './src/backtest/run.mjs';
 import { readSenders, setSender, removeSender, sendingReadiness, validateSender } from './src/senders.mjs';
 import { runNoticeSource, verifyNoticeSource, clearBlock } from './src/sources/notices.mjs';
-import { buildLoanIndex, readBankLoans, readLoanState, loanEvents, loansPaths, DOC_TYPES, STAGES, AMOUNT_BASES, PROPERTY_TYPES } from './src/loans.mjs';
+import { buildCmbsLinks, readCmbsLinks } from './src/cmbslinks.mjs';
+import { buildLoanIndex, rebuildLoanIndex, readBankLoans, readLoanState, loanEvents, loansPaths, scopeShown, eventShown, DOC_TYPES, STAGES, AMOUNT_BASES, PROPERTY_TYPES, OUT_OF_SCOPE } from './src/loans.mjs';
 import { countySource, countyCoverage } from './src/counties.mjs';
 import { readFileSync } from 'node:fs';
 
@@ -204,7 +205,16 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound loans review                           lender names that matched no bank or several, with their candidates; names set aside
   outbound loans alias --key fdic:CERT --name "NAME" --by NAME   a principal resolves one: the name becomes the bank's alias, then a re-match
   outbound loans match                            match every stored document again (after an alias), without reading any county
+  outbound loans rebuild                          write every bank's file, the review list and the events again from the stored
+                                                  documents under the scope rule (commercial loans only), reading no county: removes
+                                                  the events of documents now out of scope or of banks that only originated the loan,
+                                                  keeps when the others were matched. Safe on a pulled data folder: platform pull
+                                                  --to DIR, OUTBOUND_DATA_DIR=DIR loans rebuild, then platform push --from DIR
   outbound loans events [--key fdic:CERT]         the dated events, newest first
+  outbound loans cmbs                             county filings whose current holder is a CMBS trust: each linked to the trust's own
+                                                  loan record (SEC ABS-EE, EX-102) with its servicing status and special servicer, or
+                                                  "trust named, loan not found" with the reason, to look up by hand. Rebuilt from stored
+                                                  data after every county run, match or rebuild, and after the EDGAR pull
   outbound loans unblock --source ID --by NAME    a principal clears a recorded block (a refusal or challenge page stopped the source),
                                                   after deciding the source may be read again
 
@@ -586,6 +596,7 @@ async function main() {
       // The CMBS and FDIC loan-sale runs end by rebuilding the sale ledger (PRD E16), so a liquidation reported this month is kept.
       if (pos[2] !== 'fdic' && r.outcome !== 'failed') r.ledger = buildLedger({ dir, config: rules.config });
       if (r.ledger && r.ledger.outcome !== 'failed') r.intermediaries = writeRegistry({ dir, config: rules.config });   // next-five E19-S1
+      if (pos[2] === 'edgar' && r.outcome !== 'failed') r.cmbsLinks = buildCmbsLinks({ dir });   // county filings on CMBS loans (docs/county-loans.md 9)
       if (r.outcome === 'failed' || r.ledger?.outcome === 'failed') process.exitCode = 1;
       return out(r);
     }
@@ -717,16 +728,18 @@ async function main() {
 
   if (cmd === 'loans') {   // county loan documents (docs/county-loans.md): for the principals; never in a message
     const counties = rules.config.counties;
+    // The CMBS links (section 9) follow every change to the stored documents or the index: rebuilt from stored data, no network.
+    const withLinks = (r) => (r && typeof r === 'object' && r.outcome !== 'failed' ? { ...r, cmbsLinks: buildCmbsLinks({ dir }) } : r);
     const money = (a) => (a?.value === null || a?.value === undefined ? AMOUNT_BASES[a?.basis] ?? 'not read yet' : `$${Number(a.value).toLocaleString('en-US')} (${AMOUNT_BASES[a.basis]})`);
     if (sub === 'run') {   // an invented example source is refused here: it runs only against its fake, in the tests
-      const r = await runNoticeSource({ dir, source: countySource(need(flags, 'source')), counties });
+      const r = withLinks(await runNoticeSource({ dir, source: countySource(need(flags, 'source')), counties }));
       if (r.outcome === 'failed') process.exitCode = 1;
       return out(r);
     }
     if (sub === 'backfill') {   // one-time: the source's archive, gated by the same recorded decision as its weekly run
       const source = countySource(need(flags, 'source'));
       const since = flags.since && flags.since !== true ? String(flags.since) : source.backfill?.since;
-      const r = await runNoticeSource({ dir, source, counties, backfill: { since } });
+      const r = withLinks(await runNoticeSource({ dir, source, counties, backfill: { since } }));
       if (r.outcome === 'failed') process.exitCode = 1;
       return out(r);
     }
@@ -748,8 +761,11 @@ async function main() {
       const key = need(flags, 'key');
       const b = readBankLoans({ dir, key });
       if (!b?.loans?.length) return out(`${key}: no document in a watched county names this bank as lender, beneficiary or holder.`);
-      const row = (l) => `${l.date}  ${DOC_TYPES[l.documentType].label} (${l.dateKind}), ${l.county.name} County, ${l.state}: ${STAGES[l.stage]}${l.saleDate ? `, sale ${l.saleDate}` : ''}\n    as ${l.roles.join(' and ')} (${l.how}); property type: ${PROPERTY_TYPES[l.propertyType] ?? 'not known yet'}\n    original principal: ${money(l.amounts.originalPrincipal)}; unpaid balance: ${money(l.amounts.unpaidBalance)}\n    ${l.link}`;
-      return out(`${key}: ${b.loans.length} document(s). ${b.note}\n\n${b.loans.map(row).join('\n')}`);
+      // The scope guard, as on the bank page: a row the scope rule wrote, not known to be residential.
+      const shown = b.loans.filter(scopeShown);
+      if (!shown.length) return out(`${key}: no commercial loan in a watched county names this bank${shown.length < b.loans.length ? ` (its file was written before the scope rule: outbound loans rebuild)` : ''}.`);
+      const row = (l) => `${l.date}  ${DOC_TYPES[l.documentType].label} (${l.dateKind}), ${l.county.name} County, ${l.state}: ${STAGES[l.stage]}${l.saleDate ? `, sale ${l.saleDate}` : ''}\n    as ${l.roles.join(' and ')} (${l.how}); property type: ${PROPERTY_TYPES[l.propertyType] ?? 'not known yet'}${l.loanType ? `; loan type: ${l.loanType}` : ''}${l.relationLabel ? `\n    ${l.relationLabel}` : ''}\n    original principal: ${money(l.amounts.originalPrincipal)}; unpaid balance: ${money(l.amounts.unpaidBalance)}\n    ${l.link}`;
+      return out(`${key}: ${shown.length} document(s). ${b.note}\n\n${shown.map(row).join('\n')}`);
     }
     if (sub === 'review') {
       const r = readJson(loansPaths(dir).review, { entries: [], setAside: [] });
@@ -760,14 +776,33 @@ async function main() {
     if (sub === 'alias') {
       const r = aliasParty({ dir, key: need(flags, 'key'), name: need(flags, 'name'), by: need(flags, 'by') });
       const idx = buildLoanIndex({ dir });
+      buildCmbsLinks({ dir });
       return out(`${r.key} (${r.bank ?? ''}) now also matches: ${r.aliases.join('; ')}. Matched again: ${idx.matchedDocuments} document(s) name a bank in the list; ${idx.eventsNew} new event(s).`);
     }
-    if (sub === 'match') return out(buildLoanIndex({ dir }));
+    if (sub === 'match') return out(withLinks(buildLoanIndex({ dir })));
+    if (sub === 'rebuild') {   // reads no county: the stored documents, the bank list and the aliases, under the scope rule
+      const r = rebuildLoanIndex({ dir });
+      const links = buildCmbsLinks({ dir });
+      const why = Object.entries(r.outOfScopeWhy).map(([k, n]) => `${n} ${OUT_OF_SCOPE[k] ?? k}`).join(', ');
+      return out(`Rebuilt from ${r.documents} stored document(s) (${r.runId}): ${r.inScope} in scope, ${r.outOfScope} out of scope${why ? ` (${why})` : ''}. In scope: ${r.matchedDocuments} matched to ${r.banks} bank(s) in the list, ${r.originated} of those match(es) on a bank that only originated the loan (shown, no event); ${r.review} name(s) to review. Events: ${r.eventsRemoved} removed, ${r.eventsNew} new; the rest keep when they were matched. ${r.bankFilesWritten} bank file(s) written. CMBS links: ${links.linked} linked, ${links.notFound} to look up by hand (outbound loans cmbs).\n${Object.entries(r.bySource).map(([id, x]) => `  ${id}: ${x.documents} stored, ${x.inScope} in scope, ${x.outOfScope} out of scope, ${x.matchedDocuments} matched, ${x.reviewNames} name(s) to review`).join('\n')}`);
+    }
     if (sub === 'unblock') {
       const r = clearBlock({ dir, sourceId: countySource(need(flags, 'source')).id, by: need(flags, 'by') });
       return out(r.cleared ? `${r.sourceId}: the block of ${String(r.blockedAt).slice(0, 10)} is cleared. The next run reads the source again.` : `${r.sourceId}: no block is recorded.`);
     }
-    if (sub === 'events') return out(loanEvents({ dir, key: flags.key && flags.key !== true ? flags.key : null }).map((e) => `${e.date}  ${e.key}  ${e.label}`).join('\n') || 'No events yet.');
+    if (sub === 'cmbs') {
+      const f = readCmbsLinks(dir);
+      if (!f) return out('No CMBS links are built yet. They are built after every county run and every EDGAR pull, or now from stored data: outbound loans match');
+      const all =Object.values(f?.links ?? {}).filter(scopeShown).sort((a, b) => (a.date !== b.date ? (String(a.date) < String(b.date) ? 1 : -1) : a.id < b.id ? -1 : 1));
+      if (!all.length) return out(`No county filing in scope names a CMBS trust as its current holder${f?.edgar?.ranAt ? '' : ' (and no SEC EDGAR pull is stored yet: outbound sources run edgar)'}.`);
+      const sec = (b) => [b.filings?.ex102 ? `EX-102 ${b.filings.ex102}` : null, b.filings?.distributionReport ? `10-D ${b.filings.distributionReport}` : null].filter(Boolean).join('; ');
+      const block = (e) => `${e.cmbs.trust} (CIK ${e.cmbs.cik}) loan ${e.cmbs.assetNumber}: balance ${e.cmbs.balance ?? '-'}; paid through ${e.cmbs.paidThrough ?? '-'}; ${e.cmbs.paymentStatus?.label ?? 'payment status not given'}; workout ${e.cmbs.workout ? `${e.cmbs.workout.label} (${e.cmbs.workout.code})` : '-'}; matched on ${e.matchedOn.join(', ')}${e.disagreed.length ? `; differs on ${e.disagreed.join(', ')}` : ''}`;
+      const row = (e) => (e.status === 'linked' ? [`${e.date}  LINKED  ${e.label}`, `    ${block(e)}`, `    ${e.link ?? ''}`, ...(sec(e.cmbs) ? [`    ${sec(e.cmbs)}`] : [])]
+        : [`${e.date}  NOT FOUND (${e.reason})  ${e.label}`, `    ${e.link ?? ''}`]).join('\n');
+      const linked = all.filter((e) => e.status === 'linked').length;
+      return out(`${all.length} county filing(s) name a CMBS trust as current holder: ${linked} linked to the trust's loan, ${all.length - linked} to look up by hand. ${f.note}\n\n${all.map(row).join('\n')}`);
+    }
+    if (sub === 'events') return out(loanEvents({ dir, key: flags.key && flags.key !== true ? flags.key : null }).filter(eventShown).map((e) => `${e.date}  ${e.key}  ${e.label}`).join('\n') || 'No events yet.');
   }
 
   if (cmd === 'filers') {   // the bank-to-filer map for the SEC filings listener (PRD E13-S1); a principal decides every mapping
