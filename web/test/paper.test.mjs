@@ -86,7 +86,7 @@ test('Q7 on the page, with the shipped buy box: the status rule (D-P3), each sec
   for (const s of ['q7.statusRule', 'q7.fitRule', 's.statusLoans', 's.oreo', 'notReported']) assert.ok(src.includes(s), s);
   const buybox = JSON.parse(readFileSync(new URL('../../buybox.json', import.meta.url), 'utf8'));
   const r = record({ buybox, placeholders: [] });
-  assert.match(r.q7.statusRule.text, /non-performing = 90 days or more past due \(still accruing\) \+ nonaccrual; sub-performing = 30-89 days past due; foreclosed \(REO\/OREO\) = foreclosed property the bank owns \(OREO\)/);
+  assert.match(r.q7.statusRule.text, /non-performing = 90\+ days late and still accruing \+ not accruing; sub-performing = 30 to 89 days late; foreclosed \(REO\/OREO\) = foreclosed property the bank owns\./);
   const mf = r.q7.sectors.find((s) => s.sector === 'multifamily');
   assert.deepEqual([show(mf.statusLoans.amount).text, show(mf.statusLoans.amount).tier], ['$15.0M', 'reported']);
   assert.deepEqual(mf.statusLoans.byLine[0].parts.map((p) => show(at(r, p.ref)).text), ['$4.0M', '$1.0M', '$10.0M'], 'each stage is read from Q1 by its ref');

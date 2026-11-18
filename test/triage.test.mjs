@@ -153,7 +153,7 @@ test('each diff against the snapshot: new candidates, tier changes, drop-outs, a
   assert.match(reason('fdic:7'), /^New signal: Example rule concentration-construction/, 'the concentration screen at a Tier B bank is watch');
   assert.match(reason('fdic:3'), /^Dropped out of the candidate list: it was Tier A, and its score is now below the Tier B cut\.$/);
   assert.match(reason('fdic:4'), /no longer scores it/);
-  assert.match(reason('fdic:5'), /^Signal no longer on: Commercial OREO up from last quarter\.$/, 'the label comes from scoring.json');
+  assert.match(reason('fdic:5'), /^Signal no longer on: Foreclosed commercial property up from last quarter\.$/, 'the title is built from the rule in scoring.json');
   assert.deepEqual(where(t, 'fdic:6').ids, ['fdic:6:concentration-cre:20260630', 'fdic:6:cre-noncurrent-rising:20260630']);
   assert.deepEqual(where(t, 'fdic:1').links, { candidate: '/candidates/fdic%3A1', account: null, servicer: null, filings: [], fdicLoanSales: null });
   assert.equal(where(t, 'fdic:1').tier, 'A');

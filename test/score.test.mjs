@@ -285,8 +285,9 @@ test('end to end: an acquisition is an EVENT signal kept for its window; the scr
   assert.equal(byType['concentration-construction'].value, 300000 / 250000);
   // The card states both from its templates.
   const text = it.card.text;
-  assert.match(text, /Construction and land loans are 120% of total risk-based capital, at or above the 100% concentration screen \(June 30, 2026\)\./);
-  assert.match(text, /The screen is the 2006 interagency guidance on CRE concentrations: it marks a bank for closer supervisory review, not a limit on its lending\./);
+  assert.match(text, /At June 30, 2026, its construction and land loans are 120% of its total capital, at or above the 100% level that flags a bank for a closer look\./);
+  assert.match(text, /Regulators set these levels in their 2006 guidance on CRE concentrations, as a prompt for a closer look, not a limit on its lending\./);
+  assert.equal(byType['concentration-construction'].label, 'Construction and land loans at or above 100% of capital (regulators\' flag)', 'the title comes from the rule, not its scoring.json label');
   assert.match(text, /It acquired another bank \(FDIC cert 777\) with 4 branches in Phoenix, effective June 1, 2026\. That bank held \$64\.0 million of CRE loans at its last report \(March 31, 2026\)\./);
   // A new quarter below the screen: the state signal is gone. The acquisition is still shown: its window has not ended.
   const f = readFileSync(join(dir, 'sources', 'fdic', 'financials', '1.json'), 'utf8');
