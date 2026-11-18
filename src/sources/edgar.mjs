@@ -296,7 +296,7 @@ export function specialServicerFromReport(html, known = []) {
   for (const m of [...cells.matchAll(/Special(?: \| | )Servicer\b/gi)].slice(0, 25)) {
     const cell = cells.slice(m.index + m[0].length).replace(/^[\s:|-]+/, '').split(' | ')[0];
     if (!/[A-Za-z]/.test(cell) || heading.test(cell)) continue;
-    const firm = cell.split(new RegExp(`\\s(?:${COVER_LABELS.join('|')}|Attention|Attn|Contact|Phone|Tel|Email|E-mail|Fax|www\\.|\\(\\d{3}\\)|\\d{3}[-.]\\d{3})`, 'i'))[0].trim().slice(0, 80);
+    const firm = cell.split(new RegExp(`\\s(?:${COVER_LABELS.join('|')}|Attention|Attn|Contact|Phone|Tel|Email|E-mail|Fax|www\\.|\\(\\d{3}\\)|\\d{3}[-.]\\d{3})`, 'i'))[0].trim().slice(0, 80).replace(/[\s,;:]+$/, '');
     if (firm) return { name: firm, matched: false, all: [firm] };
   }
   return { name: null, matched: false, all: [] };
