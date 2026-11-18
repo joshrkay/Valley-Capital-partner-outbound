@@ -1,10 +1,11 @@
-// The record page's sidebar of related lists (docs/design-redesign.md, 4.1): Score, Signals, Where it lends, Loan sales and filings.
-// Server components; each shows stored figures and links into the tab that has the detail.
+// The record page's sidebar of related lists (docs/design-redesign.md, 4.1): Score, Signals, Loans we can see (docs/county-loans.md),
+// Where it lends, Loan sales and filings. Server components; each shows stored figures and links into the tab that has the detail.
 import { period } from '../../../lib/format.mjs';
 import { scoreParts, soldItems } from '../../../lib/bank-view.mjs';
 import { Tile } from '../../icons.jsx';
 import { Term } from '../../ui.jsx';
 import { Where } from './where.jsx';
+import { LoansCard } from './loans.jsx';
 
 export function ScoreCard({ item, scoring, href }) {
   const { axes, rule } = scoreParts(item, scoring);
@@ -56,11 +57,12 @@ export function SalesCard({ paper, route }) {
   );
 }
 
-export function Sidebar({ item, paper, route, scoring, href }) {
+export function Sidebar({ item, paper, loans = null, watched = [], route, scoring, href }) {
   return (
     <aside className="rec-side" aria-label="Related">
       <ScoreCard item={item} scoring={scoring} href={href} />
       <SignalsCard item={item} href={href} />
+      <LoansCard loans={loans} watched={watched} href={href} />
       <Where item={item} paper={paper} />
       <SalesCard paper={paper} route={route} />
     </aside>

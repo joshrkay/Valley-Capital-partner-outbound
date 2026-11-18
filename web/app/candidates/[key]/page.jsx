@@ -1,5 +1,5 @@
-// A bank's page: the candidate item, its decision and its paper estimate (PRD E14-S1), read as the signed-in principal, shown as a record
-// page (docs/design-redesign.md, 5.3). Promote, snooze and dismiss go through the same server actions as before. Nothing here sends.
+// A bank's page: the candidate item, its decision, its paper estimate (PRD E14-S1) and the loans we can see in county records
+// (docs/county-loans.md), read as the signed-in principal, shown as a record page (docs/design-redesign.md, 5.3). Promote, snooze and dismiss go through the same server actions as before. Nothing here sends.
 import { cache } from 'react';
 import { requirePrincipal as signedIn } from '../../../lib/session.mjs';
 import { loadRules } from '../../../lib/engine.mjs';
@@ -36,5 +36,5 @@ export default async function Bank({ params, searchParams }) {
   // How this bank sells (next-five E19-S4): unknown unless a source or a principal shows it. Its own load; a failure hides only this line.
   let route = null;
   try { route = await routeOf(ctx.client, d.item.key); } catch { route = null; }
-  return <BankRecord item={d.item} paper={d.paper} decision={d.decision} suppressed={d.suppressed} route={route} tab={tab} scoring={rules.scoring} isNew={flags.isNew} inConversation={flags.inConversation} />;
+  return <BankRecord item={d.item} paper={d.paper} loans={d.loans} watched={d.watched} decision={d.decision} suppressed={d.suppressed} route={route} tab={tab} scoring={rules.scoring} isNew={flags.isNew} inConversation={flags.inConversation} />;
 }

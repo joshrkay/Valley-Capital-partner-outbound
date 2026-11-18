@@ -11,7 +11,8 @@ export const SOURCE_LABELS = Object.freeze({
   fdic: 'FDIC data', edgar: 'CMBS loan data (SEC EDGAR)', filings: 'SEC filings', fdicsales: 'FDIC loan-sale pages', enforcement: 'Enforcement orders', mergerapps: 'Merger applications',
 });
 export const jobLabel = (kind) => JOB_LABELS[kind] ?? String(kind ?? 'job');
-export const sourceLabel = (s) => SOURCE_LABELS[s] ?? String(s ?? 'a source');
+// A county watcher's runs are logged as county:<source id> (docs/county-loans.md).
+export const sourceLabel = (s) => SOURCE_LABELS[s] ?? (/^county:/.test(String(s ?? '')) ? `county records (${String(s).slice(7)})` : String(s ?? 'a source'));
 const sourceOf = (run) => run?.source ?? String(run?.runId ?? '').split(/[-:]/)[0];
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const days = (ms) => Math.floor(ms / 86400000);

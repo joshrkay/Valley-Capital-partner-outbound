@@ -244,13 +244,16 @@ const byNewest = (a, b) => {
   const da = documentDate(a).date ?? '', db = documentDate(b).date ?? '';
   return da !== db ? (da < db ? 1 : -1) : a.id < b.id ? -1 : 1;
 };
-// What the bank page shows for one document: no borrower, no grantor, no address, no APN.
+// What the bank page shows for one document: no borrower, no grantor, no address, no APN. The labels are the engine's own words, so
+// the page and the command line say the same.
 export function loanRow(doc, roles, how) {
   const { date, kind } = documentDate(doc);
+  const stage = DOC_TYPES[doc.documentType]?.stage ?? null;
+  const pt = doc.property?.propertyType ?? null;
   return {
-    id: doc.id, sourceId: doc.sourceId, documentType: doc.documentType, documentNumber: doc.documentNumber, stage: DOC_TYPES[doc.documentType]?.stage ?? null,
-    county: doc.county, state: doc.state, date, dateKind: kind, saleDate: doc.dates?.sale ?? null, roles, how,
-    amounts: doc.amounts, propertyType: doc.property?.propertyType ?? null, useCode: doc.property?.useCode ?? null,
+    id: doc.id, sourceId: doc.sourceId, documentType: doc.documentType, typeLabel: DOC_TYPES[doc.documentType]?.label ?? doc.documentType, documentNumber: doc.documentNumber,
+    stage, stageLabel: STAGES[stage] ?? null, county: doc.county, countyLabel: countyLabel(doc), state: doc.state, date, dateKind: kind, saleDate: doc.dates?.sale ?? null, roles, how,
+    amounts: doc.amounts, propertyType: pt, propertyTypeLabel: pt ? PROPERTY_TYPES[pt] ?? null : null, useCode: doc.property?.useCode ?? null,
     deedOfTrust: doc.deedOfTrust ? { documentNumber: doc.deedOfTrust.documentNumber, recorded: doc.deedOfTrust.recorded } : null,
     link: doc.sources?.[0]?.url ?? null, firstSeenAt: doc.firstSeenAt ?? null,
   };

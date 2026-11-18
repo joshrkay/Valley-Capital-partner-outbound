@@ -26,8 +26,8 @@ const paper = buildPaper({ cert: '1', name: 'Alpha Example Bank', financials, fo
 const usdOf = (s) => Number(String(s).replace(/[^0-9.]/g, '')) * (/B/.test(s) ? 1e9 : /M/.test(s) ? 1e6 : 1);
 
 test('tabs are links read from the query string; the stage path never sends and parks a bank that is off the list', () => {
-  assert.deepEqual(TABS.map(([, l]) => l), ['Overview', 'What it holds', 'How much could fit', 'Details']);
-  assert.deepEqual([tabOf({ tab: 'fit' }), tabOf({ tab: ['holdings'] }), tabOf({ tab: '<x>' }), tabOf(undefined)], ['fit', 'holdings', 'overview', 'overview']);
+  assert.deepEqual(TABS.map(([, l]) => l), ['Overview', 'What it holds', 'How much could fit', 'Loans we can see', 'Details']);
+  assert.deepEqual([tabOf({ tab: 'fit' }), tabOf({ tab: ['holdings'] }), tabOf({ tab: 'loans' }), tabOf({ tab: '<x>' }), tabOf(undefined)], ['fit', 'holdings', 'loans', 'overview', 'overview']);
   assert.deepEqual(STAGE_PATH, ['Ranked', 'Outreach', 'In conversation', 'NDA signed', 'Loan tape', 'Bid']);
   assert.deepEqual(stageOf({}), { current: 0, parked: false, guide: 'Next step: start outreach to name the person to contact and queue research. Nothing is sent.' });
   const promoted = stageOf({ decision: { status: 'promoted', by: 'Pat Example', at: '2026-11-12T10:00:00Z', accountId: 'alpha-example-bank' } });

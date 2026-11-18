@@ -7,7 +7,7 @@ import { Highlights, StagePath } from './highlights.jsx';
 import PaperEstimate from './paper-estimate.jsx';
 import { Sidebar } from './sidebar.jsx';
 
-export default function BankRecord({ item, paper, decision, suppressed, route, tab, scoring, isNew = false, inConversation = false }) {
+export default function BankRecord({ item, paper, loans = null, watched = [], decision, suppressed, route, tab, scoring, isNew = false, inConversation = false }) {
   const href = `/candidates/${encodeURIComponent(item.key)}`;
   const stage = stageOf({ decision, excluded: item.filtersFailed ?? [], suppressed, inConversation });
   return (
@@ -17,8 +17,8 @@ export default function BankRecord({ item, paper, decision, suppressed, route, t
         <Highlights item={item} paper={paper} route={route} decision={decision} suppressed={suppressed} isNew={isNew} />
         <StagePath stage={stage} />
         <div className="rec-grid">
-          <PaperEstimate item={item} paper={paper} tab={tab} href={href} max={axisMax(scoring)} />
-          <Sidebar item={item} paper={paper} route={route} scoring={scoring} href={href} />
+          <PaperEstimate item={item} paper={paper} loans={loans} watched={watched} tab={tab} href={href} max={axisMax(scoring)} />
+          <Sidebar item={item} paper={paper} loans={loans} watched={watched} route={route} scoring={scoring} href={href} />
         </div>
         <div className="card about">
           <p>Figures without a mark are what the bank reported to the FDIC{aboutDate(paper, item) ? ` for the quarter ending ${aboutDate(paper, item)}` : ''}. Figures marked <Basis tier="inferred" /> are ranges built from reported shares or a stand-in. A date appears beside a figure only when it differs. This is an estimate from public reports, not the loan tape.</p>

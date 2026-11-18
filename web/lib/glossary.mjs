@@ -34,6 +34,7 @@ export const GLOSSARY = Object.freeze([
   E('reported', 'Reported (unmarked)', 'Reported tier', 'The bank reported the figure to a regulator. Figures with no mark are reported; the page says so once.'),
   E('observed', 'Seen loan by loan', 'Observed tier', 'Built from individual loans we can see.'),
   E('estimate', 'Estimate', 'Inferred tier', 'Built from reported shares or a stand-in, and always shown as a range.'),
+  E('loans-we-can-see', 'Loans we can see', 'Observed layer, county records', 'Individual loans named in public county records, such as a notice of trustee\'s sale, a deed of trust or an assignment, matched to a bank by name. Amounts are as each document states them. Context for principals only: never in a message, and never part of the score.'),
   E('where', 'Where it lends', 'Q3, footprint', 'Deposits by metro, standing in for where the bank lends. Banks mostly lend near their branches, but not always.'),
   E('sizes', 'Loan sizes', 'Q4', 'Commercial property loans only, by original amount, reported twice a year.'),
   E('maturity', 'When loans mature or reprice', 'Q5', 'All loans except home mortgages: a stand-in, not real estate only.'),
