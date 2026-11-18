@@ -56,20 +56,22 @@ test('config.counties: the firm\'s User-Agent, three requests a minute, and only
   assert.ok(validateCountyConfig({ ...c, maxDocumentsPerRun: 0 }).some((e) => /maxDocumentsPerRun/.test(e)));
   assert.ok(validateCountyConfig({ ...c, minIntervalMs: -1 }).some((e) => /minIntervalMs/.test(e)));
   assert.ok(validateCountyConfig({ ...c, watch: ['Bad Id'] }).some((e) => /watch/.test(e)));
-  // Every registered real county is in config.counties.sources. Caldwell is enabled, on the decision sources.json records; every other is
-  // not enabled, with what it waits on, and is not watched.
+  // Every registered real county is in config.counties.sources. Caldwell, Jefferson and Douglas are enabled, each on a principal's decision
+  // of 2026-11-18 (Caldwell's recorded in sources.json, Jefferson's and Douglas's on their adapters and in sources.json); any other county
+  // registered later starts not enabled, with what it waits on, and is not watched.
+  const decidedIds = ['tx-caldwell-notices-of-sale', 'jefferson', 'douglas'];
   for (const id of Object.keys(COUNTY_SOURCES).filter((k) => !COUNTY_SOURCES[k].example)) {
     assert.equal(typeof c.sources[id]?.enabled, 'boolean', `${id} is in config.counties.sources`);
-    if (id === 'tx-caldwell-notices-of-sale') { assert.equal(c.sources[id].enabled, true); assert.match(c.sources[id].decided, /2026-11-18/); continue; }
+    if (decidedIds.includes(id)) { assert.equal(c.sources[id].enabled, true, `${id} is enabled`); assert.match(c.sources[id].decided, /2026-11-18/); continue; }
     assert.equal(c.sources[id].enabled, false, `${id} is registered as not enabled`);
     assert.ok(c.sources[id].waitingOn, `${id} says what it waits on`);
     assert.ok(!c.watch.includes(id), `${id} is not watched`);
   }
   assert.ok(validateCountyConfig({ ...c, sources: { jefferson: { enabled: 'yes' } } }).some((e) => /sources.jefferson.enabled/.test(e)));
-  // The weekly job reads every enabled source: Caldwell; Jefferson and Douglas once enabled here, with nothing else changed.
-  assert.deepEqual(enabledSourceIds(c), ['tx-caldwell-notices-of-sale']);
-  assert.deepEqual(enabledSourceIds({ ...c, sources: { ...c.sources, jefferson: { enabled: true } } }), ['tx-caldwell-notices-of-sale', 'jefferson']);
-  assert.deepEqual(enabledSourceIds({ ...c, watch: [...c.watch, 'douglas'] }), ['tx-caldwell-notices-of-sale'], 'listed in watch but not enabled: not read');
+  // The weekly job reads every enabled source: Caldwell, Jefferson and Douglas; a principal pauses one by marking it not enabled here.
+  assert.deepEqual(enabledSourceIds(c), ['tx-caldwell-notices-of-sale', 'jefferson', 'douglas']);
+  assert.deepEqual(enabledSourceIds({ ...c, sources: { ...c.sources, jefferson: { enabled: false } } }), ['tx-caldwell-notices-of-sale', 'douglas']);
+  assert.deepEqual(enabledSourceIds({ ...c, sources: { ...c.sources, douglas: { enabled: false } }, watch: [...c.watch, 'douglas'] }), ['tx-caldwell-notices-of-sale', 'jefferson'], 'listed in watch but marked not enabled: not read');
 });
 
 test('parse: the list page to documents, a document type not kept skipped, every party with its role, amounts with their basis', () => {

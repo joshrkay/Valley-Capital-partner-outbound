@@ -36,8 +36,9 @@ export const douglas = defineNoticeSource({
   hosts: [DOUGLAS_HOST],
   minIntervalMs: 60000,
   terms: {
-    robotsCheckedOn: '2026-11-18', termsCheckedOn: '2026-11-18', decision: null, by: null,
-    waitingOn: 'a principal recording that the firm accepts the reports page\'s terms (lawful and ethical use only, and a release of liability).',
+    // A principal's decision of 2026-11-18: the firm accepts the reports page's terms (lawful and ethical use only, and a release of
+    // liability), so the pre-sale list may be read weekly by software. Only the facts read out of it are stored.
+    robotsCheckedOn: '2026-11-18', termsCheckedOn: '2026-11-18', decision: 'allowed', by: 'a principal', decidedOn: '2026-11-18',
   },
   requests: () => [{ url: DOUGLAS_REPORTS, kind: 'reports' }],
   parse: gtsPageParser({ reports: DOUGLAS_REPORT_KINDS, weekly: ['presale-index'] }),

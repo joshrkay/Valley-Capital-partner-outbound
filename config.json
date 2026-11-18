@@ -77,8 +77,8 @@
     "sources": {
       "_note": "Each registered real county source, by id (src/counties.mjs), with whether it may run. enabled is false until a principal has recorded the decision the adapter's terms carry (terms.decision 'allowed', with the date and who decided); runNoticeSource refuses a source marked false, and nothing is fetched. waitingOn says what it waits on. The weekly job (loans.watch) reads every enabled source: each one listed in watch that is not marked false here, and each one marked true here.",
       "tx-caldwell-notices-of-sale": { "enabled": true, "decided": "A principal's decision of 2026-11-18, recorded in sources.json (principalDecision): weekly, lender-level use only, no individual named in a notice contacted, the disclaimer rechecked monthly." },
-      "jefferson": { "enabled": false, "waitingOn": "A principal's recorded decision that Jefferson's GTS reports (the NED report and the pre-sale list) may be read by software, and counsel's note on the county's copyright claim in data compilations (D-B9). The watcher stores extracted fields only." },
-      "douglas": { "enabled": false, "waitingOn": "A principal recording that the firm accepts the Douglas reports page's terms (lawful and ethical use only, a release of liability); opening a report is taken as accepting them." }
+      "jefferson": { "enabled": true, "decided": "A principal's decision of 2026-11-18: Jefferson's GTS reports (the NED report and the pre-sale list) may be read weekly by software. The watcher stores extracted fields only, never the county's PDFs; the county's copyright claim in data compilations goes to counsel (D-B9)." },
+      "douglas": { "enabled": true, "decided": "A principal's decision of 2026-11-18: the firm accepts the Douglas reports page's terms (lawful and ethical use only, a release of liability), so the pre-sale list may be read weekly by software. The watcher stores extracted fields only." }
     }
   },
   "sales": {
