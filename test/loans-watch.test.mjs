@@ -1,0 +1,54 @@
+// The weekly county job (docs/county-loans.md section 2): the worker's loans.watch runs every watched county in its own unit of work and
+// stores counts only; the Monday cron queues it, after the FDIC check and before scoring and the triage, once a principal enables it; the
+// workflow installs pdftotext. Against the fake Supabase REST API and the fake Caldwell County (invented data only); no network.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { loadJson, REPO } from './kit.mjs';
+import { CALDWELL_ID } from '../src/sources/counties/caldwell.mjs';
+import { hasPdfToText } from '../src/sources/pdftext.mjs';
+import { fakeCaldwell, INSTITUTIONS } from './caldwell-fake.mjs';
+
+const PDF = await hasPdfToText();
+const needsPdf = PDF ? {} : { skip: 'pdftotext (poppler-utils) is not installed here' };
+const T1 = new Date('2026-11-18T14:00:00Z');
+
+test('the worker\'s loans.watch job runs every watched county in its own unit of work, and its result holds counts only', needsPdf, async () => {
+  const { fakePostgrest } = await import('./postgrest-fake.mjs');
+  const { platformClient } = await import('../src/platform/client.mjs');
+  const { work, JOB_KINDS } = await import('../src/platform/worker.mjs');
+  const { loadRules } = await import('../src/rules.mjs');
+  assert.ok(JOB_KINDS.includes('loans.watch'));
+  const rules = loadRules();
+  const fake = fakePostgrest();
+  fake.docs.set('sources/fdic/institutions.json', { path: 'sources/fdic/institutions.json', kind: 'json', body: INSTITUTIONS, text: null, version: 1 });
+  const url = 'https://example-project.supabase.test';
+  await platformClient({ url, key: 'anon-key', accessToken: 'user:pat@example.test', fetchImpl: fake.fetchImpl }).enqueue('loans.watch');
+  const service = platformClient({ url, key: 'service', fetchImpl: fake.fetchImpl });
+  await work({ client: service, rules, deps: { fetchImpl: fakeCaldwell().fetchImpl, now: () => T1, sleep: async () => {} } });
+  const job = fake.jobs[0];
+  assert.equal(job.status, 'done', JSON.stringify(job.result));
+  assert.deepEqual([job.result.watched, job.result.counties[0].source, job.result.counties[0].outcome, job.result.counties[0].added, job.result.counties[0].held, job.result.counties[0].matchedDocuments],
+    [1, CALDWELL_ID, 'ok', 2, 1, 2]);
+  assert.ok(fake.docs.has(`loans/docs/${CALDWELL_ID}.json`) && fake.docs.has(`loans/lists/${CALDWELL_ID}.json`) && fake.docs.has('loans/banks/fdic-9001.json'));
+  assert.doesNotMatch(JSON.stringify(job.result), /Example|Sample|Placeholder|files\//, 'the job result holds counts, not names or links');
+  // After the decision's recheck date the job refuses and fails, which turns the workflow red.
+  await platformClient({ url, key: 'anon-key', accessToken: 'user:pat@example.test', fetchImpl: fake.fetchImpl }).enqueue('loans.watch');
+  await work({ client: service, rules, deps: { fetchImpl: fakeCaldwell().fetchImpl, now: () => new Date('2026-12-21T14:00:00Z'), sleep: async () => {} } });
+  assert.equal(fake.jobs[1].status, 'failed');
+  assert.deepEqual([fake.jobs[1].result.counties[0].outcome], ['refused']);
+  assert.match(fake.jobs[1].result.counties[0].error, /rechecked by 2026-12-18/);
+});
+
+test('the workflow installs pdftotext and queues loans.watch on the Monday cron, before scoring and the triage, once enabled', () => {
+  const y = readFileSync(join(REPO, '.github', 'workflows', 'platform-worker.yml'), 'utf8');
+  assert.match(y, /apt-get install -y -qq poppler-utils/);
+  assert.ok(y.indexOf('poppler-utils') < y.indexOf('Run queued jobs'), 'installed before the worker runs');
+  const step = /- name: Queue the weekly county records read\n\s+if: \$\{\{ github\.event\.schedule == '41 13 \* \* 1' && vars\.COUNTIES_ENABLED == 'true' \}\}\n\s+run: node cli\.mjs enqueue loans\.watch/.exec(y);
+  assert.ok(step, 'the Monday step, gated on COUNTIES_ENABLED');
+  assert.ok(step.index > y.indexOf('enqueue sources.fdic') && step.index < y.indexOf('enqueue triage.run'), 'after the FDIC check, before the triage');
+  // The migration that lets the database accept the kind exists, and is the newest to set the kinds.
+  assert.ok(existsSync(join(REPO, 'supabase', 'migrations', '20261118120000_jobs_loans_watch.sql')));
+  assert.match(loadJson('config.json').counties._note, /loans\.watch/);
+});

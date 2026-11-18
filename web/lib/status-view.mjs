@@ -4,7 +4,7 @@
 
 export const JOB_LABELS = Object.freeze({
   'sources.fdic': 'FDIC data pull', 'sources.edgar': 'CMBS loan pull (SEC EDGAR)', 'sources.filings': 'SEC filings check', 'sources.fdicsales': 'FDIC loan-sale pages',
-  'sources.enforcement': 'Enforcement orders', 'sources.mergerapps': 'Merger applications', 'score.run': 'Scoring', 'triage.run': 'Weekly triage',
+  'sources.enforcement': 'Enforcement orders', 'sources.mergerapps': 'Merger applications', 'loans.watch': 'County records', 'score.run': 'Scoring', 'triage.run': 'Weekly triage',
   'research.run': 'Research', 'draft.run': 'Draft', 'call.prep': 'Call brief', 'call.extract': 'Reading call notes',
 });
 export const SOURCE_LABELS = Object.freeze({
