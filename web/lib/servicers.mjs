@@ -2,6 +2,7 @@
 // (src/sources/edgar.mjs): sources/edgar/servicers.json (one summary per special servicer) and sources/edgar/loans.json (the loans).
 // Loan and property detail is asset-level: context for a principal, never for a message. The screens say so on every loan page.
 export const CONTEXT_ONLY = 'Loan and property detail is context for a principal only. It never goes in a message.';
+import { inScope } from './loans-view.mjs';
 
 // Most actionable first: loans in special servicing, then loans coded for a note sale, then the balance at stake.
 export function sortServicers(map) {
@@ -52,9 +53,10 @@ export function edgarStatus({ state, runs = [], jobs = [] }) {
 // loans/cmbs.json (src/cmbslinks.mjs) links a county filing whose current holder is a CMBS trust to the trust's own record of the loan.
 // The servicer's page lists the filings linked to its loans. Each row holds what the link file holds: the county document's type, county,
 // date and public link, and the loan's block from the trust's filing. No borrower, no address, no servicer commentary: the file has none.
-// The scope guard is the bank page's (loans-view.mjs inScope): only a link the scope rule wrote, not known to be residential.
+// The scope guard is the bank page's (loans-view.mjs inScope): only a link the scope rule wrote, on a property the county's parcel
+// record confirmed commercial, multifamily of 5 or more units, or commercial land.
 const CODE_WORDS = { filed: 'Filed', recorded: 'Recorded', listed: 'Listed', notice: 'Dated', sale: 'Sale' };
-const shownScope = (e) => !!e?.scope && typeof e.scope === 'object' && e.scope.commercial !== false && e.scope.borrowers !== 'individuals';
+const shownScope = (e) => inScope(e);
 const webLink = (u) => { try { const x = new URL(String(u ?? '')); return ['https:', 'http:'].includes(x.protocol) ? x.toString() : null; } catch { return null; } };
 const secLink = (u) => (typeof u === 'string' && /^https:\/\/www\.sec\.gov\/Archives\/edgar\/data\/\d+\/\d{18}\/[\w.-]*$/.test(u) ? u : null);
 const coded = (c) => (c ? `${c.label} (${c.code})` : null);

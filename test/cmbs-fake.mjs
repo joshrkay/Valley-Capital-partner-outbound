@@ -3,6 +3,7 @@
 // through buildDocument). Every trust, firm, property, place, person and amount here is invented.
 import { join } from 'node:path';
 import { put } from './kit.mjs';
+import { confirmParcels } from './parcels-kit.mjs';
 import { parseCmbsAssets, toLoan, loanSignals, metroIndex, CMBS_NS } from '../src/sources/edgar.mjs';
 import { buildDocument } from '../src/loans.mjs';
 import { readJson } from '../src/store.mjs';
@@ -63,8 +64,11 @@ export function countyDoc(over = {}, { source = SOURCE, firstSeenAt = '2026-11-1
 // The borrower-side and address detail only the county document holds: none of it may reach the link file, the triage or a job result.
 export const DOC_ONLY = ['Zephyrine', 'Quillon', '99-999-01-001', 'Sample & Example LLP', 'Pat Example', 'forbearance'];
 
-export function writeWorld(dir, { docs = [], trusts = { [TRUST.cik]: TRUST, [OTHER.cik]: OTHER }, loans = null, edgar = true } = {}) {
+// Each document's county parcel record (test/parcels-kit.mjs): a hotel unless `parcels` names another class for its id. Only a filing
+// whose parcel confirms a commercial property is a lead, so only those are linked (docs/county-loans.md 3a and 9).
+export function writeWorld(dir, { docs = [], trusts = { [TRUST.cik]: TRUST, [OTHER.cik]: OTHER }, loans = null, edgar = true, parcels = {} } = {}) {
   put(dir, `loans/docs/${SOURCE.id}.json`, Object.fromEntries(docs.map((d) => [d.id, d])));
+  confirmParcels(dir, SOURCE.id, { cls: 'hotel', byId: parcels });
   if (!edgar) return dir;
   put(dir, 'sources/edgar/trusts.json', trusts);
   put(dir, 'sources/edgar/loans.json', loans ?? storedLoans(TRUST, [{ n: '37' }, { n: '12', props: [{ name: 'Example Suites Mesa', city: 'Mesa', state: 'AZ', county: 'Maricopa', type: 'LO' }] }]));

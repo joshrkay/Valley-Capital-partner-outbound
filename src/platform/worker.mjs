@@ -24,6 +24,8 @@ import { runCallPrep, runCallExtract, callLoads, needDate } from '../calls.mjs';
 import { runNoticeSource, enabledSourceIds } from '../sources/notices.mjs';
 import { COUNTY_SOURCES } from '../counties.mjs';
 import { buildCmbsLinks } from '../cmbslinks.mjs';
+import { lookupParcels } from '../parcels.mjs';
+import { realSleep } from '../sources/http.mjs';
 
 export const JOB_KINDS = ['sources.fdic', 'sources.edgar', 'sources.filings', 'sources.fdicsales', 'sources.enforcement', 'sources.mergerapps', 'loans.watch', 'score.run', 'triage.run', 'research.run', 'draft.run', 'call.prep', 'call.extract'];
 const ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -32,12 +34,18 @@ const CHANNELS = ['email', 'letter', 'call', 'linkedin_note'];
 // One county's run, in counts only: no name, no address, no document link (docs/county-loans.md).
 const countySummary = (id, r) => ({ source: id, outcome: r.outcome, listed: r.listed ?? null, read: r.read ?? null, added: r.added ?? null, changed: r.changed ?? null,
   fetched: r.fetched ?? null, held: r.held ?? null, deferred: r.deferred ?? null, requests: r.requests ?? null, blocked: !!r.blocked, missingFields: r.missingFields ?? null,
-  inScope: r.inScope ?? null, outOfScope: r.outOfScope ?? null, matchedDocuments: r.index?.matchedDocuments ?? null, eventsNew: r.index?.eventsNew ?? null, review: r.index?.review ?? null, ...(r.errors?.length ? { error: String(r.errors[0]).slice(0, 300) } : {}) });
+  inScope: r.inScope ?? null, outOfScope: r.outOfScope ?? null, matchedDocuments: r.index?.matchedDocuments ?? null, eventsNew: r.index?.eventsNew ?? null, review: r.index?.review ?? null,
+  ...(r.parcels ? { parcels: parcelSummary(r.parcels) } : {}), ...(r.errors?.length ? { error: String(r.errors[0]).slice(0, 300) } : {}) });
+// The parcel lookup of a county run (src/parcels.mjs), in counts only: no address, no parcel number.
+const parcelSummary = (p) => ({ outcome: p.outcome, looked: p.looked ?? 0, matched: p.matched ?? 0, ambiguous: p.ambiguous ?? 0, unmatched: p.unmatched ?? 0, noAddress: p.noAddress ?? 0,
+  noPlace: p.noPlace ?? 0, failed: p.failed ?? 0, requests: p.requests ?? 0, ...(p.error ? { error: String(p.error).slice(0, 300) } : {}) });
 
 // The county watchers: every enabled source (enabledSourceIds: those config.counties.watch lists and config.counties.sources does not
 // mark not enabled, and those it marks enabled), each in its own unit of work, one after another. Jefferson and Douglas, registered and
 // not enabled, are not read; enabling one in config.counties.sources adds it here with no other change. A source its gate refuses (no
-// decision, the terms recheck date passed, a recorded block) is reported as refused; the others still run.
+// decision, the terms recheck date passed, a recorded block) is reported as refused; the others still run. After reading a county, the
+// run looks up the parcel record of each document it added or changed (src/parcels.mjs; only a county with a parcel source, Jefferson),
+// inside the same unit of work and before the index; a lookup that fails is counted in the county's `parcels` and never fails its run.
 export async function watchCounties({ client, rules, deps = {}, registry = COUNTY_SOURCES }) {
   const counties = rules.config.counties ?? {};
   const out = [];
@@ -45,7 +53,9 @@ export async function watchCounties({ client, rules, deps = {}, registry = COUNT
     const source = registry[id];
     if (!source) { out.push({ source: id, outcome: 'refused', error: `No county source "${id}" is registered (src/counties.mjs).` }); continue; }
     try {
-      const { result } = await client.unitOfWork(LOADS.loans, (dir) => runNoticeSource({ dir, source, counties, fetchImpl: deps.fetchImpl ?? globalThis.fetch, now: deps.now?.() ?? new Date(),
+      const fetchImpl = deps.fetchImpl ?? globalThis.fetch;
+      const parcels = (args) => lookupParcels({ ...args, counties, fetchImpl, sleep: deps.sleep ?? realSleep, ...(deps.nowMs ? { nowMs: deps.nowMs } : {}) });
+      const { result } = await client.unitOfWork(LOADS.loans, (dir) => runNoticeSource({ dir, source, counties, fetchImpl, now: deps.now?.() ?? new Date(), parcels,
         ...(deps.sleep ? { sleep: deps.sleep } : {}), ...(deps.nowMs ? { nowMs: deps.nowMs } : {}), ...(deps.pdfToText ? { pdfToText: deps.pdfToText } : {}) }), { retries: 0 });
       out.push(countySummary(id, result));
     } catch (e) { out.push({ source: id, outcome: 'refused', error: String(e.message ?? e).slice(0, 300) }); }
@@ -140,7 +150,7 @@ export async function runJob({ client, job, rules, deps = {} }) {
     }
     case 'triage.run': {   // the weekly triage (PRD E6-S5): internal, for the principals; its result holds counts only, never names
       const now = deps.now?.() ?? new Date();
-      const { result } = await client.unitOfWork(triageLoads(ymd(now)), (dir) => runTriage({ dir, rules: rules.triage, metros: rules.metros, scoring: rules.scoring, since: p.since, now }));
+      const { result } = await client.unitOfWork(triageLoads(ymd(now)), (dir) => runTriage({ dir, rules: rules.triage, metros: rules.metros, scoring: rules.scoring, buybox: rules.buybox, since: p.since, now }));
       return { ok: true, summary: triageSummary(result) };
     }
     case 'research.run': {

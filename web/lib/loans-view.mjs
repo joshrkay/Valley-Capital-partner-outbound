@@ -46,18 +46,35 @@ export function basisLine(lines = []) {
 
 const roleText = (roles = []) => { const s = [...new Set(roles.map((r) => ROLE_WORDS[r] ?? r))].join(' and '); return s ? s.charAt(0).toUpperCase() + s.slice(1) : ''; };
 
-// The scope guard (src/loans.mjs, scopeShown, docs/county-loans.md): the firm buys commercial loans, so a row shows only when the
-// engine's scope rule wrote it (it carries `scope`) and it is not known to be residential: no residential loan type, and not a loan
-// whose every borrower is a person. A file written before the rule shows nothing until `outbound loans rebuild` writes it again.
-export const inScope = (l) => !!l?.scope && typeof l.scope === 'object' && l.scope.commercial !== false && l.scope.borrowers !== 'individuals';
+// The scope guard (src/loans.mjs decideScope and scopeShown, docs/county-loans.md 3a), the same decision from the same stored facts:
+// the firm buys commercial property loans, so a row shows only when the engine's scope rule wrote it (it carries `scope`) and its county
+// parcel record confirmed a commercial property, a multifamily property of 5 or more units, or commercial land. A filing whose property
+// no parcel confirms is not a lead and never shows here; nor does a file written before the parcel rule, until `outbound loans rebuild`.
+const LAND_LEADS = new Set(['commercial', 'industrial']);
+export const inScope = (l) => {
+  const p = l?.scope && typeof l.scope === 'object' ? l.scope.property : null;
+  if (!p || typeof p !== 'object' || p.status !== 'matched') return false;
+  return p.kind === 'commercial' || (p.kind === 'land' && LAND_LEADS.has(p.landUse));
+};
 
-// One row per document in scope, newest first as the file stores them. A bank named only as the original lender, where the document
-// names another current holder, says so ("Originated by this bank; now held by ...").
+// The property cell: the type the county's parcel record gives (with the assessor's building use and units), and that it was confirmed
+// there. A row with no parcel-confirmed type says so.
+function propertyOf(l) {
+  const label = l.propertyTypeLabel ?? null;
+  const use = l.propertyUse ? `${l.propertyUse}${l.propertyUnits ? `, ${l.propertyUnits} units` : ''}` : '';
+  return { propertyType: label ?? 'Not known yet', propertyKnown: !!label, propertyDetail: use, propertyConfirmed: !!l.propertyConfirmed,
+    propertyNote: l.propertyConfirmed ? 'Confirmed from the county\'s parcel record' : '', propertySource: typeof l.propertySource === 'string' ? l.propertySource : '' };
+}
+// The sources to attribute under the list (CC BY 4.0): each parcel source a shown property type came from, once.
+export const attributionLine = (rows = []) => { const a = [...new Set(rows.map((r) => r.propertySource).filter(Boolean))]; return a.length ? `Property type: ${a.join('; ')}.` : ''; };
+
+// One row per lead, newest first as the file stores them. A bank named only as the original lender, where the document names another
+// current holder, says so ("Originated by this bank; now held by ...").
 export function loanRows(bank) {
   return (bank?.loans ?? []).filter(inScope).map((l) => ({
     id: l.id, type: l.typeLabel ?? l.documentType, documentNumber: l.documentNumber ?? '', county: l.countyLabel ?? `${l.county?.name ?? ''} County, ${l.state ?? ''}`,
     dateKind: DATE_KIND_WORDS[l.dateKind] ?? 'Recorded', date: longDate(l.date), short: shortDate(l.date), stage: l.stageLabel ?? '', saleDate: l.saleDate ? longDate(l.saleDate) : '',
-    saleShort: l.saleDate ? shortDate(l.saleDate) : '', amounts: amountLines(l.amounts), basis: basisLine(amountLines(l.amounts)), propertyType: l.propertyTypeLabel ?? 'Not known yet', propertyKnown: !!l.propertyTypeLabel, role: roleText(l.roles),
+    saleShort: l.saleDate ? shortDate(l.saleDate) : '', amounts: amountLines(l.amounts), basis: basisLine(amountLines(l.amounts)), ...propertyOf(l), role: roleText(l.roles),
     via: /through MERS/.test(String(l.how ?? '')) ? 'Named through MERS as nominee' : /alias/.test(String(l.how ?? '')) ? 'Matched by a principal\'s alias' : '',
     originated: l.relation === 'originated', relation: l.relation === 'originated' ? String(l.relationLabel ?? 'Originated by this bank; now held by another holder') : '',
     link: safeLink(l.link), deedOfTrust: l.deedOfTrust?.documentNumber ? `${l.deedOfTrust.documentNumber}${l.deedOfTrust.recorded ? `, recorded ${longDate(l.deedOfTrust.recorded)}` : ''}` : '',
@@ -80,7 +97,7 @@ export function emptyText(watched = []) {
 // The sidebar card: the count, the newest three, and the watched counties.
 export function loansCard(bank, watched = []) {
   const rows = loanRows(bank);
-  return { count: rows.length, latest: rows.slice(0, 3), more: Math.max(0, rows.length - 3), empty: rows.length ? '' : emptyText(watched), watched: watchedLine(watched) };
+  return { count: rows.length, latest: rows.slice(0, 3), more: Math.max(0, rows.length - 3), empty: rows.length ? '' : emptyText(watched), watched: watchedLine(watched), attribution: attributionLine(rows) };
 }
 
 // System status: one row per watched county, as countyCoverage (src/counties.mjs) gives it, in words.

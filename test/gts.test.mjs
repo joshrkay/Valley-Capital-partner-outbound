@@ -3,6 +3,7 @@
 // pre-sale parsers with every field checked, the decision gate, two weeks of each county's watcher, the backfill and the verify check.
 // Invented data only. No network.
 import test from 'node:test';
+import { confirmAll } from './parcels-kit.mjs';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { readFileSync, existsSync } from 'node:fs';
@@ -235,7 +236,10 @@ test('Jefferson, two weeks: robots.txt, the reports page, both indexes by link t
   const s1 = jeffersonSite();
   const waits = [];
   let clock = 0;
-  const r1 = await runNoticeSource({ dir, source: J, counties: counties(), fetchImpl: s1.fetchImpl, now: T1, clock: () => T1, pdfToText: layoutOf, sleep: async (ms) => { waits.push(ms); clock += ms; }, nowMs: () => clock });
+  // Each document's county parcel record (test/parcels-kit.mjs, no network): the FHA and Conventional NEDs and the pre-sale entry whose
+  // only grantor is a person are houses; the rest retail.
+  const homes = { 'jefferson:J2699003/NED': 'house', 'jefferson:J2699005/NED': 'house', 'jefferson:J2690055/SALE': 'house' };
+  const r1 = await runNoticeSource({ dir, source: J, counties: counties(), fetchImpl: s1.fetchImpl, now: T1, clock: () => T1, pdfToText: layoutOf, sleep: async (ms) => { waits.push(ms); clock += ms; }, nowMs: () => clock, parcels: confirmAll('retail', homes) });
   assert.equal(r1.outcome, 'ok', JSON.stringify(r1));
   assert.deepEqual(s1.calls.map((c) => c.path), ['/robots.txt', '/reports', '/report?t=7', '/report?t=6', '/Report_Files/NED 11-5-2026.pdf', '/Report_Files/NED 11-12-2026.pdf', '/Report_Files/Preliminary bid report-Tuesday.pdf']);
   assert.ok(s1.calls.every((c) => c.ua === config().counties.userAgent), 'every request names the firm');
@@ -246,9 +250,9 @@ test('Jefferson, two weeks: robots.txt, the reports page, both indexes by link t
   assert.deepEqual(Object.keys(docs).sort(), ['jefferson:J2690044/SALE', 'jefferson:J2690055/SALE', 'jefferson:J2690085/SALE', 'jefferson:J2698990/NED', 'jefferson:J2699001/NED', 'jefferson:J2699002/NED', 'jefferson:J2699003/NED', 'jefferson:J2699004/NED', 'jefferson:J2699005/NED']);
   const ned = docs['jefferson:J2699001/NED'];
   assert.deepEqual([ned.documentType, ned.county, ned.loan, ned.sources[0].url], ['election_and_demand', { fips: '08059', name: 'Jefferson' }, { type: 'Commercial', commercial: true }, 'https://gts.co.jefferson.co.us/Report_Files/NED%2011-12-2026.pdf']);
-  // The scope rule: the FHA NED (J2699003) and the Conventional one (J2699005) are home mortgages, and so is the pre-sale entry whose
-  // only grantor is a person (J2690055, no NED to give its loan type). They stay stored and reach no bank's file, review list or event.
-  assert.deepEqual([r1.inScope, r1.outOfScope, r1.index.outOfScopeWhy], [6, 3, { 'residential-loan-type': 2, 'individual-borrowers': 1 }]);
+  // The scope rule: the FHA NED (J2699003), the Conventional one (J2699005) and the pre-sale entry J2690055 are on houses by their
+  // parcel records. They stay stored and reach no bank's file, review list or event.
+  assert.deepEqual([r1.inScope, r1.outOfScope, r1.index.outOfScopeWhy], [6, 3, { 'residential-parcel': 3 }]);
   // Banks: Example Bank (holder on two NEDs and on the sale list); Sample Community Bank, through MERS, only as the original lender of a
   // loan a trust's trustee now holds. Example Mountain Bank's only loan is the FHA one: no file.
   const ex = readBankLoans({ dir, key: 'fdic:9001' });
@@ -265,22 +269,22 @@ test('Jefferson, two weeks: robots.txt, the reports page, both indexes by link t
   assert.deepEqual(review.setAside.map((x) => x.class).sort(), ['servicer', 'trustee']);
   assert.deepEqual(loanEvents({ dir }).map((e) => e.key).sort(), ['fdic:9001', 'fdic:9001', 'fdic:9001'], 'no event for the bank that only originated the loan');
   const ev = loanEvents({ dir, key: 'fdic:9001' });
-  assert.equal(ev.find((e) => e.documentId === 'jefferson:J2690044/SALE').label, 'A notice of trustee\'s sale was listed on November 17, 2026 for a loan this bank holds on a property in Jefferson County, CO.');
-  assert.equal(ev.find((e) => e.documentId === 'jefferson:J2699001/NED').label, 'A notice of election and demand was recorded on November 12, 2026 for a loan from this bank on a property in Jefferson County, CO.');
+  assert.equal(ev.find((e) => e.documentId === 'jefferson:J2690044/SALE').label, 'A notice of trustee\'s sale was listed on November 17, 2026 for a loan this bank holds on a retail property in Jefferson County, CO; property type confirmed from the county\'s parcel record.');
+  assert.equal(ev.find((e) => e.documentId === 'jefferson:J2699001/NED').label, 'A notice of election and demand was recorded on November 12, 2026 for a loan from this bank on a retail property in Jefferson County, CO; property type confirmed from the county\'s parcel record.');
   // The files read, keyed on their ETag and the report's dates.
   const st = readLoanState(dir).sources.jefferson;
   assert.deepEqual(st.files.map((f) => f.key).sort(), ['etag:"a0000000000001:0"|2026-11-05..2026-11-05', 'etag:"a0000000000002:0"|2026-11-12..2026-11-12', 'etag:"b0000000000001:0"|2026-11-17..2026-11-19']);
 
   // The same week again: the indexes are read, no PDF is asked for, nothing is written; a quiet run, not a suspect one.
   const again = jeffersonSite();
-  const r1b = await run(dir, J, again, new Date('2026-11-18T18:00:00Z'));
+  const r1b = await run(dir, J, again, new Date('2026-11-18T18:00:00Z'), { parcels: confirmAll('retail', homes) });
   assert.deepEqual(again.calls.map((c) => c.path), ['/robots.txt', '/reports', '/report?t=7', '/report?t=6']);
   assert.deepEqual([r1b.outcome, r1b.files, r1b.filesKnown, r1b.read, r1b.added], ['ok', 0, 3, 0, 0]);
 
   // Week 2: a new NED file, and the pre-sale list under the same name with a new posted date. The pre-sale file is asked for with its
   // ETag; it changed, so it is read: J2690044 is off the list (history), the other two are unchanged.
   const s2 = jeffersonSite({ week: 2 });
-  const r2 = await run(dir, J, s2, T2);
+  const r2 = await run(dir, J, s2, T2, { parcels: confirmAll('retail', homes) });
   assert.equal(r2.outcome, 'ok', JSON.stringify(r2));
   assert.deepEqual(s2.calls.slice(4).map((c) => [c.path, c.ifNoneMatch]), [['/Report_Files/NED 11-19-2026.pdf', null], ['/Report_Files/Preliminary bid report-Tuesday.pdf', '"b0000000000001:0"']]);
   assert.deepEqual([r2.files, r2.filesKnown, r2.read, r2.added, r2.changed], [2, 2, 4, 2, 2]);
@@ -340,7 +344,7 @@ test('Douglas: Monday\'s list and Tuesday\'s update, read oldest first so the up
   const site = douglasSite();
   const waits = [];
   let clock = 0;
-  const r = await runNoticeSource({ dir, source: D, counties: counties(), fetchImpl: site.fetchImpl, now: T1, clock: () => T1, pdfToText: layoutOf, sleep: async (ms) => { waits.push(ms); clock += ms; }, nowMs: () => clock });
+  const r = await runNoticeSource({ dir, source: D, counties: counties(), fetchImpl: site.fetchImpl, now: T1, clock: () => T1, pdfToText: layoutOf, sleep: async (ms) => { waits.push(ms); clock += ms; }, nowMs: () => clock, parcels: confirmAll('retail') });
   assert.equal(r.outcome, 'ok', JSON.stringify(r));
   assert.deepEqual(site.calls.map((c) => c.path), ['/robots.txt', '/gts/reports', '/gts/report?t=1', '/gts/Report_Files/11-18-26 PreSale.pdf', '/gts/Report_Files/UPDATED Sale Report 11-18-2026.pdf']);
   assert.ok(waits.every((w) => w === 60000), String(waits));

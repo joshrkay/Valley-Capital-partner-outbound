@@ -57,3 +57,6 @@ export function healthLine(t) {
   const failed = (t?.health?.runs ?? []).length;
   return { ok: n === 0, text: n === 0 ? 'Data is current.' : `${plural(n, 'issue')} with the data or the runs.`, detail: [scored, failed ? `${plural(failed, 'failed run')}` : 'no failed runs'].join(' · ') };
 }
+
+// CC BY 4.0: the parcel sources the county lines' property types came from (src/triage.mjs `attributions`), said once under the lists.
+export const attributionText = (t) => (Array.isArray(t?.attributions) && t.attributions.length ? `Property type: ${t.attributions.filter((a) => typeof a === 'string').join('; ')}.` : '');

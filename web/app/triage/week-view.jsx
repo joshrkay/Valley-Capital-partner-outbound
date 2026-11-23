@@ -1,7 +1,7 @@
 // This week, the home page (docs/design-redesign.md, 5.4): act now as cards (priority, name, the first reason, the could-fit ceiling),
 // watch as rows, banks already in conversation kept apart, and the left-out counts, the calendar and system health as one line each with a
 // link to Status. Signal and event ids sit in a disclosure. A server component with no data of its own: the page passes the stored triage.
-import { SECTIONS, CONVERSATION_INTRO, cardOf, moreFindings, leftOutLine, healthLine } from '../../lib/triage-view.mjs';
+import { SECTIONS, CONVERSATION_INTRO, cardOf, moreFindings, leftOutLine, healthLine, attributionText } from '../../lib/triage-view.mjs';
 import { usd, dateOf } from '../../lib/paper-view.mjs';
 import { Icon, Tile } from '../icons.jsx';
 import { PageHead, Priority, Chip, Note, InternalNotice, Term } from '../ui.jsx';
@@ -84,6 +84,7 @@ export default function WeekView({ t, candidates = new Map(), approvals = null, 
                   ))}
                 </ul>
               ) : <p className="card-body muted">Nothing else changed this week.</p>}
+              {attributionText(t) ? <p className="card-body xs muted">{attributionText(t)}</p> : null}
               <div className="card-foot"><a href="/candidates">View all banks</a></div>
             </section>
           </div>

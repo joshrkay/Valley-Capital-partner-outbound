@@ -13,7 +13,9 @@ import { exampleCounty } from '../../src/sources/counties/example.mjs';
 import { readBankLoans, readLoanState, loanBankRel } from '../../src/loans.mjs';
 import { watchedCounties, countyCoverage } from '../../src/counties.mjs';
 import { readJson } from '../../src/store.mjs';
-import { loanRows, amountLines, basisLine, loansCard, emptyText, watchedLine, countyRows, safeLink, inScope, BASIS_WORDS, LOANS_CONTEXT } from '../lib/loans-view.mjs';
+import { loanRows, amountLines, basisLine, loansCard, emptyText, watchedLine, countyRows, safeLink, inScope, attributionLine, BASIS_WORDS, LOANS_CONTEXT } from '../lib/loans-view.mjs';
+import { scopeShown, decideScope } from '../../src/loans.mjs';
+import { confirmAll, ATTRIBUTION as PARCEL_ATTRIBUTION } from '../../test/parcels-kit.mjs';
 import { sourceLabel } from '../lib/status-view.mjs';
 import { glossaryEntry } from '../lib/glossary.mjs';
 import * as ops from '../lib/ops.mjs';
@@ -23,7 +25,8 @@ const counties = config().counties;
 async function folder() {
   const dir = makeDir();
   put(dir, 'sources/fdic/institutions.json', INSTITUTIONS);
-  const go = (rows, now) => runNoticeSource({ dir, source: exampleCounty, counties, fetchImpl: fakeCounty({ rows }).fetchImpl, sleep: async () => {}, now, clock: () => now, allowExample: true });
+  // Each document's county parcel record (test/parcels-kit.mjs, no network): a retail property, so each is a lead (docs/county-loans.md 3a).
+  const go = (rows, now) => runNoticeSource({ dir, source: exampleCounty, counties, fetchImpl: fakeCounty({ rows }).fetchImpl, sleep: async () => {}, now, clock: () => now, allowExample: true, parcels: confirmAll('retail') });
   await go(WEEK1(), new Date('2026-11-16T12:00:00Z'));
   await go(WEEK2(), new Date('2026-11-23T12:00:00Z'));
   return dir;
@@ -35,7 +38,9 @@ test('each loan\'s document type, county, date, stage, amount with its basis, pr
   assert.deepEqual(rows.map((r) => r.type), ['Notice of election and demand', 'Release', 'Notice of trustee\'s sale', 'Notice of election and demand'], 'newest first');
   const nts = rows[2];
   assert.deepEqual([nts.county, nts.dateKind, nts.date, nts.stage, nts.saleDate, nts.propertyType, nts.propertyKnown, nts.role],
-    ['Example County, CO', 'Recorded', 'November 11, 2026', 'Sale scheduled', 'December 9, 2026', 'Not known yet', false, 'Lender']);
+    ['Example County, CO', 'Recorded', 'November 11, 2026', 'Sale scheduled', 'December 9, 2026', 'Retail', true, 'Lender']);
+  assert.deepEqual([nts.propertyDetail, nts.propertyConfirmed, nts.propertyNote, nts.propertySource], ['Store, Retail', true, 'Confirmed from the county\'s parcel record', PARCEL_ATTRIBUTION]);
+  assert.equal(attributionLine(rows), `Property type: ${PARCEL_ATTRIBUTION}.`);
   assert.deepEqual(nts.amounts, [{ id: 'unpaidBalance', label: 'Unpaid balance', text: '$7.2M', basis: 'as stated on the document' }, { id: 'originalPrincipal', label: 'Original principal', text: '$7.8M', basis: 'as stated on the document' }]);
   assert.deepEqual([nts.basis, nts.short, nts.saleShort], ['As stated on the document', 'Nov 11, 2026', 'Dec 9, 2026'], 'the basis said once for the row');
   assert.equal(basisLine([{ label: 'Unpaid balance', basis: 'from the county\'s index' }, { label: 'Original principal', basis: 'as stated on the document' }]), 'Unpaid balance from the county\'s index; original principal as stated on the document');
@@ -45,7 +50,7 @@ test('each loan\'s document type, county, date, stage, amount with its basis, pr
   assert.deepEqual([nts.originated, nts.relation], [true, 'Originated by this bank; now held by Sample Capital Fund LP']);
   assert.deepEqual([rows[0].originated, rows[0].relation], [false, '']);
   assert.equal(nts.deedOfTrust, '2018-0333222, recorded April 27, 2018');
-  assert.deepEqual([rows[0].propertyType, rows[0].propertyKnown, rows[0].stage], ['Mixed use', true, 'Foreclosure started']);
+  assert.deepEqual([rows[0].propertyType, rows[0].propertyKnown, rows[0].stage], ['Retail', true, 'Foreclosure started'], 'the parcel record\'s type, not the list\'s');
   // A release states no amount: it says so, never $0.
   assert.deepEqual(rows[1].amounts, [{ id: 'none', label: '', text: 'Not stated on the document', basis: '' }]);
   assert.deepEqual(amountLines({}), [{ id: 'none', label: '', text: 'Not stated on the document', basis: '' }]);
@@ -65,7 +70,7 @@ test('the sidebar card and the empty state: which counties are watched, and that
   const dir = await folder();
   const watched = watchedCounties({ config: counties, state: readLoanState(dir) });
   const card = loansCard(readBankLoans({ dir, key: 'fdic:9001' }), watched);
-  assert.deepEqual([card.count, card.latest.length, card.more, card.empty], [4, 3, 1, '']);
+  assert.deepEqual([card.count, card.latest.length, card.more, card.empty, card.attribution], [4, 3, 1, '', `Property type: ${PARCEL_ATTRIBUTION}.`]);
   // The shipped config watches Caldwell County, TX (a principal's decision of 2026-11-18); it has not run in this folder.
   assert.equal(card.watched, 'Watched: Caldwell County, TX (not read yet) and Example County, CO (last read November 23, 2026).');
   const none = loansCard(null, watched);
@@ -142,7 +147,7 @@ test('the section is server-rendered: no client script, a card in the sidebar, i
 test('a Texas notice of sale is known by the date it states ("Dated"), or by its sale date when that could not be read; its link is the list\'s month', () => {
   const row = (over) => loanRows({ loans: [{ id: 'tx-caldwell-notices-of-sale:0123456789ABCDEF', documentType: 'notice_of_trustee_sale', typeLabel: 'Notice of trustee\'s sale', countyLabel: 'Caldwell County, TX',
     date: '2026-10-21', dateKind: 'notice', saleDate: '2026-12-01', roles: ['beneficiary'], how: 'name, named through MERS as nominee', amounts: { originalPrincipal: { value: 412500, unit: 'dollars', basis: 'document' }, unpaidBalance: { value: null, unit: 'dollars', basis: 'not-stated' } },
-    link: 'https://caldwellcounty.texas.gov/foreclosures#fc-m-2026-12', scope: { commercial: null, borrowers: 'entity' }, relation: 'current', ...over }] })[0];
+    link: 'https://caldwellcounty.texas.gov/foreclosures#fc-m-2026-12', scope: { commercial: null, borrowers: 'entity', property: { status: 'matched', kind: 'commercial', sector: 'retail', landUse: null } }, relation: 'current', ...over }] })[0];
   const r = row({});
   assert.deepEqual([r.dateKind, r.date, r.saleDate, r.via, r.link], ['Dated', 'October 21, 2026', 'December 1, 2026', 'Named through MERS as nominee', 'https://caldwellcounty.texas.gov/foreclosures#fc-m-2026-12']);
   assert.deepEqual(r.amounts.map((a) => a.label), ['Original principal'], 'no balance is stated on a Texas notice, so none is shown');
@@ -154,22 +159,39 @@ test('a pre-sale list entry is dated by its list: the row says "Listed", and its
   const bank = { loans: [{ id: 'jefferson:J2699001/SALE', documentType: 'notice_of_trustee_sale', typeLabel: 'Notice of trustee\'s sale', documentNumber: 'J2699001/SALE', countyLabel: 'Jefferson County, CO',
     date: '2026-11-17', dateKind: 'listed', stageLabel: 'Sale scheduled', saleDate: '2026-11-19', roles: ['holder'], how: 'exact name',
     amounts: { originalPrincipal: { value: null, unit: 'dollars', basis: 'not-stated' }, unpaidBalance: { value: 245000, unit: 'dollars', basis: 'index', label: 'Total Indebtedness' } },
-    loanType: null, commercial: null, scope: { commercial: null, borrowers: 'entity' }, relation: 'current', link: 'https://gts.co.jefferson.co.us/Report_Files/x.pdf' }] };
+    loanType: null, commercial: null, scope: { commercial: null, borrowers: 'entity', property: { status: 'matched', kind: 'commercial', sector: 'retail', landUse: null } }, relation: 'current', link: 'https://gts.co.jefferson.co.us/Report_Files/x.pdf' }] };
   const [row] = loanRows(bank);
   assert.deepEqual([row.dateKind, row.date, row.saleDate, row.role], ['Listed', 'November 17, 2026', 'November 19, 2026', 'Holder']);
   assert.deepEqual(row.amounts, [{ id: 'unpaidBalance', label: 'Unpaid balance', text: '$245K', basis: 'from the county\'s index' }]);
 });
 
-test('the scope guard: a row the engine\'s scope rule did not write, or one known to be residential, never shows', () => {
+test('the scope guard: only a row whose county parcel record confirmed a commercial property shows; a home, a property not confirmed, or a row written before the rule never does', () => {
   const base = { id: 'jefferson:J2699901/NED', documentType: 'election_and_demand', typeLabel: 'Notice of election and demand', countyLabel: 'Jefferson County, CO', date: '2026-11-12', dateKind: 'recorded',
     roles: ['holder'], how: 'exact name', amounts: {}, relation: 'current', link: 'https://gts.co.jefferson.co.us/Report_Files/x.pdf' };
+  const prop = (p) => ({ status: 'matched', kind: null, sector: null, landUse: null, ...p });
   const bank = { loans: [
-    { ...base, id: 'a', loanType: 'Commercial', commercial: true, scope: { commercial: true, borrowers: null } },
-    { ...base, id: 'b', loanType: 'Unknown', commercial: null, scope: { commercial: null, borrowers: null } },
-    { ...base, id: 'c', loanType: 'FNMA', commercial: false, scope: { commercial: false, borrowers: null } },
-    { ...base, id: 'd', loanType: null, commercial: null, scope: { commercial: null, borrowers: 'individuals' } },
-    { ...base, id: 'e', loanType: 'Conventional Residential', commercial: null },   // written before the scope rule: no scope
+    { ...base, id: 'a', loanType: 'FNMA', commercial: false, scope: { commercial: false, borrowers: null, property: prop({ kind: 'commercial', sector: 'multifamily' }) } },
+    { ...base, id: 'b', loanType: 'FHA', commercial: false, scope: { commercial: false, borrowers: null, property: prop({ kind: 'land', landUse: 'commercial' }) } },
+    { ...base, id: 'c', loanType: 'Commercial', commercial: true, scope: { commercial: true, borrowers: null, property: prop({ kind: 'residential' }) } },
+    { ...base, id: 'd', loanType: 'Commercial', commercial: true, scope: { commercial: true, borrowers: null, property: { status: 'unmatched', kind: null, sector: null, landUse: null } } },
+    { ...base, id: 'e', loanType: 'Commercial', commercial: true, scope: { commercial: true, borrowers: null } },   // written before the parcel rule
+    { ...base, id: 'f', loanType: 'Conventional Residential', commercial: null },   // written before the scope rule: no scope
   ] };
   assert.deepEqual(loanRows(bank).map((r) => r.id), ['a', 'b']);
   assert.deepEqual([loansCard(bank, []).count, inScope(bank.loans[0]), inScope(bank.loans[4])], [2, true, false]);
+});
+
+test('the bank page\'s guard is the engine\'s: the same decision for every stored scope (src/loans.mjs decideScope)', () => {
+  const statuses = ['matched', 'unmatched', 'ambiguous', 'no-address', 'no-place', 'none', 'no-source'];
+  const kinds = ['commercial', 'residential', 'land', 'exempt', 'agricultural', 'units-unknown', 'other', null];
+  const landUses = ['commercial', 'industrial', 'residential', 'other', null];
+  let n = 0;
+  for (const status of statuses) for (const kind of kinds) for (const landUse of landUses) for (const commercial of [true, false, null]) {
+    const scope = { commercial, borrowers: commercial === null ? 'entity' : null, property: { status, kind, sector: kind === 'commercial' ? 'retail' : null, landUse } };
+    assert.equal(inScope({ scope }), scopeShown({ scope }), JSON.stringify(scope));
+    assert.equal(inScope({ scope }), decideScope(scope).inScope);
+    n++;
+  }
+  for (const scope of [undefined, null, {}, { commercial: true, borrowers: null }, { property: null }]) assert.equal(inScope({ scope }), scopeShown({ scope }));
+  assert.ok(n > 500);
 });

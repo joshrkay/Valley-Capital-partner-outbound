@@ -10,6 +10,7 @@ import { buildDocument, documentId, hashDocument, diffDocuments, writeDiff, buil
   DOC_TYPES, STAGES, ROLES, AMOUNT_BASES, RECORD_KEYS, CONTEXT_NOTE } from '../src/loans.mjs';
 import { exampleCounty } from '../src/sources/counties/example.mjs';
 import { INSTITUTIONS, BORROWERS, ADDRESSES } from './county-notices-fake.mjs';
+import { confirmParcels, ATTRIBUTION as PARCEL_ATTRIBUTION } from './parcels-kit.mjs';
 
 const SRC = exampleCounty;
 const AT = '2026-11-16T12:00:00.000Z';
@@ -173,6 +174,8 @@ function seeded() {
   ];
   const d = diffDocuments({}, docs, { now: new Date(AT), runId: 'r1' });
   writeDiff(dir, 'example-county', d, { runId: 'r1', now: new Date(AT) });
+  // Only a filing whose county parcel confirms a commercial property is a lead (docs/county-loans.md 3a): each invented one is an office.
+  confirmParcels(dir, 'example-county', { cls: 'office' });
   return dir;
 }
 
@@ -207,9 +210,10 @@ test('events: one dated event per document newly matched to a bank, in a fixed s
   const ev = loanEvents({ dir });
   assert.deepEqual(ev.map((e) => e.key).sort(), ['fdic:9001', 'fdic:9002', 'fdic:9005']);
   const nts = ev.find((e) => e.key === 'fdic:9001');
-  assert.equal(nts.label, 'A notice of trustee\'s sale was recorded on November 11, 2026 for a loan from this bank on a property in Example County, CO.');
+  assert.equal(nts.label, 'A notice of trustee\'s sale was recorded on November 11, 2026 for a loan from this bank on an office property in Example County, CO; property type confirmed from the county\'s parcel record.');
+  assert.deepEqual([nts.sector, nts.propertyType, nts.propertyConfirmed, nts.propertySource], ['office', 'office', true, PARCEL_ATTRIBUTION]);
   assert.deepEqual([nts.kind, nts.type, nts.date, nts.basis, nts.scored, nts.contextOnly], ['event', 'county_document', '2026-11-11', 'new-document', false, true]);
-  assert.match(ev.find((e) => e.key === 'fdic:9005').label, /^An assignment was recorded on .* moving a loan on a property in Example County, CO from this bank to another holder\.$/);
+  assert.match(ev.find((e) => e.key === 'fdic:9005').label, /^An assignment was recorded on .* moving a loan on an office property in Example County, CO from this bank to another holder; property type confirmed from the county's parcel record\.$/);
   const before = readFileSync(loansPaths(dir).events, 'utf8'), bankBefore = readFileSync(loansPaths(dir).bank('fdic:9001'), 'utf8');
   const again = buildLoanIndex({ dir, now: new Date('2026-11-23T12:00:00Z'), runId: 'r2' });
   assert.deepEqual([again.eventsNew, again.bankFilesWritten], [0, 0], 'idempotent: no new event, no bank file rewritten');
@@ -243,7 +247,7 @@ test('platform storage: every path the pipeline writes fits the existing documen
   buildLoanIndex({ dir, now: new Date(AT), runId: 'r1' });
   const rel = (p) => p.slice(dir.length + 1);
   const P = loansPaths(dir);
-  for (const p of [P.docs('example-county'), P.docs('tx-caldwell-notices-of-sale'), P.list('tx-caldwell-notices-of-sale'), P.bank('fdic:9001'), P.review, P.events, P.state].map(rel)) {
+  for (const p of [P.docs('example-county'), P.docs('tx-caldwell-notices-of-sale'), P.list('tx-caldwell-notices-of-sale'), P.bank('fdic:9001'), P.review, P.events, P.state, P.parcels('jefferson'), P.unconfirmed].map(rel)) {
     assert.match(p, doc, p);
     assert.ok(!p.includes('..') && !p.endsWith('.jsonl'), p);
     assert.ok(p.startsWith('loans/'), p);

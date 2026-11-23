@@ -41,15 +41,17 @@ export const LOADS = Object.freeze({
   // Watch lines for principals; never the documents.
   triage: ['candidates/', 'accounts/', 'suppression.json', 'touches.jsonl', 'sources/runs.jsonl', 'sources/fdic/state.json', 'sources/fdic/failed.json',
     'sources/edgar/loans.json', 'sources/edgar/filings.json', 'sources/edgar/filers.json', 'triage/state.json', 'loans/events.json', 'loans/cmbs.json'],
-  // County loan documents (docs/county-loans.md, src/loans.mjs and src/sources/notices.mjs): the watcher's own folder, the bank list and
-  // the aliases it matches lenders against, and the run log. Loan and borrower detail is context for principals only: no model-facing
-  // action (research, draft, approve, call prep, call notes, the call desk) loads loans/, and neither does scoring, so no county
-  // document can change a score, a weight or a tier (test/loans-handoff.test.mjs).
+  // County loan documents (docs/county-loans.md, src/loans.mjs and src/sources/notices.mjs): the watcher's own folder (with the parcel
+  // matches the run looks up, loans/parcels/, src/parcels.mjs), the bank list and the aliases it matches lenders against, and the run log.
+  // Loan and borrower detail is context for principals only: no model-facing action (research, draft, approve, call prep, call notes, the
+  // call desk) loads loans/, and neither does scoring, so no county document or parcel match can change a score, a weight or a tier
+  // (test/loans-handoff.test.mjs, test/parcels.test.mjs).
   loans: ['loans/', 'sources/fdic/institutions.json', 'candidates/aliases.json', 'sources/runs.jsonl'],
-  // The CMBS link (docs/county-loans.md section 9, src/cmbslinks.mjs): the stored county documents, the stored EDGAR pull (the trusts, their
-  // in-market loans and the pull's state) and the link file it writes. Rebuilt after loans.watch and after sources.edgar, in its own unit
-  // of work. Like loans/, never loaded by a model-facing action or by scoring.
-  cmbs: ['loans/docs/', 'loans/cmbs.json', 'sources/edgar/trusts.json', 'sources/edgar/loans.json', 'sources/edgar/state.json'],
+  // The CMBS link (docs/county-loans.md section 9, src/cmbslinks.mjs): the stored county documents and their parcel matches (the same scope
+  // rule as the index), the stored EDGAR pull (the trusts, their in-market loans and the pull's state) and the link file it writes.
+  // Rebuilt after loans.watch and after sources.edgar, in its own unit of work. Like loans/, never loaded by a model-facing action or by
+  // scoring.
+  cmbs: ['loans/docs/', 'loans/parcels/', 'loans/cmbs.json', 'sources/edgar/trusts.json', 'sources/edgar/loans.json', 'sources/edgar/state.json'],
   sales: ['sources/', 'sales/', 'intermediaries/'],   // next-five E19-S1: the intermediary registry is rebuilt with the ledger
   // Intermediaries (next-five E19): the registry, a principal's records and registrations; the ledger and CMBS loans it is built from;
   // the suppression list (an NDA under an advisor's agreement goes there). No model-facing action loads intermediaries/.

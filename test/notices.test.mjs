@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { readFileSync, existsSync } from 'node:fs';
 import { makeDir, put, config } from './kit.mjs';
 import { readJson, readJsonl } from '../src/store.mjs';
+import { confirmAll } from './parcels-kit.mjs';
 import { defineNoticeSource, runnable, validateCountyConfig, enabledSourceIds, runNoticeSource, verifyNoticeSource, htmlTables, parseUsd, parseDate, CHANNELS } from '../src/sources/notices.mjs';
 import { exampleCounty, parseExampleList, EXAMPLE_LIST } from '../src/sources/counties/example.mjs';
 import { COUNTY_SOURCES, countySource, watchedCounties, countyCoverage } from '../src/counties.mjs';
@@ -16,7 +17,9 @@ import { fakeCounty, listHtml, WEEK1, WEEK2, INSTITUTIONS, BORROWERS, ADDRESSES,
 const counties = () => config().counties;
 const T1 = new Date('2026-11-16T12:00:00Z'), T2 = new Date('2026-11-23T12:00:00Z');
 const world = () => { const dir = makeDir(); put(dir, 'sources/fdic/institutions.json', INSTITUTIONS); return dir; };
-const run = (dir, f, now = T1, over = {}) => runNoticeSource({ dir, source: exampleCounty, counties: counties(), fetchImpl: f.fetchImpl, sleep: async () => {}, now, clock: () => now, allowExample: true, ...over });
+// Every invented document's county parcel is confirmed retail by the run's parcel lookup (test/parcels-kit.mjs, no network), so each is a
+// lead (docs/county-loans.md 3a).
+const run = (dir, f, now = T1, over = {}) => runNoticeSource({ dir, source: exampleCounty, counties: counties(), fetchImpl: f.fetchImpl, sleep: async () => {}, now, clock: () => now, allowExample: true, parcels: confirmAll('retail'), ...over });
 
 test('the interface: an adapter declares its county, channel, cadence, hosts, terms, requests and parser, or it is refused', () => {
   assert.deepEqual(Object.keys(CHANNELS), ['a', 'b', 'c']);
@@ -146,8 +149,9 @@ test('two weeks of the watcher: new documents written, a changed one updated, un
   const dir = world();
   const r1 = await run(dir, fakeCounty());
   // Five banks' documents, four events: the notice of sale names Example Bank only as the original beneficiary and a fund as the current
-  // holder, so it is on the bank's page and gives no event. Every grantor is an entity, so all eight are in scope.
+  // holder, so it is on the bank's page and gives no event. Every county parcel is confirmed retail, so all eight are leads.
   assert.deepEqual([r1.outcome, r1.read, r1.added, r1.changed, r1.unchanged, r1.skipped, r1.inScope, r1.outOfScope, r1.index.eventsNew, r1.index.originated], ['ok', 8, 8, 0, 0, 1, 8, 0, 4, 1]);
+  assert.deepEqual([r1.parcels.outcome, r1.parcels.matched], ['ok', 8], 'the run looked up the parcels before the index');
   const P = loansPaths(dir);
   const docsAfter1 = readFileSync(P.docs('example-county'), 'utf8');
   // The same week again: idempotent. Nothing new, nothing rewritten, no event.
@@ -170,7 +174,7 @@ test('two weeks of the watcher: new documents written, a changed one updated, un
   assert.ok(!ev.some((e) => e.documentId === 'example-county:2026-004105'), 'none for the bank that only originated the loan');
   assert.match(ev.find((e) => e.documentId === 'example-county:2026-004121').label, /^A deed of trust was recorded on November 18, 2026 for a loan from this bank/);
   const fresh = ev.find((e) => e.documentId === 'example-county:2026-004120');
-  assert.equal(fresh.label, 'A notice of election and demand was recorded on November 17, 2026 for a loan from this bank on a property in Example County, CO.');
+  assert.equal(fresh.label, 'A notice of election and demand was recorded on November 17, 2026 for a loan from this bank on a retail property in Example County, CO; property type confirmed from the county\'s parcel record.');
   assert.equal(fresh.key, 'fdic:9001');
   assert.equal(readBankLoans({ dir, key: 'fdic:9001' }).loans[0].id, 'example-county:2026-004120', 'newest first');
   // State: each run with its counts, for the Status page.
