@@ -189,6 +189,11 @@ test('the assessor\'s codes, read by value: land gives way to the building on it
   assert.deepEqual(k([['0200', 100000]]), ['land', null, 'commercial', '0200']);
   assert.deepEqual(k([]), ['other', null, null, null]);
   assert.deepEqual(k([['1120', 1], ['1220', 1]], [], 5), ['commercial', 'multifamily', null, '1120'], '5 units: multifamily');
+  // Commercial codes of more than one sector and equal value (values left blank): the building use decides, else other-commercial.
+  assert.deepEqual(k([['2112', 0], ['2215', 0]], ['Hotel - Limited Service']), ['commercial', 'hospitality', null, '2215'], 'tie: the building use names the hotel');
+  assert.deepEqual(k([['2112', 0], ['2215', 0]]), ['commercial', 'other-commercial', null, '2112'], 'tie and no building use: not guessed, still commercial');
+  assert.deepEqual(k([['2112', 0], ['2215', 0]], ['Office Building']), ['commercial', 'other-commercial', null, '2112'], 'tie and a use naming neither tied sector');
+  assert.deepEqual(k([['2112', 500000], ['2215', 100000]], ['Hotel - Limited Service']), ['commercial', 'retail', null, '2112'], 'no tie: value decides, not the use');
   // The sectors align with the buy box and the property types.
   assert.ok(loadJson('buybox.json').sectors.include.every((s) => SECTORS[s]), 'every buy-box sector is a sector');
   assert.ok(Object.values(SECTORS).every((s) => PROPERTY_TYPES[s.propertyType]));

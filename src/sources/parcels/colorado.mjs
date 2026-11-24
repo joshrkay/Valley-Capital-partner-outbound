@@ -112,6 +112,15 @@ export function classifyColorado({ codes = [], uses = [], units = null } = {}) {
     const e = bySector.get(sector) ?? { sector, value: 0, code: s.code };
     e.value += s.value; bySector.set(sector, e);
   }
-  const best = most([...bySector.values()]);
+  // Sectors of equal value (often every value 0, where the assessor left them blank): the building use decides when it names one of the
+  // tied sectors; otherwise 'other-commercial'. Commercial either way, so still a lead: only the sector label is never a guess.
+  const sectors = [...bySector.values()];
+  const best = most(sectors);
+  const tied = sectors.filter((e) => e.value === best.value);
+  if (tied.length > 1) {
+    const byUse = (uses ?? []).map(sectorOfUse).find((s) => s && tied.some((e) => e.sector === s));
+    const pick = byUse ? tied.find((e) => e.sector === byUse) : null;
+    return pick ? { kind: 'commercial', sector: pick.sector, landUse: null, code: pick.code } : { kind: 'commercial', sector: 'other-commercial', landUse: null, code: tied[0].code, why: 'commercial codes of more than one sector, with no value to choose by' };
+  }
   return { kind: 'commercial', sector: best.sector, landUse: null, code: best.code };
 }
