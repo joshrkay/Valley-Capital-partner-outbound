@@ -4,7 +4,7 @@
 // worker job and the workflow are in test/loans-watch.test.mjs. Invented data only (test/caldwell-fake.mjs); no network.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeDir, put, config } from './kit.mjs';
 import { readJson } from '../src/store.mjs';
@@ -13,7 +13,8 @@ import { caldwellCounty, caldwellSource, registryEntry, termsFrom, intervalFrom,
   numericDateReadings, readDateAt, monthOf, texasSaleDay, readDollars, lenderName, splitNames, borrowerName, isEntityName, readAddress, readRecording, CALDWELL_ID, CALDWELL_LIST } from '../src/sources/counties/caldwell.mjs';
 import { pdfToText, hasPdfToText } from '../src/sources/pdftext.mjs';
 import { COUNTY_SOURCES, countyCoverage } from '../src/counties.mjs';
-import { loansPaths, loanEvents, readBankLoans, readLoanState, loanScope, eventLabel } from '../src/loans.mjs';
+import { loansPaths, loanEvents, readBankLoans, readLoanState, loanScope, scopeAll, readParcelMatches, eventLabel } from '../src/loans.mjs';
+import { confirmAll } from './parcels-kit.mjs';
 import { matchLender } from '../src/lenders.mjs';
 import { fakeCaldwell, listHtml, textPdf, WEEK1, WEEK2, SERVICER_NOTICE, ATTORNEY_NOTICE, RUINED_NOTICE, CHALLENGE, INSTITUTIONS, PEOPLE, BORROWER_FIRMS, ADDRESSES } from './caldwell-fake.mjs';
 
@@ -203,9 +204,20 @@ test('the run: robots.txt first, the firm\'s User-Agent, 21 seconds apart, the b
 });
 
 test('the record, the bank\'s file and the events: matched through MERS, the notice\'s own dates, and no name, address or file link', needsPdf, async () => {
+  // Caldwell has no parcel source, so none of its notices is a lead (docs/county-loans.md 3a): with none, they are all on the
+  // property-not-confirmed list and nothing reaches a bank's file or an event.
+  const bare = world();
+  await run(bare, fakeCaldwell());
+  await run(bare, fakeCaldwell({ items: WEEK2() }), T2);
+  assert.ok(!existsSync(loansPaths(bare).banksDir) || !readdirSync(loansPaths(bare).banksDir).length, 'no bank file');
+  assert.deepEqual(loanEvents({ dir: bare }), []);
+  assert.deepEqual(readJson(loansPaths(bare).unconfirmed).entries.map((e) => e.reason), ['no-source', 'no-source', 'no-source']);
+  // The rest of this test gives each notice a county parcel record, as a parcel source would: the couple's a house, the LLC's a retail
+  // property.
+  const home1 = (d) => (d?.dates?.notice === '2026-10-21' ? 'house' : 'retail');
   const dir = world();
-  await run(dir, fakeCaldwell());
-  await run(dir, fakeCaldwell({ items: WEEK2() }), T2);
+  await run(dir, fakeCaldwell(), T1, { parcels: confirmAll(home1) });
+  await run(dir, fakeCaldwell({ items: WEEK2() }), T2, { parcels: confirmAll(home1) });
   const P = loansPaths(dir);
   const docs = Object.values(readJson(P.docs(CALDWELL_ID)));
   assert.equal(docs.length, 3);
@@ -215,21 +227,23 @@ test('the record, the bank\'s file and the events: matched through MERS, the not
     assert.match(d.sources[0].listUrl, /^https:\/\/caldwellcounty\.texas\.gov\/foreclosures#fc-m-\d{4}-\d{2}$/);
     assert.match(d.sources[0].etag, /^"f-/);
   }
-  // The servicer's notice: a husband and wife borrow, and a Texas notice gives no loan type, so it is a home mortgage, out of scope. It is
+  // The servicer's notice: a husband and wife borrow on a house (its parcel record), and a Texas notice gives no loan type: out. It is
   // stored, read through MERS, with the notice's own dates, and reaches no bank's file and no event.
   const home = docs.find((d) => d.dates.notice === '2026-10-21');
   assert.deepEqual([home.dates.sale, home.amounts.originalPrincipal.value, home.parties.find((p) => p.role === 'beneficiary').name], ['2026-12-01', 412500, 'Mortgage Electronic Registration Systems, Inc., as nominee for Example Bank, N.A.']);
-  assert.deepEqual(loanScope(home), { inScope: false, why: 'individual-borrowers', loanType: null, commercial: null, borrowers: 'individuals' });
+  const hs = scopeAll(docs, { parcels: readParcelMatches(dir) }).get(home.id);
+  assert.deepEqual([hs.inScope, hs.why, hs.loanTypeInScope, hs.loanType, hs.commercial, hs.borrowers], [false, 'residential-parcel', false, null, null, 'individuals']);
+  assert.deepEqual([loanScope(home).why, loanScope(home).property.status], ['not-confirmed', 'no-source'], 'with no parcel record: not confirmed');
   assert.equal(readBankLoans({ dir, key: 'fdic:9001' }), null, 'no bank file from the home mortgage');
   assert.deepEqual(loanEvents({ dir, key: 'fdic:9001' }), []);
   assert.equal(eventLabel(home, ['beneficiary']), 'A notice of trustee\'s sale dated October 21, 2026 was posted for a loan from this bank on a property in Caldwell County, TX.', 'the sentence it would have had');
-  // The attorney's notices: an LLC borrows, so they are in scope, matched to the bank as payee, beneficiary and lender.
+  // The attorney's notices: an LLC borrows on a retail property, so they are leads, matched to the bank as payee, beneficiary and lender.
   const bank = readBankLoans({ dir, key: 'fdic:9002' });
   assert.equal(bank.loans.length, 2);
-  assert.deepEqual([bank.loans[0].relation, bank.loans[0].scope, bank.loans[0].dateKind], ['current', { commercial: null, borrowers: 'entity' }, 'notice']);
+  assert.deepEqual([bank.loans[0].relation, bank.loans[0].scope, bank.loans[0].dateKind], ['current', { commercial: null, borrowers: 'entity', property: { status: 'matched', kind: 'commercial', sector: 'retail', landUse: null } }, 'notice']);
   assert.match(bank.loans[0].link, new RegExp(`^${CALDWELL_LIST}#fc-m-\\d{4}-\\d{2}$`), 'the list\'s month, not the file named for the debtor');
   const ev = loanEvents({ dir, key: 'fdic:9002' }).find((e) => e.documentId === bank.loans[1].id);
-  assert.match(ev.label, /^A notice of trustee's sale dated October 9, 2026 was posted for a loan from this bank on a property in Caldwell County, TX\.$/);
+  assert.match(ev.label, /^A notice of trustee's sale dated October 9, 2026 was posted for a loan from this bank on a retail property in Caldwell County, TX; property type confirmed from the county's parcel record\.$/);
   // Nothing about a person, a borrower, an address or a file name anywhere but the documents themselves.
   const outside = [P.state, P.events, P.review, P.list(CALDWELL_ID), join(dir, 'sources', 'runs.jsonl'), ...['fdic-9001', 'fdic-9002'].map((k) => join(P.banksDir, `${k}.json`))]
     .filter(existsSync).map((p) => readFileSync(p, 'utf8')).join('\n');

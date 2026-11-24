@@ -31,13 +31,15 @@ test('the worker\'s loans.watch job runs every watched county in its own unit of
   await work({ client: service, rules, deps: { fetchImpl: fakeCaldwell().fetchImpl, now: () => T1, sleep: async () => {} } });
   const job = fake.jobs[0];
   assert.equal(job.status, 'done', JSON.stringify(job.result));
-  // Two notices stored: the attorney's form (an LLC borrows) is in scope and matched; the servicer's form (a couple borrows, no loan
-  // type) is out of scope, stored but matched to no bank.
+  // Two notices stored. Caldwell has no parcel source, so neither property is confirmed by a county parcel record: neither is a lead
+  // (docs/county-loans.md 3a), whatever the borrower. Both are stored and on the property-not-confirmed list; no bank's file is written.
   const c0 = job.result.counties[0];
-  assert.deepEqual([job.result.watched, c0.source, c0.outcome, c0.added, c0.held, c0.inScope, c0.outOfScope, c0.matchedDocuments],
-    [1, CALDWELL_ID, 'ok', 2, 1, 1, 1, 1]);
-  assert.ok(fake.docs.has(`loans/docs/${CALDWELL_ID}.json`) && fake.docs.has(`loans/lists/${CALDWELL_ID}.json`) && fake.docs.has('loans/banks/fdic-9002.json'));
-  assert.ok(!fake.docs.has('loans/banks/fdic-9001.json'), 'the out-of-scope notice gives its bank no file');
+  assert.deepEqual([job.result.watched, c0.source, c0.outcome, c0.added, c0.held, c0.inScope, c0.outOfScope, c0.matchedDocuments, c0.parcels.outcome],
+    [1, CALDWELL_ID, 'ok', 2, 1, 0, 2, 0, 'no-source']);
+  assert.ok(fake.docs.has(`loans/docs/${CALDWELL_ID}.json`) && fake.docs.has(`loans/lists/${CALDWELL_ID}.json`));
+  assert.ok(!fake.docs.has('loans/banks/fdic-9001.json') && !fake.docs.has('loans/banks/fdic-9002.json'), 'no lead, no bank file');
+  const un = fake.docs.get('loans/unconfirmed.json').body;
+  assert.deepEqual(un.entries.map((e) => [e.reason, e.loanTypeInScope]).sort(), [['no-source', false], ['no-source', true]], 'the LLC\'s notice first among those to check by hand');
   assert.doesNotMatch(JSON.stringify(job.result), /Example|Sample|Placeholder|files\//, 'the job result holds counts, not names or links');
   // After the decision's recheck date the job refuses and fails, which turns the workflow red.
   await platformClient({ url, key: 'anon-key', accessToken: 'user:pat@example.test', fetchImpl: fake.fetchImpl }).enqueue('loans.watch');

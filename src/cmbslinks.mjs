@@ -25,7 +25,7 @@ import { join } from 'node:path';
 import { readJson, writeJson } from './store.mjs';
 import { norm } from './guard.mjs';
 import { cleanLenderName, setAsideClass } from './lenders.mjs';
-import { allDocuments, loansPaths, documentDate, countyLabel, publicLink, longDate, scopeAll, scopeShown, DOC_TYPES, STAGES, CONTEXT_NOTE } from './loans.mjs';
+import { allDocuments, loansPaths, documentDate, countyLabel, publicLink, longDate, scopeAll, scopeShown, storedScope, readParcelMatches, DOC_TYPES, STAGES, CONTEXT_NOTE } from './loans.mjs';
 import { CODES, edgarPaths } from './sources/edgar.mjs';
 
 export const CMBS_LINKS_REL = 'loans/cmbs.json';
@@ -288,9 +288,9 @@ function entryFor(doc, named, role, m, prev, at, scope) {
   const e = {
     id: `cmbs:${doc.id}`, documentId: doc.id, sourceId: doc.sourceId, documentType: doc.documentType, typeLabel: DOC_TYPES[doc.documentType]?.label ?? doc.documentType,
     stage, stageLabel: STAGES[stage] ?? null, county: doc.county, countyLabel: countyLabel(doc), state: doc.state, date, dateKind: kind, link: publicLink(doc),
-    // The scope the county index's rule read (src/loans.mjs loanScope), as its events carry it: the triage and the servicer page check
-    // it again (scopeShown). No name.
-    scope: { commercial: scope?.commercial ?? null, borrowers: scope?.borrowers ?? null },
+    // The scope the county index's rule read (src/loans.mjs loanScope, with the document's parcel match), as its events carry it: the
+    // triage and the servicer page check it again (scopeShown). No name, no address.
+    scope: storedScope(scope),
     originalPrincipal: statedAmount(doc.amounts?.originalPrincipal),
     named: { role, trust: named.trust, series: named.series },
     status: m.status, reason: m.status === 'linked' ? null : m.reason, reasonText: m.status === 'linked' ? null : NOT_FOUND[m.reason] ?? null,
@@ -308,7 +308,8 @@ function entryFor(doc, named, role, m, prev, at, scope) {
 
 // Reads every stored county document (loans/docs/) and the stored EDGAR pull (sources/edgar/trusts.json and loans.json), and writes
 // loans/cmbs.json: one entry per document in scope whose current holder names a CMBS trust, linked or not found. A document the county
-// index's scope rule puts out of scope (a residential loan type, or only people as borrowers: src/loans.mjs loanScope) is never linked.
+// index's scope rule puts out of scope (a home by its parcel record, a residential loan type, or only people as borrowers: src/loans.mjs
+// loanScope) is never linked.
 // Rewritten only when an entry changed. Run after the county index is rebuilt (loans.watch) and after the EDGAR pull (sources.edgar),
 // each in its own unit of work (LOADS.cmbs). Returns counts only.
 export function buildCmbsLinks({ dir, now = new Date() } = {}) {
@@ -323,7 +324,8 @@ export function buildCmbsLinks({ dir, now = new Date() } = {}) {
   const links = {};
   const counts = { documents: 0, outOfScope: 0, named: 0, linked: 0, notFound: 0, unconfirmed: 0, byReason: {} };
   const docs = allDocuments(dir).sort((a, b) => (a.id < b.id ? -1 : 1));
-  const scopes = scopeAll(docs);
+  // The county index's scope rule, with the stored parcel matches (loans/parcels/): the same documents in scope as the index's.
+  const scopes = scopeAll(docs, { parcels: readParcelMatches(dir) });
   for (const doc of docs) {
     counts.documents++;
     const scope = scopes.get(doc.id);

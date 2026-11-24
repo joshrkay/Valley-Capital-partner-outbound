@@ -73,6 +73,11 @@
     "maxDocumentsPerRun": 40,
     "backfillDays": 60,
     "freshDays": 10,
+    "parcels": {
+      "_note": "The property behind each county filing, from the county's own parcel record (docs/county-loans.md 3a, src/parcels.mjs). By a principal's ruling of 2026-11-23, only a filing whose parcel the assessor classes commercial, multifamily of 5 or more units, or commercial land is a lead; every other filing is out (a home) or on the property-not-confirmed list. Only Jefferson has a parcel source: the Assessor's public parcel layer, CC BY 4.0, attributed wherever a property type shows. The weekly run (loans.watch) looks up each new or changed filing after reading its county; a lookup that fails is counted and never fails the county's run. enabled false turns every lookup off. minIntervalMs: the least time between requests to a parcel host, never less than the adapter's 1.5 seconds.",
+      "enabled": true,
+      "minIntervalMs": 1500
+    },
     "watch": ["tx-caldwell-notices-of-sale"],
     "sources": {
       "_note": "Each registered real county source, by id (src/counties.mjs), with whether it may run. enabled is false until a principal has recorded the decision the adapter's terms carry (terms.decision 'allowed', with the date and who decided); runNoticeSource refuses a source marked false, and nothing is fetched. waitingOn says what it waits on. The weekly job (loans.watch) reads every enabled source: each one listed in watch that is not marked false here, and each one marked true here.",

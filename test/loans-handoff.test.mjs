@@ -26,11 +26,13 @@ import { exampleCounty } from '../src/sources/counties/example.mjs';
 import { readBankLoans, loanEvents } from '../src/loans.mjs';
 import { fakeFdic, METROS, TABLES } from './fdic-fake.mjs';
 import { fakeCounty, WEEK1 } from './county-notices-fake.mjs';
+import { confirmAll } from './parcels-kit.mjs';
+import { readFileSync } from 'node:fs';
 
 const rules = loadRules();
 const NOW = new Date('2026-11-16T12:00:00Z');
 const covers = (prefix, rel) => prefix === '' || rel === prefix || (prefix.endsWith('/') && rel.startsWith(prefix));
-const LOAN_PATHS = ['loans/docs/example-county.json', 'loans/banks/fdic-101.json', 'loans/review.json', 'loans/events.json', 'loans/state.json'];
+const LOAN_PATHS = ['loans/docs/example-county.json', 'loans/banks/fdic-101.json', 'loans/review.json', 'loans/events.json', 'loans/state.json', 'loans/parcels/example-county.json', 'loans/unconfirmed.json'];
 // What only the county document holds.
 const LEAKS = ['Zephyrine', 'Quillon', '8,765,432', '8765432', '2026-777001', '2026-777002', '2019-5550101', 'publictrustee.example', 'Example County', 'trustee\'s sale', 'election and demand',
   'county_document', 'loans/', 'Sample & Example LLP'];
@@ -50,7 +52,7 @@ test('LOADS: loans/ is out of the drafter\'s list, every other model-facing list
   for (const p of LOAN_PATHS) assert.ok(!LOADS.score.some((x) => covers(x, p)), `scoring covers ${p}`);
   assert.ok(!LOADS.draft.some((p) => p === '' || 'loans/'.startsWith(p) || p.startsWith('loans')), `LOADS.draft: ${LOADS.draft.join(', ')}`);
   assert.deepEqual(LOADS.loans, ['loans/', 'sources/fdic/institutions.json', 'candidates/aliases.json', 'sources/runs.jsonl']);
-  assert.deepEqual(LOADS.triage.filter((p) => p.startsWith('loans')), ['loans/events.json', 'loans/cmbs.json'], 'the triage reads the events and the CMBS links only, never the documents');
+  assert.deepEqual(LOADS.triage.filter((p) => p.startsWith('loans')), ['loans/events.json', 'loans/cmbs.json'], 'the triage reads the events and the CMBS links only, never the documents, the parcel matches or the property-not-confirmed list');
   // Scoring's rules name no county signal.
   assert.doesNotMatch(JSON.stringify(rules.scoring.signals ?? []), /county|trustee|loan document|lis pendens/i);
 });
@@ -61,7 +63,8 @@ async function world() {
   runScoring({ dir, buybox: rules.buybox, scoring: rules.scoring, metros: rules.metros, now: NOW, allowPlaceholders: true });
   return dir;
 }
-const county = (dir, now = NOW) => runNoticeSource({ dir, source: exampleCounty, counties: rules.config.counties, fetchImpl: fakeCounty({ rows: ROWS() }).fetchImpl, sleep: async () => {}, now, clock: () => now, allowExample: true });
+// Each document's county parcel record says retail (test/parcels-kit.mjs, no network), so each is a lead (docs/county-loans.md 3a).
+const county = (dir, now = NOW) => runNoticeSource({ dir, source: exampleCounty, counties: rules.config.counties, fetchImpl: fakeCounty({ rows: ROWS() }).fetchImpl, sleep: async () => {}, now, clock: () => now, allowExample: true, parcels: confirmAll('retail') });
 const scored = (dir) => { const l = readJson(join(dir, 'candidates', 'latest.json')); return JSON.stringify({ ...l, runId: null, scoredAt: null }); };
 
 test('a county document changes no score, weight or tier: the same data scores the same with and without it, and scoring cannot load it', async () => {
@@ -96,7 +99,8 @@ test('end to end: the drafter, inside a unit of work with exactly LOADS.draft, c
   put(dir, `research/${a.id}.json`, { account: a.id, riskScreen: { approach: 'ok', reasons: [], finding_ids: [] }, personCheck: { status: 'confirmed' } });
   put(dir, 'touches.jsonl', `${JSON.stringify({ type: 'touch', accountId: a.id, step: 1, channel: 'letter', sender: 'pat', date: '2026-11-10' })}\n`);
   const snap = snapshotFromDir(dir);
-  for (const p of LOAN_PATHS.map((x) => x.replace('fdic-101', 'fdic-101'))) assert.ok(snap.docs[p], `${p} is in the data folder`);
+  // Every loan path but the property-not-confirmed list (written only when a document's property is not confirmed; none here).
+  for (const p of LOAN_PATHS.filter((x) => x !== 'loans/unconfirmed.json')) assert.ok(snap.docs[p], `${p} is in the data folder`);
   const blind = (root) => { for (const p of LOAN_PATHS) assert.throws(() => readJson(join(root, p)), /was not loaded/, p); };
 
   const { result: d } = await withUnitOfWork({ load: async () => snap, flush: async () => {} }, LOADS.draft, async (root) => {
@@ -125,7 +129,8 @@ test('the weekly triage: each new event is a Watch line in the event\'s own sent
   const mine = all.filter((f) => f.type === 'county-document');
   assert.equal(mine.length, 2, JSON.stringify(all.map((f) => f.type)));
   assert.ok(mine.every((f) => f.category === 'watch' && f.key === 'fdic:101'));
-  assert.ok(mine.some((f) => f.reason === 'A notice of trustee\'s sale was recorded on November 11, 2026 for a loan from this bank on a property in Example County, CO.'), JSON.stringify(mine));
+  assert.ok(mine.some((f) => f.reason === 'A notice of trustee\'s sale was recorded on November 11, 2026 for a loan from this bank on a retail property in Example County, CO; property type confirmed from the county\'s parcel record.'), JSON.stringify(mine));
+  assert.match(readFileSync(join(dir, 'triage', '2026-11-16.md'), 'utf8'), /^Property type: Example County Assessor parcel data \(CC BY 4\.0\)\.$/m, 'the property type is attributed under the lists');
   assert.ok(!t.actNow.some((i) => i.findings.some((f) => f.type === 'county-document')));
   // The next week: already seen, not listed again.
   const t2 = runTriage({ dir, rules: rules.triage, now: new Date('2026-11-23T12:00:00Z'), metros: rules.metros, scoring: rules.scoring });
@@ -139,18 +144,21 @@ test('the weekly triage: each new event is a Watch line in the event\'s own sent
   assert.ok(![...t3.actNow, ...t3.watch].some((i) => i.key === 'fdic:101'), 'the dismissed bank is not brought back by a county event');
 });
 
-test('the weekly triage lists only what the scope rule allows: no home mortgage, no bank that only originated the loan, nothing written before the rule', async () => {
+test('the weekly triage lists only what the scope rule allows: no home, no property a parcel does not confirm, no bank that only originated the loan, nothing written before the rule', async () => {
   const dir = await world();
   const rows = () => [
     ROWS()[0],
-    // Every grantor a person and no loan type: a home mortgage, out of scope.
+    // Its property is matched to no county parcel: not a lead, whatever its loan type (the property-not-confirmed list).
     { ...ROWS()[1], number: '2026-777003', grantor: 'Pat Example and Jordan Example' },
+    // A house by its county parcel record: out.
+    { ...ROWS()[1], number: '2026-777005', grantor: 'Zephyrine Holdings LLC' },
     // The bank made the loan; a CMBS trust's trustee holds it now: on the bank's page, never This week.
     { ...ROWS()[1], number: '2026-777004', holder: 'Sample Trust Company, N.A., as trustee for Sample Commercial Mortgage Trust 2019-C1', grantor: 'Zephyrine Retail LLC' },
   ];
   const at = new Date('2026-11-15T12:00:00Z');
-  const r = await runNoticeSource({ dir, source: exampleCounty, counties: rules.config.counties, fetchImpl: fakeCounty({ rows: rows() }).fetchImpl, sleep: async () => {}, now: at, clock: () => at, allowExample: true });
-  assert.deepEqual([r.outcome, r.inScope, r.outOfScope, r.index.originated, r.index.eventsNew], ['ok', 2, 1, 1, 1], JSON.stringify(r));
+  const parcels = confirmAll('retail', { 'example-county:2026-777003': { status: 'unmatched' }, 'example-county:2026-777005': 'house' });
+  const r = await runNoticeSource({ dir, source: exampleCounty, counties: rules.config.counties, fetchImpl: fakeCounty({ rows: rows() }).fetchImpl, sleep: async () => {}, now: at, clock: () => at, allowExample: true, parcels });
+  assert.deepEqual([r.outcome, r.inScope, r.outOfScope, r.index.originated, r.index.eventsNew, r.index.outOfScopeWhy], ['ok', 2, 2, 1, 1, { 'not-confirmed': 1, 'residential-parcel': 1 }], JSON.stringify(r));
   assert.equal(readBankLoans({ dir, key: 'fdic:101' }).loans.find((l) => l.documentNumber === '2026-777004').relationLabel,
     'Originated by this bank; now held by Sample Trust Company, N.A., as trustee for Sample Commercial Mortgage Trust 2019-C1');
   // An event written before the scope rule (no scope, no relation), as a folder pulled before the rebuild holds: the guard keeps it off.
@@ -161,5 +169,5 @@ test('the weekly triage lists only what the scope rule allows: no home mortgage,
   writeJson(join(dir, 'loans', 'events.json'), { ...events, [stale.id]: stale });
   const t = runTriage({ dir, rules: rules.triage, now: NOW, metros: rules.metros, scoring: rules.scoring });
   const mine = [...t.actNow, ...t.watch].flatMap((i) => i.findings).filter((f) => f.type === 'county-document');
-  assert.deepEqual(mine.map((f) => f.reason), ['A notice of trustee\'s sale was recorded on November 11, 2026 for a loan from this bank on a property in Example County, CO.']);
+  assert.deepEqual(mine.map((f) => f.reason), ['A notice of trustee\'s sale was recorded on November 11, 2026 for a loan from this bank on a retail property in Example County, CO; property type confirmed from the county\'s parcel record.']);
 });

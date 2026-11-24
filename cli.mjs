@@ -46,7 +46,8 @@ import { runBacktest, readReport, summarize } from './src/backtest/run.mjs';
 import { readSenders, setSender, removeSender, sendingReadiness, validateSender } from './src/senders.mjs';
 import { runNoticeSource, verifyNoticeSource, clearBlock } from './src/sources/notices.mjs';
 import { buildCmbsLinks, readCmbsLinks } from './src/cmbslinks.mjs';
-import { buildLoanIndex, rebuildLoanIndex, readBankLoans, readLoanState, loanEvents, loansPaths, scopeShown, eventShown, DOC_TYPES, STAGES, AMOUNT_BASES, PROPERTY_TYPES, OUT_OF_SCOPE } from './src/loans.mjs';
+import { buildLoanIndex, rebuildLoanIndex, readBankLoans, readLoanState, loanEvents, loansPaths, scopeShown, eventShown, allDocuments, DOC_TYPES, STAGES, AMOUNT_BASES, PROPERTY_TYPES, OUT_OF_SCOPE } from './src/loans.mjs';
+import { lookupParcels, parcelReport, parcelReportText, parcelSourceFor, PARCEL_SOURCES } from './src/parcels.mjs';
 import { countySource, countyCoverage } from './src/counties.mjs';
 import { readFileSync } from 'node:fs';
 
@@ -208,8 +209,14 @@ const HELP = `Outbound agents. Set OUTBOUND_DATA_DIR to a private folder OUTSIDE
   outbound loans rebuild                          write every bank's file, the review list and the events again from the stored
                                                   documents under the scope rule (commercial loans only), reading no county: removes
                                                   the events of documents now out of scope or of banks that only originated the loan,
-                                                  keeps when the others were matched. Safe on a pulled data folder: platform pull
-                                                  --to DIR, OUTBOUND_DATA_DIR=DIR loans rebuild, then platform push --from DIR
+                                                  keeps when the others were matched. Reads the stored parcel matches, never the
+                                                  network. Safe on a pulled data folder: platform pull --to DIR,
+                                                  OUTBOUND_DATA_DIR=DIR loans rebuild, then platform push --from DIR
+  outbound loans parcels [--source ID] [--refresh]   the property behind each stored filing, from the county's parcel record
+                                                  (Jefferson: the Assessor's parcel layer, CC BY 4.0): looks up every filing not looked
+                                                  up yet or whose address changed (--refresh: all), then prints counts only: matched,
+                                                  ambiguous, unmatched, no address, no ZIP code, by sector, and in scope before and
+                                                  after. The weekly run looks up new filings itself. Apply it: outbound loans rebuild
   outbound loans events [--key fdic:CERT]         the dated events, newest first
   outbound loans cmbs                             county filings whose current holder is a CMBS trust: each linked to the trust's own
                                                   loan record (SEC ABS-EE, EX-102) with its servicing status and special servicer, or
@@ -731,15 +738,19 @@ async function main() {
     // The CMBS links (section 9) follow every change to the stored documents or the index: rebuilt from stored data, no network.
     const withLinks = (r) => (r && typeof r === 'object' && r.outcome !== 'failed' ? { ...r, cmbsLinks: buildCmbsLinks({ dir }) } : r);
     const money = (a) => (a?.value === null || a?.value === undefined ? AMOUNT_BASES[a?.basis] ?? 'not read yet' : `$${Number(a.value).toLocaleString('en-US')} (${AMOUNT_BASES[a.basis]})`);
+    // The county's parcel record for each document a run adds or changes (src/parcels.mjs); a failure is counted, never the run's.
+    const parcels = (args) => lookupParcels({ ...args, counties });
+    // Each property type shown from a parcel record names its source (CC BY 4.0 attribution), once under the list.
+    const attributionLine = (xs) => { const a = [...new Set(xs.map((x) => x?.propertySource).filter(Boolean))]; return a.length ? `\n\nProperty type: ${a.join('; ')}.` : ''; };
     if (sub === 'run') {   // an invented example source is refused here: it runs only against its fake, in the tests
-      const r = withLinks(await runNoticeSource({ dir, source: countySource(need(flags, 'source')), counties }));
+      const r = withLinks(await runNoticeSource({ dir, source: countySource(need(flags, 'source')), counties, parcels }));
       if (r.outcome === 'failed') process.exitCode = 1;
       return out(r);
     }
     if (sub === 'backfill') {   // one-time: the source's archive, gated by the same recorded decision as its weekly run
       const source = countySource(need(flags, 'source'));
       const since = flags.since && flags.since !== true ? String(flags.since) : source.backfill?.since;
-      const r = withLinks(await runNoticeSource({ dir, source, counties, backfill: { since } }));
+      const r = withLinks(await runNoticeSource({ dir, source, counties, backfill: { since }, parcels }));
       if (r.outcome === 'failed') process.exitCode = 1;
       return out(r);
     }
@@ -764,8 +775,9 @@ async function main() {
       // The scope guard, as on the bank page: a row the scope rule wrote, not known to be residential.
       const shown = b.loans.filter(scopeShown);
       if (!shown.length) return out(`${key}: no commercial loan in a watched county names this bank${shown.length < b.loans.length ? ` (its file was written before the scope rule: outbound loans rebuild)` : ''}.`);
-      const row = (l) => `${l.date}  ${DOC_TYPES[l.documentType].label} (${l.dateKind}), ${l.county.name} County, ${l.state}: ${STAGES[l.stage]}${l.saleDate ? `, sale ${l.saleDate}` : ''}\n    as ${l.roles.join(' and ')} (${l.how}); property type: ${PROPERTY_TYPES[l.propertyType] ?? 'not known yet'}${l.loanType ? `; loan type: ${l.loanType}` : ''}${l.relationLabel ? `\n    ${l.relationLabel}` : ''}\n    original principal: ${money(l.amounts.originalPrincipal)}; unpaid balance: ${money(l.amounts.unpaidBalance)}\n    ${l.link}`;
-      return out(`${key}: ${shown.length} document(s). ${b.note}\n\n${shown.map(row).join('\n')}`);
+      const property = (l) => `${l.propertyTypeLabel ?? PROPERTY_TYPES[l.propertyType] ?? 'not known yet'}${l.propertyUse ? ` (${l.propertyUse}${l.propertyUnits ? `, ${l.propertyUnits} units` : ''})` : ''}${l.propertyNote ? `: ${l.propertyNote}` : ''}`;
+      const row = (l) => `${l.date}  ${DOC_TYPES[l.documentType].label} (${l.dateKind}), ${l.county.name} County, ${l.state}: ${STAGES[l.stage]}${l.saleDate ? `, sale ${l.saleDate}` : ''}\n    as ${l.roles.join(' and ')} (${l.how}); property type: ${property(l)}${l.loanType ? `; loan type: ${l.loanType}` : ''}${l.relationLabel ? `\n    ${l.relationLabel}` : ''}\n    original principal: ${money(l.amounts.originalPrincipal)}; unpaid balance: ${money(l.amounts.unpaidBalance)}\n    ${l.link}`;
+      return out(`${key}: ${shown.length} document(s). ${b.note}\n\n${shown.map(row).join('\n')}${attributionLine(shown)}`);
     }
     if (sub === 'review') {
       const r = readJson(loansPaths(dir).review, { entries: [], setAside: [] });
@@ -784,7 +796,10 @@ async function main() {
       const r = rebuildLoanIndex({ dir });
       const links = buildCmbsLinks({ dir });
       const why = Object.entries(r.outOfScopeWhy).map(([k, n]) => `${n} ${OUT_OF_SCOPE[k] ?? k}`).join(', ');
-      return out(`Rebuilt from ${r.documents} stored document(s) (${r.runId}): ${r.inScope} in scope, ${r.outOfScope} out of scope${why ? ` (${why})` : ''}. In scope: ${r.matchedDocuments} matched to ${r.banks} bank(s) in the list, ${r.originated} of those match(es) on a bank that only originated the loan (shown, no event); ${r.review} name(s) to review. Events: ${r.eventsRemoved} removed, ${r.eventsNew} new; the rest keep when they were matched. ${r.bankFilesWritten} bank file(s) written. CMBS links: ${links.linked} linked, ${links.notFound} to look up by hand (outbound loans cmbs).\n${Object.entries(r.bySource).map(([id, x]) => `  ${id}: ${x.documents} stored, ${x.inScope} in scope, ${x.outOfScope} out of scope, ${x.matchedDocuments} matched, ${x.reviewNames} name(s) to review`).join('\n')}`);
+      const pc = r.parcels ?? {};
+      const words = (o) => Object.entries(o ?? {}).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).map(([k, n]) => `${k} ${n}`).join(', ') || 'none';
+      const parcelLine = `\nLeads (a county parcel confirmed commercial, multifamily of 5 or more units, or commercial land): ${r.inScope}, by sector: ${words(pc.leadsBySector)}. The loan type alone would keep ${pc.loanTypeWouldKeep ?? 0}. Property not confirmed, not leads: ${pc.unconfirmed ?? 0} (${words(pc.unconfirmedByReason)}), of which the loan type alone would keep ${pc.unconfirmedLoanTypeWouldKeep ?? 0}: outbound loans parcels. Parcel records: ${words(pc.byStatus)}.`;
+      return out(`Rebuilt from ${r.documents} stored document(s) (${r.runId}): ${r.inScope} lead(s), ${r.outOfScope} not leads${why ? ` (${why})` : ''}.${parcelLine}\nLeads: ${r.matchedDocuments} matched to ${r.banks} bank(s) in the list, ${r.originated} of those match(es) on a bank that only originated the loan (shown, no event); ${r.review} name(s) to review. Events: ${r.eventsRemoved} removed, ${r.eventsNew} new; the rest keep when they were matched. ${r.bankFilesWritten} bank file(s) written. CMBS links: ${links.linked} linked, ${links.notFound} to look up by hand (outbound loans cmbs).\n${Object.entries(r.bySource).map(([id, x]) => `  ${id}: ${x.documents} stored, ${x.inScope} lead(s), ${x.outOfScope} not leads (${x.unconfirmed} property not confirmed), ${x.matchedDocuments} matched to a bank, ${x.reviewNames} name(s) to review`).join('\n')}`);
     }
     if (sub === 'unblock') {
       const r = clearBlock({ dir, sourceId: countySource(need(flags, 'source')).id, by: need(flags, 'by') });
@@ -802,7 +817,24 @@ async function main() {
       const linked = all.filter((e) => e.status === 'linked').length;
       return out(`${all.length} county filing(s) name a CMBS trust as current holder: ${linked} linked to the trust's loan, ${all.length - linked} to look up by hand. ${f.note}\n\n${all.map(row).join('\n')}`);
     }
-    if (sub === 'events') return out(loanEvents({ dir, key: flags.key && flags.key !== true ? flags.key : null }).filter(eventShown).map((e) => `${e.date}  ${e.key}  ${e.label}`).join('\n') || 'No events yet.');
+    if (sub === 'events') {
+      const ev = loanEvents({ dir, key: flags.key && flags.key !== true ? flags.key : null }).filter(eventShown);
+      return out(ev.length ? `${ev.map((e) => `${e.date}  ${e.key}  ${e.label}`).join('\n')}${attributionLine(ev)}` : 'No events yet.');
+    }
+    if (sub === 'parcels') {   // the county's parcel record for each stored filing (src/parcels.mjs): counts only, never an address
+      const only = flags.source && flags.source !== true ? String(flags.source) : null;
+      if (only && !parcelSourceFor(only)) return out(`${only}: no parcel source for this county yet (${Object.keys(PARCEL_SOURCES).join(', ')} have one). Its filings keep the loan type rule.`);
+      const stored = new Set(allDocuments(dir).map((d) => d.sourceId));
+      const ids = only ? [only] : Object.keys(PARCEL_SOURCES).filter((id) => stored.has(id));
+      if (!ids.length) return out(`No stored filing from a county with a parcel source (${Object.keys(PARCEL_SOURCES).join(', ')}). Nothing to look up.`);
+      const texts = [];
+      for (const id of ids) {
+        const lookup = await lookupParcels({ dir, sourceId: id, refresh: !!flags.refresh, counties });
+        if (lookup.outcome === 'failed') process.exitCode = 1;
+        texts.push(parcelReportText(parcelReport({ dir, sourceId: id }), { lookup, attribution: parcelSourceFor(id).attribution }));
+      }
+      return out(`${texts.join('\n\n')}\nApply it to the bank files, the events and the CMBS links: outbound loans rebuild`);
+    }
   }
 
   if (cmd === 'filers') {   // the bank-to-filer map for the SEC filings listener (PRD E13-S1); a principal decides every mapping
@@ -865,7 +897,7 @@ async function main() {
   }
   if (cmd === 'triage') {   // internal, for the principals only: written to the data folder, never sent (PRD E6-S5, Q13)
     if (sub === 'run') {
-      const r = runTriage({ dir, rules: rules.triage, metros: rules.metros, scoring: rules.scoring, since: flags.since, now: new Date() });
+      const r = runTriage({ dir, rules: rules.triage, metros: rules.metros, scoring: rules.scoring, buybox: rules.buybox, since: flags.since, now: new Date() });
       const p = triagePaths(dir, r.date);
       return out(`${renderTriage(r)}\nWritten: ${p.json}, ${p.md} and the snapshot ${p.state}.`);
     }

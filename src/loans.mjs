@@ -20,22 +20,48 @@ import { fdicPaths } from './sources/fdic.mjs';
 import { loadAliases } from './candidates.mjs';
 import { sourceBlock, CHANGES, CONTEXT_ONLY_VALUE } from './sources/runlog.mjs';
 import { matchLender, reviewKey, bankLike, cleanLenderName, naturalPerson, LENDER_ROLES, SET_ASIDE, PERSON_WITHHELD } from './lenders.mjs';
+import { parcelSourceFor } from './sources/parcels/index.mjs';
 
 export const CONTEXT_NOTE = 'Context for the firm\'s principals only: never in a message, never given to a model, never scored.';
 
-// ---- Scope: commercial loans only ----------------------------------------------------------------------------------------------
+// ---- Scope: commercial property only ---------------------------------------------------------------------------------------------
 // The firm buys commercial real estate loans, and most loans a county's foreclosure list names are home mortgages. One rule decides,
-// everywhere the pipeline builds what a principal sees (each bank's file, the review list, the events; the triage and the bank page
-// check it again): a document is IN SCOPE unless it is known to be residential.
+// everywhere the pipeline builds what a principal sees (each bank's file, the lender review list, the events, the CMBS links; the triage,
+// the bank page and the servicer page check it again).
+//
+// THE PROPERTY DECIDES, from the county's own parcel record (src/parcels.mjs; loans/parcels/<source>.json, matched by address). A
+// county's loan type describes the loan's purpose, not the property: an investor's "Commercial" or "BPL" loan on a house is a home, and
+// an apartment building can carry a "Conventional" loan. By the principal's ruling of 2026-11-23 (no residential property at all), a
+// document is a LEAD only when its parcel is confirmed as one of:
+//   commercial (hotels, retail, office, industrial, other commercial)   with its sector
+//   multifamily of 5 or more units (1125, and 1120 with 5 or more)      sector multifamily
+//   commercial or industrial vacant land (0200, 0300)                   "commercial land"
+// whatever its loan type. Only a lead gives a bank row, an event, a triage line or a CMBS link line. Every other document is one of:
+//   OUT        a home by its parcel record (houses, condos, 2 to 4 units, a 4-unit building), or residential vacant land (0100), whatever
+//              the loan type
+//   NOT CONFIRMED  no parcel match (unmatched, ambiguous, no street address, no ZIP code and no city, not looked up yet, or a county with
+//              no parcel source), or a parcel that does not confirm a commercial property (exempt, agricultural, an apartment code with
+//              no unit count, other land, a class the rule does not decide). Not a lead: it goes on the property-not-confirmed list
+//              (loans/unconfirmed.json, `outbound loans parcels`), where a principal can check by hand the few with a commercial-sounding
+//              loan type. There is no fallback to the loan type.
+// A document with no parcel match of its own takes its case's (the other documents of the same foreclosure that matched, when they
+// agree). A document that is not a lead stays in loans/docs/<source>.json (the weekly diff stays idempotent, and no parcel match changes
+// a stored document or its hash).
+//
+// THE LOAN TYPE no longer decides. It is still read, shown, and used to sort the property-not-confirmed list: the rule it used to be
+// (loanTypeScope) is kept on each document's scope as `loanTypeInScope`.
 //   1. Its loan type reads as a residential program or label (FNMA, FHA, VA, Conventional...): the stored commercial flag is false.
 //      A stored null is read again from the type, so a type the classifier learns later applies to the documents already stored.
 //   2. A document with no loan type of its own takes its case's: another document of the same foreclosure in the same source that gives
 //      one (a Colorado pre-sale entry and its NED).
 //   3. With no loan type that says commercial or residential (none at all, as in Caldwell and Douglas, or "Unknown"), every borrower
 //      and grantor it names is a natural person, not an entity: a home loan in all but name.
-// Otherwise it is in scope: a commercial type, an entity among the borrowers, or none named. A document out of scope stays in
-// loans/docs/<source>.json (the weekly diff stays idempotent), and nothing downstream uses it.
-export const OUT_OF_SCOPE = Object.freeze({ 'residential-loan-type': 'a residential loan type', 'individual-borrowers': 'every borrower a person, no commercial loan type' });
+// Otherwise the loan type rule would keep it: a commercial type, an entity among the borrowers, or none named.
+export const OUT_OF_SCOPE = Object.freeze({
+  'residential-parcel': 'a home by the county\'s parcel record',
+  'residential-land': 'residential vacant land by the county\'s parcel record',
+  'not-confirmed': 'property not confirmed commercial by a county parcel record (the property-not-confirmed list)',
+});
 
 // The county's loan type, as written, to the commercial flag: true for a commercial, business-purpose, construction, SBA or multifamily
 // loan; false for the residential programs and labels (a HELOC included); null for a blank, "Unknown" or any other type (never guessed,
@@ -56,32 +82,148 @@ export function commercialFromLoanType(type) {
 const caseKey = (doc) => (doc?.foreclosure?.number ? `${doc.sourceId}|${String(doc.foreclosure.number).toUpperCase()}` : null);
 const flagOf = (loan) => (typeof loan?.commercial === 'boolean' ? loan.commercial : commercialFromLoanType(loan?.type));
 
-// One document's scope. `caseLoan` is the loan of another document of its case, for one with no loan type. Returns { inScope, why,
-// loanType, commercial, borrowers }: why is a key of OUT_OF_SCOPE or null; borrowers is 'individuals' (every borrower and grantor a
-// natural person), 'entity' (at least one is not) or null (none named, or the loan type decided). No name is returned.
-export function loanScope(doc, { caseLoan = null } = {}) {
+// ---- The property, from the county's parcel record ---------------------------------------------------------------------------
+// The sectors a commercial or multifamily parcel is read as (src/parcels.mjs): the buy box's three (buybox.json sectors.include:
+// hospitality, multifamily, retail) and the other commercial ones. Each names its PROPERTY_TYPES key, its label and the words a sentence
+// uses ("on a hotel").
+export const SECTORS = Object.freeze({
+  hospitality: Object.freeze({ propertyType: 'hotel', label: 'Hotel', words: 'a hotel' }),
+  multifamily: Object.freeze({ propertyType: 'multifamily', label: 'Apartments', words: 'an apartment property' }),
+  retail: Object.freeze({ propertyType: 'retail', label: 'Retail', words: 'a retail property' }),
+  office: Object.freeze({ propertyType: 'office', label: 'Office', words: 'an office property' }),
+  industrial: Object.freeze({ propertyType: 'industrial', label: 'Industrial', words: 'an industrial property' }),
+  'other-commercial': Object.freeze({ propertyType: 'other-commercial', label: 'Other commercial', words: 'a commercial property' }),
+});
+// Commercial or industrial vacant land, as a lead shows it.
+export const COMMERCIAL_LAND = Object.freeze({ propertyType: 'land', label: 'Commercial land', words: 'commercial land' });
+// What a matched parcel is (the assessor's class, src/sources/parcels/colorado.mjs).
+export const PARCEL_KINDS = Object.freeze({
+  residential: 'a home (a house, a condo, or 2 to 4 units)', commercial: 'commercial, or multifamily of 5 or more units', land: 'vacant land',
+  exempt: 'exempt (government, school, church or non-profit)', agricultural: 'agricultural', 'units-unknown': 'an apartment code of 4 to 8 units with no unit count',
+  other: 'a class the rule does not decide',
+});
+// How a document's address stands against the county's parcels. 'none': no lookup stored.
+export const PARCEL_STATUSES = Object.freeze({
+  matched: 'matched to a county parcel', ambiguous: 'several parcels match and disagree on the property type', unmatched: 'no parcel at that address',
+  'no-address': 'no street address on the document', 'no-place': 'an address with neither a ZIP code nor a city', none: 'not looked up',
+});
+// The note a lead's event sentence, bank row and triage line carry after the property.
+export const PROPERTY_NOTES = Object.freeze({ confirmed: 'property type confirmed from the county\'s parcel record' });
+// Why a document is on the property-not-confirmed list, in words.
+export const UNCONFIRMED = Object.freeze({
+  'no-source': 'no parcel source for this county yet', none: 'not looked up in the county\'s parcel record yet', unmatched: 'property not matched to a county parcel',
+  ambiguous: 'several parcels match and disagree on the property type', 'no-address': 'no street address on the filing', 'no-place': 'an address with neither a ZIP code nor a city',
+  exempt: 'exempt per the assessor (government, school, church or non-profit)', agricultural: 'agricultural per the assessor',
+  'units-unknown': 'an apartment code of 4 to 8 units with no unit count', 'other-land': 'vacant land of no stated use per the assessor',
+  other: 'a property class the rule does not decide',
+});
+
+// What the scope rule needs from a stored parcel match (loans/parcels/<source>.json): its status, and for a match the kind, sector and
+// land use. The rest is for showing: the assessor's code, the first building use, the units, and the source's attribution.
+export function propertyFacts(m, { noSource = false } = {}) {
+  if (!m || typeof m !== 'object' || !m.status) return { status: noSource ? 'no-source' : 'none', kind: null, sector: null, landUse: null };
+  if (m.status !== 'matched') return { status: PARCEL_STATUSES[m.status] ? m.status : 'none', kind: null, sector: null, landUse: null };
+  const kind = PARCEL_KINDS[m.kind] ? m.kind : 'other';
+  const first = Array.isArray(m.parcels) ? m.parcels[0] ?? {} : {};
+  return {
+    status: 'matched', kind, sector: kind === 'commercial' ? (SECTORS[m.sector] ? m.sector : 'other-commercial') : null, landUse: kind === 'land' ? m.landUse ?? 'other' : null,
+    code: m.decidedBy ?? null, use: first.uses?.[0] ?? null, units: Number(first.units) > 0 ? Number(first.units) : null, source: m.attribution ?? null,
+    ...(m.viaCase ? { viaCase: true } : {}),
+  };
+}
+
+// The decision, from the facts a bank row, an event or a CMBS link stores in its `scope` (its `property`: { status, kind, sector,
+// landUse }). Pure, so the guards below decide from the same facts as the rule that wrote them. Returns { inScope, why, review }:
+// inScope for a lead; review for a document on the property-not-confirmed list. A scope with no property facts (written before the
+// parcel rule) is not a lead.
+const LAND_LEADS = new Set(['commercial', 'industrial']);
+export function decideScope(scope = {}) {
+  const p = scope?.property;
+  if (!p || typeof p !== 'object' || p.status !== 'matched') return { inScope: false, why: 'not-confirmed', review: true };
+  if (p.kind === 'commercial') return { inScope: true, why: null, review: false };
+  if (p.kind === 'land' && LAND_LEADS.has(p.landUse)) return { inScope: true, why: null, review: false };
+  if (p.kind === 'residential') return { inScope: false, why: 'residential-parcel', review: false };
+  if (p.kind === 'land' && p.landUse === 'residential') return { inScope: false, why: 'residential-land', review: false };
+  return { inScope: false, why: 'not-confirmed', review: true };
+}
+// Why a document is on the property-not-confirmed list: a key of UNCONFIRMED.
+export function unconfirmedReason(property) {
+  const p = property ?? {};
+  if (p.status !== 'matched') return UNCONFIRMED[p.status] ? p.status : 'none';
+  if (p.kind === 'land') return 'other-land';
+  return UNCONFIRMED[p.kind] ? p.kind : 'other';
+}
+
+// The loan type rule (rules 1 to 3 above): what the loan type and the borrowers alone say. It decides nothing now; it is kept to sort the
+// property-not-confirmed list and to show. { loanTypeInScope, loanType, commercial, borrowers }.
+function loanTypeScope(doc, caseLoan) {
   const loan = doc?.loan?.type ? doc.loan : caseLoan?.type ? caseLoan : null;
   const commercial = loan ? flagOf(loan) : null;
-  if (commercial !== null) {
-    return { inScope: commercial, why: commercial ? null : 'residential-loan-type', loanType: loan.type, commercial, borrowers: null };
+  let borrowers = null;
+  if (commercial === null) {
+    // No type, or one that says neither ("Unknown"): the borrowers decide (rule 3).
+    const names = (doc?.parties ?? []).filter((p) => p.role === 'borrower' || p.role === 'grantor').map((p) => p.name);
+    borrowers = !names.length ? null : names.every(naturalPerson) ? 'individuals' : 'entity';
   }
-  // No type, or one that says neither ("Unknown"): the borrowers decide (rule 3).
-  const names = (doc?.parties ?? []).filter((p) => p.role === 'borrower' || p.role === 'grantor').map((p) => p.name);
-  const borrowers = !names.length ? null : names.every(naturalPerson) ? 'individuals' : 'entity';
-  return { inScope: borrowers !== 'individuals', why: borrowers === 'individuals' ? 'individual-borrowers' : null, loanType: loan?.type ?? null, commercial: null, borrowers };
+  return { loanTypeInScope: commercial !== null ? commercial : borrowers !== 'individuals', loanType: loan?.type ?? null, commercial, borrowers };
 }
 
-// Every document's scope, by id: the documents of one source or all, with each case's loan type for rule 2.
-export function scopeAll(docs = []) {
-  const cases = new Map();
-  for (const d of docs) { const k = caseKey(d); if (k && d.loan?.type && !cases.has(k)) cases.set(k, d.loan); }
-  return new Map(docs.map((d) => [d.id, loanScope(d, { caseLoan: cases.get(caseKey(d)) ?? null })]));
+// One document's scope. `caseLoan` is the loan of another document of its case, for one with no loan type; `parcel` its stored parcel
+// match (or its case's), if any. Returns { inScope, why, review, loanTypeInScope, loanType, commercial, borrowers, property }: why is a key
+// of OUT_OF_SCOPE or null; property is propertyFacts of the parcel match. No name and no address is returned.
+export function loanScope(doc, { caseLoan = null, parcel = null } = {}) {
+  const lt = loanTypeScope(doc, caseLoan);
+  const property = propertyFacts(parcel, { noSource: !parcelSourceFor(doc?.sourceId) });
+  const d = decideScope({ property });
+  return { inScope: d.inScope, why: d.why, review: d.review, ...lt, property };
 }
 
-// The guard the triage and the bank page apply to what the index wrote: a bank's row or an event shows only when the scope rule wrote it
-// (it carries `scope`) and that scope is not residential. A file written before the rule, or by anything else, shows nothing until
-// `outbound loans rebuild` writes it again.
-export const scopeShown = (x) => !!x?.scope && typeof x.scope === 'object' && x.scope.commercial !== false && x.scope.borrowers !== 'individuals';
+// Every document's scope, by id: the documents of one source or all, with each case's loan type. `parcels` holds the stored parcel
+// matches by document id (readParcelMatches); a document with no match of its own takes its case's, when every matched document of the
+// case agrees on the kind, sector and land use.
+export function scopeAll(docs = [], { parcels = null } = {}) {
+  const get = (id) => (parcels instanceof Map ? parcels.get(id) : parcels?.[id]) ?? null;
+  const cases = new Map(), caseParcels = new Map();
+  for (const d of docs) {
+    const k = caseKey(d);
+    if (!k) continue;
+    if (d.loan?.type && !cases.has(k)) cases.set(k, d.loan);
+    const m = get(d.id);
+    if (m?.status === 'matched') caseParcels.set(k, [...(caseParcels.get(k) ?? []), m]);
+  }
+  const sameClass = (a, b) => a.kind === b.kind && (a.sector ?? null) === (b.sector ?? null) && (a.landUse ?? null) === (b.landUse ?? null);
+  const parcelOf = (d) => {
+    const own = get(d.id);
+    if (own?.status === 'matched') return own;
+    const all = caseParcels.get(caseKey(d)) ?? [];
+    return all.length && all.every((m) => sameClass(m, all[0])) ? { ...all[0], viaCase: true } : own;
+  };
+  return new Map(docs.map((d) => [d.id, loanScope(d, { caseLoan: cases.get(caseKey(d)) ?? null, parcel: parcelOf(d) })]));
+}
+
+// What a bank row, an event or a CMBS link stores of a scope: the facts the decision reads, and the loan type's, no more (no name, no
+// address, no parcel number).
+export const storedScope = (s) => ({
+  commercial: s?.commercial ?? null, borrowers: s?.borrowers ?? null,
+  property: { status: s?.property?.status ?? 'none', kind: s?.property?.kind ?? null, sector: s?.property?.sector ?? null, landUse: s?.property?.landUse ?? null },
+});
+
+// The guard the triage, the bank page and the servicer page apply to what the index wrote: a bank's row, an event or a link shows only
+// when the scope rule wrote it (it carries `scope`) and its stored facts make it a lead (decideScope). A file written before the parcel
+// rule, or by anything else, shows nothing until `outbound loans rebuild` writes it again.
+export const scopeShown = (x) => !!x?.scope && typeof x.scope === 'object' && decideScope(x.scope).inScope;
+
+// How a lead's property is shown, from its scope's property facts: the PROPERTY_TYPES key and label, the sector, the words a sentence
+// uses ("a hotel", "commercial land"), the note that the county's parcel record confirmed it, the assessor's code, building use and
+// units, and the source to attribute. Null for a document that is not a lead: nothing shows it.
+export function propertyView(property) {
+  const p = property ?? {};
+  if (!decideScope({ property: p }).inScope) return null;
+  const facts = { confirmed: true, note: PROPERTY_NOTES.confirmed, code: p.code ?? null, use: p.use ?? null, units: p.units ?? null, source: p.source ?? null };
+  if (p.kind === 'land') return { sector: null, ...COMMERCIAL_LAND, ...facts };
+  const s = SECTORS[p.sector] ?? SECTORS['other-commercial'];
+  return { sector: SECTORS[p.sector] ? p.sector : 'other-commercial', propertyType: s.propertyType, label: s.label, words: s.words, ...facts };
+}
 // An event also needs a match on the bank that holds the loan now (relation 'current'): never one that only originated it.
 export const eventShown = (e) => scopeShown(e) && e.relation === 'current';
 
@@ -118,7 +260,8 @@ export const FORECLOSURE_AMOUNTS = Object.freeze(['bid', 'deficiency']);
 export const AMOUNT_BASES = Object.freeze({
   document: 'stated on the document', index: 'in the county\'s index', 'not-stated': 'not stated on the document', 'not-read': 'not read yet',
 });
-// Property types, from the assessor's use code once a county's join is built. Null until then: "not known yet", never a guess.
+// Property types. A document's own (property.propertyType) only where its county's list gives one: never a guess. What a principal sees
+// comes from the county's parcel record (src/parcels.mjs), by sector (SECTORS) or as commercial land, and is stored apart from the document.
 export const PROPERTY_TYPES = Object.freeze({
   office: 'Office', retail: 'Retail', hotel: 'Hotel', industrial: 'Industrial', multifamily: 'Apartments', 'mixed-use': 'Mixed use',
   land: 'Land', 'other-commercial': 'Other commercial', residential: 'Residential',
@@ -301,16 +444,22 @@ export function buildDocument(parsed, { source, fetchedAt, runId }) {
 // loans/review.json          names that matched no bank or several, with their candidates; and the names set aside
 // loans/events.json          one dated event per document newly matched to a bank
 // loans/state.json           each source's runs (last run, documents read, new and changed), and the index's counts
+// loans/parcels/<source>.json  each document's match to the county's parcel record, by document id (src/parcels.mjs): derived data,
+//                            with the parcel's identifiers, assessor codes and building use, never an owner, and no address
+// loans/unconfirmed.json     the property-not-confirmed list: documents no county parcel confirms as commercial, not leads
 export const loansPaths = (dir) => {
   const base = join(dir, 'loans');
   return {
-    base, docsDir: join(base, 'docs'), banksDir: join(base, 'banks'),
+    base, docsDir: join(base, 'docs'), banksDir: join(base, 'banks'), parcelsDir: join(base, 'parcels'),
     docs: (sourceId) => join(base, 'docs', `${safeId(sourceId)}.json`),
     bank: (key) => join(base, 'banks', `${paperFileId(key)}.json`),
     list: (sourceId) => join(base, 'lists', `${safeId(sourceId)}.json`),
-    review: join(base, 'review.json'), events: join(base, 'events.json'), state: join(base, 'state.json'),
+    parcels: (sourceId) => join(base, 'parcels', `${safeId(sourceId)}.json`),
+    review: join(base, 'review.json'), events: join(base, 'events.json'), state: join(base, 'state.json'), unconfirmed: join(base, 'unconfirmed.json'),
   };
 };
+export const LOAN_UNCONFIRMED_REL = 'loans/unconfirmed.json';
+export const loanParcelsRel = (sourceId) => `loans/parcels/${safeId(sourceId)}.json`;
 // The bank's file as a document path, for the platform (the bank page loads only this one, as it loads paper/fdic-<CERT>.json).
 export const loanBankRel = (key) => `loans/banks/${paperFileId(key)}.json`;
 export const LOAN_STATE_REL = 'loans/state.json';
@@ -320,6 +469,16 @@ export const loadDocuments = (dir, sourceId) => readJson(loansPaths(dir).docs(so
 export function allDocuments(dir) {
   const P = loansPaths(dir);
   return listFiles(P.docsDir, '.json').flatMap((f) => Object.values(readJson(join(P.docsDir, f), {}) ?? {})).filter((d) => d && typeof d.id === 'string');
+}
+// Every stored parcel match, by document id, each with its source's attribution: read from loans/parcels/, never from the network.
+export function readParcelMatches(dir) {
+  const P = loansPaths(dir);
+  const out = new Map();
+  for (const f of listFiles(P.parcelsDir, '.json')) {
+    const file = readJson(join(P.parcelsDir, f), null);
+    for (const [id, m] of Object.entries(file?.matches ?? {})) if (m && typeof m === 'object') out.set(id, { ...m, attribution: file.attribution ?? null });
+  }
+  return out;
 }
 export const readBankLoans = ({ dir, key }) => readJson(loansPaths(dir).bank(key), null);
 export const readLoanState = (dir) => readJson(loansPaths(dir).state, { sources: {}, index: null });
@@ -375,9 +534,11 @@ export const documentDate = (doc) => {
 // The link the bank's file and the events carry: where the list shows the document when its own link would name a person.
 export const publicLink = (doc) => doc?.sources?.[0]?.listUrl ?? doc?.sources?.[0]?.url ?? null;
 
-// The event's sentence, a fixed template over the document's type, date, county and the bank's role on it. Example: "A notice of
-// trustee's sale was filed on November 10, 2026 for a loan from this bank on a property in Example County, CO."
-export function eventLabel(doc, roles = []) {
+// The event's sentence, a fixed template over the document's type, date, county and the bank's role on it, and, with `view`
+// (propertyView: only a lead has an event), the property and that the county's parcel record confirmed it. Example: "A notice of
+// trustee's sale was filed on November 10, 2026 for a loan from this bank on a hotel in Example County, CO; property type confirmed from
+// the county's parcel record." Without `view`, the sentence names no property type ("... on a property in Example County, CO.").
+export function eventLabel(doc, roles = [], view = null) {
   const t = DOC_TYPES[doc.documentType];
   const { date, kind } = documentDate(doc);
   const article = /^[aeiou]/i.test(t.lower) ? 'An' : 'A';
@@ -385,10 +546,12 @@ export function eventLabel(doc, roles = []) {
   const lead = kind === 'notice' ? `${article} ${t.lower} dated ${longDate(date)} was posted` : kind === 'sale' ? `${article} ${t.lower} for a sale on ${longDate(date)} was posted`
     : `${article} ${t.lower} was ${kind} on ${longDate(date)}`;
   const where = countyLabel(doc);
-  if (roles.includes('assignee')) return `${lead} moving a loan on a property in ${where} to this bank.`;
-  if (roles.includes('assignor')) return `${lead} moving a loan on a property in ${where} from this bank to another holder.`;
-  if (roles.includes('holder') && !roles.includes('lender') && !roles.includes('beneficiary')) return `${lead} for a loan this bank holds on a property in ${where}.`;
-  return `${lead} for a loan from this bank on a property in ${where}.`;
+  const on = view?.words ?? 'a property';
+  const tail = view?.note ? `; ${view.note}` : '';
+  if (roles.includes('assignee')) return `${lead} moving a loan on ${on} in ${where} to this bank${tail}.`;
+  if (roles.includes('assignor')) return `${lead} moving a loan on ${on} in ${where} from this bank to another holder${tail}.`;
+  if (roles.includes('holder') && !roles.includes('lender') && !roles.includes('beneficiary')) return `${lead} for a loan this bank holds on ${on} in ${where}${tail}.`;
+  return `${lead} for a loan from this bank on ${on} in ${where}${tail}.`;
 }
 
 // ---- The index: documents to banks ---------------------------------------------------------------------------------------------
@@ -409,23 +572,49 @@ const originatedLabel = (heldBy) => `Originated by this bank; now held by ${held
 // The current holder as the page names it: the name without its legal phrases, a MERS nominee read through. A person is never named.
 const holderName = (m) => (m.status === 'set-aside' && m.class === 'person' ? null : m.matchedName || cleanLenderName(m.name) || m.name);
 
-// What the bank page shows for one document: no borrower, grantor or owner, no address, legal description or APN, and nothing of the
-// foreclosure file but the loan type and its commercial flag. The labels are the engine's own words, so the page and the command line
-// say the same. `scope` is what the scope rule read (the guard checks it again); `relation` and `heldBy` how the bank stands to the loan.
+// What the bank page shows for one document: no borrower, grantor or owner, no address, legal description, APN or parcel number, and
+// nothing of the foreclosure file but the loan type and its commercial flag. The labels are the engine's own words, so the page and the
+// command line say the same. `scope` is what the scope rule read (the guard checks it again); `relation` and `heldBy` how the bank stands
+// to the loan. The property is the county's parcel record's (propertyView; only a lead has a row): its type, sector, the assessor's
+// code, building use and units, that the record confirmed it, and the source to attribute.
 export function loanRow(doc, roles, how, { scope = loanScope(doc), relation = 'current', heldBy = null } = {}) {
   const { date, kind } = documentDate(doc);
   const stage = DOC_TYPES[doc.documentType]?.stage ?? null;
-  const pt = doc.property?.propertyType ?? null;
+  const v = propertyView(scope.property) ?? {};
   return {
     id: doc.id, sourceId: doc.sourceId, documentType: doc.documentType, typeLabel: DOC_TYPES[doc.documentType]?.label ?? doc.documentType, documentNumber: doc.documentNumber,
     stage, stageLabel: STAGES[stage] ?? null, county: doc.county, countyLabel: countyLabel(doc), state: doc.state, date, dateKind: kind, saleDate: doc.dates?.sale ?? null, roles, how,
-    amounts: doc.amounts, propertyType: pt, propertyTypeLabel: pt ? PROPERTY_TYPES[pt] ?? null : null, useCode: doc.property?.useCode ?? null,
-    loanType: scope.loanType, commercial: scope.commercial, scope: { commercial: scope.commercial, borrowers: scope.borrowers },
+    amounts: doc.amounts, propertyType: v.propertyType ?? null, propertyTypeLabel: v.label ?? null, useCode: doc.property?.useCode ?? null,
+    propertySector: v.sector ?? null, propertyConfirmed: !!v.confirmed, propertyNote: v.note ?? null, propertyUse: v.use ?? null, propertyUnits: v.units ?? null, propertyCode: v.code ?? null, propertySource: v.source ?? null,
+    loanType: scope.loanType, commercial: scope.commercial, scope: storedScope(scope),
     relation, heldBy: relation === 'originated' ? heldBy : null, relationLabel: relation === 'originated' ? originatedLabel(heldBy) : null,
     deedOfTrust: doc.deedOfTrust ? { documentNumber: doc.deedOfTrust.documentNumber, recorded: doc.deedOfTrust.recorded, dated: doc.deedOfTrust.dated ?? null, book: doc.deedOfTrust.book ?? null, page: doc.deedOfTrust.page ?? null } : null,
     link: publicLink(doc), firstSeenAt: doc.firstSeenAt ?? null,
   };
 }
+// The property-not-confirmed list (loans/unconfirmed.json): one entry per document whose property no county parcel confirms as
+// commercial (decideScope's `review`). Not a lead: no bank row, no event, no triage line, no CMBS link. A principal checks by hand the
+// few the loan type alone would have kept. Each entry holds what the bank's file may hold, and no more: the document's type, county, date
+// and public link, its loan type and the loan type rule's verdict, why the property is not confirmed (UNCONFIRMED; the assessor's code for
+// a parcel that does not decide), and the keys of the banks its lender-side names match. No borrower, no address, no parcel number.
+export const UNCONFIRMED_NOTE = `${CONTEXT_NOTE} Filings whose property no county parcel record confirms as commercial: not leads, never an event or a Watch line. Check by hand the ones whose loan type sounds commercial.`;
+export function unconfirmedEntry(doc, scope, { institutions = {}, aliases = {} } = {}) {
+  const { date, kind } = documentDate(doc);
+  const reason = unconfirmedReason(scope.property);
+  const keys = new Set();
+  for (const party of doc.parties ?? []) {
+    if (!LENDER_ROLES.includes(party.role)) continue;
+    const m = matchLender(party, { institutions, aliases, documentState: doc.state });
+    if (m.status === 'matched') keys.add(m.key);
+  }
+  return {
+    id: doc.id, sourceId: doc.sourceId, documentType: doc.documentType, typeLabel: DOC_TYPES[doc.documentType]?.label ?? doc.documentType, countyLabel: countyLabel(doc),
+    date, dateKind: kind, loanType: scope.loanType, commercial: scope.commercial, loanTypeInScope: !!scope.loanTypeInScope, reason, reasonText: UNCONFIRMED[reason],
+    parcel: { status: scope.property.status, kind: scope.property.kind ?? null, code: scope.property.code ?? null }, banks: [...keys].sort(), link: publicLink(doc),
+  };
+}
+export const readUnconfirmed = (dir) => readJson(loansPaths(dir).unconfirmed, null);
+
 const sansStamp = ({ builtAt, runId, ...rest }) => stable(rest);
 const eventId = (doc, key) => `county:${doc.id}:${key}`;
 
@@ -433,38 +622,59 @@ const eventId = (doc, key) => `county:${doc.id}:${key}`;
 // time and the basis, kept when an event is written again.
 function eventOf(doc, key, roles, scope, first) {
   const { date, kind } = documentDate(doc);
+  const v = propertyView(scope.property) ?? {};
   return {
     id: eventId(doc, key), kind: 'event', type: 'county_document', key, documentId: doc.id, sourceId: doc.sourceId, documentType: doc.documentType,
     stage: DOC_TYPES[doc.documentType].stage, roles, date, dateKind: kind, county: doc.county, state: doc.state, link: publicLink(doc),
-    label: eventLabel(doc, roles), basis: first.basis, relation: 'current', scope: { commercial: scope.commercial, borrowers: scope.borrowers },
+    label: eventLabel(doc, roles, v.words ? v : null), basis: first.basis, relation: 'current', scope: storedScope(scope),
+    sector: v.sector ?? null, propertyType: v.propertyType ?? null, propertyConfirmed: !!v.confirmed, propertySource: v.source ?? null,
     firstSeenAt: doc.firstSeenAt ?? null, matchedAt: first.matchedAt, runId: first.runId, contextOnly: true, scored: false,
   };
 }
 
-// Applies the scope rule to every stored document, matches the lender-side parties of those in scope against the bank list and the
-// aliases, then writes each bank's file (rewritten only when its content changed), the review list, and the events: one for each
-// document in scope and bank that holds the loan now (relation current), the first time they match: "new-document" when the document
-// arrived in this run, "new-match" when an alias a principal added since made it match. An event is kept, and written again from its
-// document with when it was first matched, until the rule no longer allows it: its document is out of scope, or the bank only
-// originated the loan. Documents out of scope give no bank row, no review name, no set-aside count and no event.
-// Returns counts only, with each source's.
+// Applies the scope rule to every stored document, matches the lender-side parties of the leads against the bank list and the aliases,
+// then writes each bank's file (rewritten only when its content changed), the lender review list, the events, and the
+// property-not-confirmed list. An event for each lead and bank that holds the loan now (relation current), the first time they match:
+// "new-document" when the document arrived in this run, "new-match" when an alias a principal added since made it match. An event is
+// kept, and written again from its document with when it was first matched, until the rule no longer allows it: its document is not a
+// lead, or the bank only originated the loan. A document that is not a lead gives no bank row, no review name, no set-aside count and no
+// event; one whose property is not confirmed goes on loans/unconfirmed.json instead (unconfirmedEntry). Returns counts only, with each
+// source's.
 export function buildLoanIndex({ dir, now = new Date(), runId = null, institutions, aliases } = {}) {
   const P = loansPaths(dir);
   const inst = institutions ?? readJson(fdicPaths(dir).institutions, {});
   const al = aliases ?? loadAliases(dir);
   const at = now.toISOString();
   const docs = allDocuments(dir).sort(byNewest);
-  const scopes = scopeAll(docs);
+  // The stored parcel matches (loans/parcels/, src/parcels.mjs): read, never looked up here, so the index and the rebuild need no network.
+  const scopes = scopeAll(docs, { parcels: readParcelMatches(dir) });
   const byId = new Map(docs.map((d) => [d.id, d]));
   const banks = new Map(), review = new Map(), aside = new Map(), bySource = {}, outOfScopeWhy = {};
-  const pairs = [], notCurrent = new Set();
+  const pairs = [], notCurrent = new Set(), unconfirmed = [];
+  // The property side, counts only: every stored document's parcel status; the leads by sector (or commercial land); the documents on
+  // the property-not-confirmed list by reason, and how many of them the loan type alone would have kept.
+  const parcels = { byStatus: {}, leadsBySector: {}, unconfirmed: 0, unconfirmedByReason: {}, unconfirmedLoanTypeWouldKeep: 0, loanTypeWouldKeep: 0 };
   let lenderParties = 0, matchedParties = 0, inScope = 0, outOfScope = 0, originated = 0;
   for (const doc of docs) {
-    const src = (bySource[doc.sourceId] ??= { documents: 0, inScope: 0, outOfScope: 0, matchedDocuments: 0, reviewNames: 0 });
+    const src = (bySource[doc.sourceId] ??= { documents: 0, inScope: 0, outOfScope: 0, unconfirmed: 0, matchedDocuments: 0, reviewNames: 0, parcelMatched: 0 });
     src.documents++;
     const scope = scopes.get(doc.id);
-    if (!scope.inScope) { outOfScope++; src.outOfScope++; outOfScopeWhy[scope.why] = (outOfScopeWhy[scope.why] ?? 0) + 1; continue; }
+    parcels.byStatus[scope.property.status] = (parcels.byStatus[scope.property.status] ?? 0) + 1;
+    if (scope.property.status === 'matched') src.parcelMatched++;
+    if (scope.loanTypeInScope) parcels.loanTypeWouldKeep++;
+    if (!scope.inScope) {
+      outOfScope++; src.outOfScope++; outOfScopeWhy[scope.why] = (outOfScopeWhy[scope.why] ?? 0) + 1;
+      if (scope.review) {
+        const e = unconfirmedEntry(doc, scope, { institutions: inst, aliases: al });
+        unconfirmed.push(e); src.unconfirmed++; parcels.unconfirmed++;
+        parcels.unconfirmedByReason[e.reason] = (parcels.unconfirmedByReason[e.reason] ?? 0) + 1;
+        if (e.loanTypeInScope) parcels.unconfirmedLoanTypeWouldKeep++;
+      }
+      continue;
+    }
     inScope++; src.inScope++;
+    const sector = scope.property.sector ?? 'commercial-land';
+    parcels.leadsBySector[sector] = (parcels.leadsBySector[sector] ?? 0) + 1;
     const mine = new Map(), holders = [];
     for (const party of doc.parties ?? []) {
       if (!LENDER_ROLES.includes(party.role)) continue;
@@ -546,14 +756,22 @@ export function buildLoanIndex({ dir, now = new Date(), runId = null, institutio
   }
   if (stable(events) !== eventsBefore) writeJson(P.events, events);
 
-  const counts = { documents: docs.length, inScope, outOfScope, outOfScopeWhy, lenderParties, matchedParties, matchedDocuments: Object.values(bySource).reduce((n, s) => n + s.matchedDocuments, 0), banks: banks.size, originated, review: entries.length, setAside: setAside.reduce((n, s) => n + s.count, 0), eventsNew, eventsRemoved, bankFilesWritten };
+  // The property-not-confirmed list: the documents whose property no county parcel confirms, for a principal to check by hand. Those
+  // the loan type alone would have kept (a commercial-sounding loan type, or an entity borrowing) first, then the newest.
+  unconfirmed.sort((a, b) => (Number(b.loanTypeInScope) - Number(a.loanTypeInScope)) || (a.date !== b.date ? (String(a.date) < String(b.date) ? 1 : -1) : a.id < b.id ? -1 : 1));
+  const unconfirmedRec = { builtAt: at, runId, contextOnly: true, note: UNCONFIRMED_NOTE, counts: { documents: unconfirmed.length, byReason: parcels.unconfirmedByReason, loanTypeWouldKeep: parcels.unconfirmedLoanTypeWouldKeep }, entries: unconfirmed };
+  const oldUnconfirmed = readJson(P.unconfirmed, null);
+  if ((unconfirmed.length || oldUnconfirmed) && (!oldUnconfirmed || sansStamp(oldUnconfirmed) !== sansStamp(unconfirmedRec))) writeJson(P.unconfirmed, unconfirmedRec);
+
+  const counts = { documents: docs.length, inScope, outOfScope, outOfScopeWhy, parcels, lenderParties, matchedParties, matchedDocuments: Object.values(bySource).reduce((n, s) => n + s.matchedDocuments, 0), banks: banks.size, originated, review: entries.length, setAside: setAside.reduce((n, s) => n + s.count, 0), eventsNew, eventsRemoved, bankFilesWritten };
   const state = readLoanState(dir);
   writeJson(P.state, { ...state, sources: state.sources ?? {}, index: { builtAt: at, runId, counts, bySource } });
   return { ...counts, bySource };
 }
 
-// The rebuild (`outbound loans rebuild`): each bank's file, the review list and the events written again from the stored documents
-// under the current rules, without reading any county. Events about documents now out of scope, or on a bank that only originated the
+// The rebuild (`outbound loans rebuild`): each bank's file, the review list and the events written again from the stored documents and
+// the stored parcel matches (loans/parcels/) under the current rules, without reading any county or its parcel service: no network.
+// Events about documents now out of scope, or on a bank that only originated the
 // loan, are removed; the others keep when they were first matched. The documents themselves are not touched. Safe on a data folder
 // pulled from the platform (`outbound platform pull --to DIR`, then `outbound platform push --from DIR`): it writes only under loans/,
 // and refuses a folder with no stored document or no bank list, which would otherwise empty every bank's file.

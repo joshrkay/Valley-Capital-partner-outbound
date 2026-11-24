@@ -62,7 +62,7 @@ import { readJson, writeJson, safeId } from '../store.mjs';
 import { getText, getBytes, getFile, realSleep, HttpError } from './http.mjs';
 import { startRun, finishRun, SOURCE_KEYS } from './runlog.mjs';
 import { parseRobots, robotsFor, robotsAllows } from './fdicsales.mjs';
-import { buildDocument, diffDocuments, writeDiff, buildLoanIndex, scopeAll, loadDocuments, loansPaths, readLoanState, hashDocument, documentId, docNumberKey, documentDate, DOC_TYPES, RECORD_KEYS, validYmd } from '../loans.mjs';
+import { buildDocument, diffDocuments, writeDiff, buildLoanIndex, scopeAll, readParcelMatches, loadDocuments, loansPaths, readLoanState, hashDocument, documentId, docNumberKey, documentDate, DOC_TYPES, RECORD_KEYS, validYmd } from '../loans.mjs';
 import { matchLender, reviewKey, LENDER_ROLES } from '../lenders.mjs';
 import { loadAliases } from '../candidates.mjs';
 import { fdicPaths } from './fdic.mjs';
@@ -258,7 +258,10 @@ function followed(f, depth) {
 // One run of one source. Returns counts only (no name, no address, no document link), as a job result and the run log may carry. With
 // `backfill: { since }` it reads the source's archive back to that date instead of the weekly pages (the same gate, robots.txt and
 // pacing).
-export async function runNoticeSource({ dir, source, counties = {}, fetchImpl = globalThis.fetch, now = new Date(), clock = () => new Date(), sleep = realSleep, nowMs = () => Date.now(), allowExample = false, backfill = null, pdfToText }) {
+// `parcels`, when given, looks up the county parcel record of each document the run added or changed before the index reads them
+// (src/parcels.mjs lookupParcels, bound to its network by the caller: the worker's loans.watch and `outbound loans run`). It returns
+// counts; a lookup that fails, or throws, is counted in the result's `parcels` and never fails the run.
+export async function runNoticeSource({ dir, source, counties = {}, fetchImpl = globalThis.fetch, now = new Date(), clock = () => new Date(), sleep = realSleep, nowMs = () => Date.now(), allowExample = false, backfill = null, pdfToText, parcels = null }) {
   const cfgErrors = validateCountyConfig(counties);
   if (cfgErrors.length) throw new Error(`config.json: ${cfgErrors.join('; ')}`);
   const prior = readLoanState(dir).sources?.[source.id] ?? null;
@@ -451,17 +454,27 @@ export async function runNoticeSource({ dir, source, counties = {}, fetchImpl = 
     Object.assign(counts, { read: docs.length, added: diff.added.length, changed: diff.changed.length, unchanged: diff.unchanged.length, duplicates: counts.duplicates + diff.duplicates });
     writeDiff(dir, source.id, diff, { runId: run.runId, now });
     if (listOut && stable(listOut) !== stable(list)) writeJson(P.list(source.id), listOut);
+    // 5. The property: the county's parcel record for each document added or changed (and any not looked up yet), before the index reads
+    // them. A failure is counted, never the run's: those documents keep the loan type rule until the next lookup.
+    let parcelCounts = null;
+    if (typeof parcels === 'function') {
+      try { parcelCounts = await parcels({ dir, sourceId: source.id, ids: [...diff.added, ...diff.changed.map((c) => c.id)], now }); }
+      catch (e) { parcelCounts = { sourceId: source.id, outcome: 'failed', error: String(e?.message ?? e).slice(0, 300) }; }
+      if (parcelCounts && !['no-source', 'off'].includes(parcelCounts.outcome)) {
+        notes.push(`parcel lookup ${parcelCounts.outcome}: ${parcelCounts.looked ?? 0} looked up, ${parcelCounts.matched ?? 0} matched, ${parcelCounts.ambiguous ?? 0} ambiguous, ${parcelCounts.unmatched ?? 0} unmatched, ${parcelCounts.noAddress ?? 0} with no address, ${parcelCounts.failed ?? 0} failed`);
+      }
+    }
     const index = buildLoanIndex({ dir, now, runId: run.runId });
-    // The scope rule (src/loans.mjs, loanScope), over this source's stored documents: those known to be residential stay stored and
-    // reach no bank's file, review list or event.
+    // The scope rule (src/loans.mjs, loanScope), over this source's stored documents: only a lead (a county parcel confirmed commercial,
+    // multifamily of 5 or more units, or commercial land) reaches a bank's file, the review list or an event; the others stay stored.
     const scoped = index.bySource?.[source.id] ?? { inScope: 0, outOfScope: 0 };
     Object.assign(counts, { inScope: scoped.inScope, outOfScope: scoped.outOfScope });
-    notes.push(`${counts.read} document(s) read: ${counts.added} new, ${counts.changed} changed, ${counts.unchanged} unchanged; of ${counts.inScope + counts.outOfScope} stored, ${counts.inScope} in scope and ${counts.outOfScope} out of scope (known residential); ${index.eventsNew} new event(s) for banks in the list`);
+    notes.push(`${counts.read} document(s) read: ${counts.added} new, ${counts.changed} changed, ${counts.unchanged} unchanged; of ${counts.inScope + counts.outOfScope} stored, ${counts.inScope} leads (a county parcel confirms a commercial property) and ${counts.outOfScope} not leads; ${index.eventsNew} new event(s) for banks in the list`);
     // Quiet: a run that read nothing because everything its source lists was read before (a file answered 304, or one already read).
     const quiet = counts.files === 0 && counts.filesNotModified + counts.filesKnown > 0;
     const line = finishRun(dir, run, { rowsRead: counts.rows, rowsWritten: counts.added, rowsChanged: counts.changed, outcome: 'ok', suspect, quiet, notes, now: clock() });
     recordRun(dir, source, stamp(run.runId, fetchedAt, line.outcome, counts), { files });
-    return { runId: run.runId, outcome: line.outcome, ...counts, index };
+    return { runId: run.runId, outcome: line.outcome, ...counts, index, ...(parcelCounts ? { parcels: parcelCounts } : {}) };
   } catch (e) {
     return fail(e.message);
   }
@@ -553,7 +566,7 @@ export async function verifyNoticeSource({ dir, source, counties = {}, fetchImpl
   const institutions = readJson(fdicPaths(dir).institutions, {});
   const aliases = loadAliases(dir);
   const reviewKeys = new Set((readJson(loansPaths(dir).review, { entries: [] }).entries ?? []).map((e) => reviewKey(e.name)));
-  const scopes = scopeAll(recs);
+  const scopes = scopeAll(recs, { parcels: readParcelMatches(dir) });
   const inScope = recs.filter((r) => scopes.get(r.id).inScope);
   let matched = 0, aside = 0, onReview = 0;
   const neither = [];
@@ -565,7 +578,7 @@ export async function verifyNoticeSource({ dir, source, counties = {}, fetchImpl
     else if (reviewKeys.has(reviewKey(m.name))) onReview++;
     else neither.push(r.id);
   }
-  checks.push(check('county.matched', !neither.length, `${matched + aside + onReview + neither.length} lender, beneficiary or holder name(s) on the ${inScope.length} document(s) in scope: ${matched} matched to a bank in the list, ${aside} set aside (MERS, trustees, servicers, law firms, people), ${onReview} on the review list (outbound loans review).${neither.length ? ` ${neither.length} are none of these: a bug. Run: outbound loans rebuild` : ''} ${recs.length - inScope.length} document(s) are out of scope (known residential) and reach no list.`, neither.length ? { neither: [...new Set(neither)].slice(0, 10) } : undefined));
+  checks.push(check('county.matched', !neither.length, `${matched + aside + onReview + neither.length} lender, beneficiary or holder name(s) on the ${inScope.length} document(s) in scope: ${matched} matched to a bank in the list, ${aside} set aside (MERS, trustees, servicers, law firms, people), ${onReview} on the review list (outbound loans review).${neither.length ? ` ${neither.length} are none of these: a bug. Run: outbound loans rebuild` : ''} ${recs.length - inScope.length} document(s) are not leads (no county parcel confirms a commercial property) and reach no list.`, neither.length ? { neither: [...new Set(neither)].slice(0, 10) } : undefined));
 
   // The sample links to where the list shows each document when its own link would name a person.
   const rows = inScope.filter((r) => (r.parties ?? []).some((p) => matchLender(p, { institutions, aliases, documentState: r.state }).status === 'matched'))

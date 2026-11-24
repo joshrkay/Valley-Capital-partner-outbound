@@ -6,7 +6,8 @@ The parts of the county pipeline that do not depend on any county's format (`doc
 
 - It lives in the data folder's `loans/` and the platform database, never in this repository.
 - It never goes in a log or a message.
-- No model-facing action loads `loans/` (research, draft, approve, call prep, call notes, the call desk), and neither does scoring. A county document cannot change a score, a weight or a tier. `test/loans-handoff.test.mjs` proves each of these.
+- No model-facing action loads `loans/` (research, draft, approve, call prep, call notes, the call desk), and neither does scoring. A county document or its parcel match cannot change a score, a weight or a tier. `test/loans-handoff.test.mjs` and `test/parcels.test.mjs` prove each of these.
+- Only a filing whose county parcel record confirms a commercial property is a lead (section 3a).
 
 ## 1. The record
 
@@ -73,7 +74,7 @@ One record per public-records document about a loan (`src/loans.mjs`, `buildDocu
 - **The deed of trust** has its recording number (or book and page) and its recording date, and `dated`, the date it was signed, when the source gives it.
 - **The sale place** (`salePlace`), when the notice gives it.
 - **The source:** the document's own link, its ETag, and `listUrl` when the document's link would name a person (a Texas notice's file is named for the debtor). The bank's file and the events carry `listUrl` instead of the document's link.
-- **Property type** is null until a county's assessor join gives a use code. It is never guessed.
+- **Property type** on the document is null until a county's own list gives one; it is never guessed. The property type a principal sees comes from the county's parcel record, stored apart in `loans/parcels/<source>.json` (section 3a), so the stored document and its content hash never change for it.
 - **What a public trustee's list adds** (all optional; a source without them keeps the shape above):
   - `dates.listed`: the date of the county's own list that gave an entry that is not itself a recorded document (a pre-sale list's run date). The event then says "was listed on".
   - `property.legal`: the legal description, where the list gives one.
@@ -90,17 +91,19 @@ One record per public-records document about a loan (`src/loans.mjs`, `buildDocu
 | Path | What |
 |---|---|
 | `loans/docs/<source>.json` | Every document a source has given, by id. Only the watcher writes it. |
-| `loans/banks/fdic-<CERT>.json` | The bank's matched documents in scope (section 3a), newest first, with the engine's labels, each with its `scope` and `relation`. **No borrower, grantor, address or APN.** The bank page reads only this file. |
-| `loans/review.json` | Names on documents in scope that matched no bank or several, with their candidates; and the names set aside, with their class. |
-| `loans/events.json` | One dated event per document in scope and bank that holds the loan now, written the first time they match. |
+| `loans/banks/fdic-<CERT>.json` | The bank's matched leads (section 3a), newest first, with the engine's labels and the parcel record's property type, each with its `scope` and `relation`. **No borrower, grantor, address, APN or parcel number.** The bank page reads only this file. |
+| `loans/review.json` | Names on leads (section 3a) that matched no bank or several, with their candidates; and the names set aside, with their class. |
+| `loans/parcels/<source>.json` | Each document's match to the county's parcel record, by document id (section 3a): the parcels' schedule numbers and PINs, assessor codes, building uses, units, kind and sector, how matched, confidence and when checked. The source's attribution and licence. **No owner and no address.** |
+| `loans/unconfirmed.json` | The property-not-confirmed list (section 3a): filings no county parcel confirms as commercial, each with why and its loan type. **Not leads; no borrower, address or parcel number.** |
+| `loans/events.json` | One dated event per lead and bank that holds the loan now, written the first time they match, with its sector and the parcel source to attribute. |
 | `loans/state.json` | Each source's last run and up to 12 runs: documents read, new, changed, unchanged (and, for a linked-document source, listed, fetched, held and deferred). For a source that reads report files, the files it has read (address, posted date, ETag, Last-Modified and the report's dates; up to 200), never their contents. A recorded block. Also the index's counts. |
-| `loans/cmbs.json` | One entry per document in scope whose current holder is a CMBS trust: linked to the trust's own loan record from SEC EDGAR, or "trust named, loan not found" with the reason (section 9). **No borrower, address or servicer commentary.** The triage and the special servicer's page read it. |
+| `loans/cmbs.json` | One entry per lead (section 3a) whose current holder is a CMBS trust: linked to the trust's own loan record from SEC EDGAR, or "trust named, loan not found" with the reason (section 9). **No borrower, address or servicer commentary.** The triage and the special servicer's page read it. |
 | `loans/lists/<source>.json` | A linked-document source's list: each page's ETag, the documents recorded as history on its first run, and the documents held as unreadable, by id and reason. **No name and no link.** |
 
 **The platform.** Every path fits the existing `documents` table (a test checks each path against the table's own path rule).
 
 - The bank page loads `loans/banks/fdic-<CERT>.json` and `loans/state.json` with the principal's token, as it loads `paper/fdic-<CERT>.json`.
-- **The worker job `loans.watch`** runs every enabled county, each in its own unit of work (`LOADS.loans`): each source `config.counties.watch` lists that `config.counties.sources` does not mark not enabled, and each one it marks enabled (`enabledSourceIds`). So enabling Jefferson or Douglas there adds it to the weekly run with no other change. Its result holds counts only. A county its gate refuses, or whose run fails, fails the job, which turns the workflow red. The jobs table's kind list needs the migration `supabase/migrations/20261118120000_jobs_loans_watch.sql`.
+- **The worker job `loans.watch`** runs every enabled county, each in its own unit of work (`LOADS.loans`): each source `config.counties.watch` lists that `config.counties.sources` does not mark not enabled, and each one it marks enabled (`enabledSourceIds`). So enabling Jefferson or Douglas there adds it to the weekly run with no other change. After reading a county it looks up the parcel record of each new or changed filing (section 3a); a lookup that fails is counted and never fails the county's run. Its result holds counts only. A county its gate refuses, or whose run fails, fails the job, which turns the workflow red. The jobs table's kind list needs the migration `supabase/migrations/20261118120000_jobs_loans_watch.sql`.
 
 ## 3. The lender match (component 5)
 
@@ -130,15 +133,124 @@ One record per public-records document about a loan (`src/loans.mjs`, `buildDocu
 
 Former names and holding companies from FDIC history or FFIEC NIC are not added yet. A principal's alias covers them meanwhile.
 
-## 3a. Scope: commercial loans only
+## 3a. Scope: commercial property only
 
-The firm buys commercial real estate loans, and most loans a county's foreclosure list names are home mortgages (the first Jefferson backfill: of 137 documents matched to a bank, 76 were flagged residential, 58 had a loan type the classifier did not know, and 3 were commercial). One rule, `loanScope` in `src/loans.mjs`: **a document is in scope unless it is known to be residential.**
+The firm buys commercial real estate loans, and most loans a county's foreclosure list names are home mortgages. One rule, `loanScope` in `src/loans.mjs`, decides everywhere a principal sees a county filing: each bank's file, the lender review list, the events, the CMBS links, the triage, the bank page and the servicer page.
 
-1. **Its loan type** reads as a residential program or label: the flag `loan.commercial` is `false`. A stored `null` is read again from the type, so a type the classifier learns later applies to documents already stored.
+**The property decides, not the loan type.** A county's loan type describes the loan's purpose, not the property. Measured on all 838 stored Jefferson filings against the county's own parcel record:
+
+- of the 47 filings the loan type kept, 30 were homes (an investor's "Commercial" or "BPL" loan on a house);
+- an apartment building, a retail property and an office were dropped by their residential loan types.
+
+So the property type comes from the county's parcel record (`src/parcels.mjs`), and by the principal's ruling of 2026-11-23 there are **no residential properties at all**. A filing is a **lead** only when its county parcel is confirmed as one of:
+
+| The parcel record says | Lead? | Shown as |
+|---|---|---|
+| Commercial: 2xxx, 3xxx | Yes, whatever the loan type | its sector: hospitality, retail, office, industrial or other-commercial |
+| Multifamily of 5 or more units: 1125, or 1120 with 5 or more units | Yes, whatever the loan type | multifamily |
+| Commercial or industrial vacant land: 0200, 0300 | Yes, whatever the loan type | "commercial land" |
+| A home: 1112, 1115, 1177, 1212, 1230 and the like; a 4-unit building (1120 with 1 to 4 units) | **Out**, whatever the loan type | |
+| Residential vacant land: 0100 | **Out**, whatever the loan type | |
+| Exempt (9xxx), agricultural (4xxx), 1120 with no unit count, other land (05xx, 0600), any other class | Not a lead: the property-not-confirmed list | |
+| No match, no address, an ambiguous match, no ZIP code and no city, not looked up yet, or a county with no parcel source | Not a lead: the property-not-confirmed list | |
+
+Only a lead produces a bank row, an event, a triage line or a CMBS link line. **There is no fallback to the loan type.** A filing that is not a lead stays in `loans/docs/<source>.json` (the weekly diff stays idempotent, and no parcel match changes a stored document or its content hash).
+
+**Counties with no parcel source.** Only Jefferson has one. A Caldwell or Douglas filing is therefore never a lead until its county gets a parcel adapter: each is on the property-not-confirmed list as "no parcel source for this county yet".
+
+**The sectors** align with `PROPERTY_TYPES` in `src/loans.mjs` and with `buybox.json` `sectors.include` (hospitality, multifamily, retail):
+
+| Sector | Property type | Label | In a sentence |
+|---|---|---|---|
+| `hospitality` | `hotel` | Hotel | on a hotel |
+| `multifamily` | `multifamily` | Apartments | on an apartment property |
+| `retail` | `retail` | Retail | on a retail property |
+| `office` | `office` | Office | on an office property |
+| `industrial` | `industrial` | Industrial | on an industrial property |
+| `other-commercial` | `other-commercial` | Other commercial | on a commercial property |
+| (commercial land) | `land` | Commercial land | on commercial land |
+
+### The source
+
+Jefferson County's public parcel layer, an ArcGIS FeatureServer (`src/sources/parcels/jefferson.mjs`):
+
+- `https://gisportal.jeffco.us/server2/rest/services/Parcel/FeatureServer/20/query`: open with no token, capabilities Query and Extract, `maxRecordCount` 2000.
+- The host has no robots.txt (404, checked 2026-11-23). Each run reads it again first, and stops if one appears that disallows the layer.
+- **Licence.** "Jefferson County GIS data is covered by the Creative Commons Attribution 4.0 International License" (https://www.jeffco.us/3165/Maps-Data-Download, read 2026-11-23). Commercial use and storage are allowed with attribution. Wherever a property type read from it shows (the bank page, the events, the triage, `outbound loans show`, `events` and `parcels`), it is attributed: **"Property type: Jefferson County Assessor parcel data (CC BY 4.0)."**
+
+**Fields read:** the site address (`PRPSTRNUM`, a string zero-padded to 5 digits; `PRPSTRDIR`, `PRPSTRNAM`, `PRPSTRTYP`, `PRPSTRSFX`, `PRPSTRUNT`, `PRPADDRESS`, `PRPCTYNAM`, `PRPZIP5`), the classification (`TAXCLS`..`TAXCLS6` with their actual values `VALACT`..`VALACT6`; `STTTYPUSE`..`STTTYPUSE4`; `STTNBRUNT`..`STTNBRUNT4` and `STTNBRBLDG`..`STTNBRBLD4`), and the identifiers `SCH` and `PIN`. **Never an owner or a mailing address** (`OWNNAM*`, `OWNICO`, `DBA`, `MAIL*`): the query never asks for them, and the adapter never copies them.
+
+**Requests:** up to 40 `(PRPSTRNUM='NNNNN' AND PRPZIP5='ZZZZZ')` clauses per OR query (or `UPPER(PRPCTYNAM)='CITY'` for a city), `returnGeometry=false`, paged with `resultOffset` past 2000, at least 1.5 seconds apart (`config.counties.parcels.minIntervalMs` or a robots.txt Crawl-delay if longer), with the firm's User-Agent, retries and timeouts from `src/sources/http.mjs`. A refusal (401, 403, 407, 429, 451) stops the run's lookups. `config.counties.parcels.enabled: false` turns every lookup off.
+
+### The assessor's codes
+
+Colorado's four-digit abstract codes (`src/sources/parcels/colorado.mjs`). The first digit is the class, the second says land (1) or improvements (2), the last two the use. Read from a cross-tabulation of the live layer (TAXCLS against STTTYPUSE, 2026-11-23):
+
+| Code | Parcels | What the buildings are | Read as |
+|---|---|---|---|
+| 1112 | 185,152 | Houses (1 Story/Ranch, 2 Story, Split Level) | residential |
+| 1230 | 13,274 | Condos | residential |
+| 1115 | 2,633 | Small residential, mostly houses (duplex or triplex) | residential |
+| 1120 | 822 | Apartments, 4 to 8 units | multifamily with 5 or more units; residential with 1 to 4; not confirmed with no unit count |
+| 1125 | 693 | Apartments, 9 or more units, plus some elderly housing | multifamily |
+| 1177, 1212 | | Residential | residential |
+| 2112 | 1,390 | Retail stores, convenience stores, neighbourhood shopping centres | retail |
+| 2115 | 84 | Hotels and motels (limited service, motel, full service, B&B) | hospitality |
+| 2120 | 621 | Office buildings | office |
+| 2130 | 1,204 | Special purpose: restaurants, repair garages, fast food, medical office | other-commercial |
+| 2135 | 783 | Industrial flex and storage warehouses | industrial |
+| 2245 | 598 | Office and retail condominiums | by the building use (office, retail...), else other-commercial |
+| 2150 | 69 | Mixed | by the building use, else other-commercial |
+| 2125 | 57 | Recreation | other-commercial |
+| 3xxx | | Industrial and warehouse | industrial |
+| 0100 | | Residential vacant land | out |
+| 0200 | | Commercial vacant land | commercial land |
+| 0300 | | Industrial vacant land | commercial land |
+| 05xx, 0600 | | Other land | not confirmed |
+| 4xxx | | Agricultural | not confirmed |
+| 9xxx | | Exempt: government, schools, churches, some non-profit housing | not confirmed |
+| 1140, 1150, 5xxx to 8xxx | | Other classes | not confirmed |
+
+The improvement code in a later slot (2215 beside 2115, 2220 beside 2120) reads the same as its land code.
+
+**A parcel with codes of more than one kind** (a house with an office, a mini-warehouse with a manager's apartment, a store with a flat above) is read by value:
+
+- vacant-land codes give way to any improvement code: land under a house is a house;
+- among the rest, the kind holding the most of the parcel's actual value decides; within commercial, the sector holding the most;
+- two kinds of equal value, or mixed kinds with no value to choose by, are "other": never a guess.
+
+### Matching an address
+
+Tolerant, but it never guesses (`parseAddress`, `streetKey`, `compareStreets`, `decideMatch` in `src/parcels.mjs`):
+
+1. **The filing's address** ("NUMBER STREET[, # or UNIT X], CITY, ST ZIP") is parsed, with the variants filings carry: a unit with or without a comma (`#`, `UNIT`, `APT`, `CONDO`, or a bare unit after the suffix); two numbers ("965 & 975", "1560-1562", "2220-22", "9723 9727"); no ZIP code; text before a colon. An address with no street number is "no address".
+2. **The query:** every parcel with that street number in that ZIP code; with no ZIP code, in that city (the layer's spelling: Wheatridge is WHEAT RIDGE); with neither, "no ZIP code and no city". When the ZIP code finds no parcel on the street, the city is asked too, and only an exact street counts there.
+3. **The street must match** after both sides are normalised the same way: suffixes to the USPS abbreviation (STREET is ST, AVENUE is AVE), directions before or after the name (N, S, E, W and the full words), punctuation, ordinals (26TH is 26) and highway designators (I-70, I 70, the county's own "1-70", US 285, ST HWY 58). An **exact** match of every part wins. Failing that, a match by **core words**: the name's words are equal, with or without a suffix on one side, and the directions do not contradict, whatever the highway designators. So "12345 S. Frontage Rd" matches "12345 I-70 FRONTAGE RD S", while MILLER ST is never MILLER CT and N MAIN is never S MAIN.
+4. **Several parcels at the address** (condos, an office and retail building) are narrowed by the filing's unit. A parcel with no assessor class says nothing and counts only when none has one. If those left disagree on the property type, the match is **ambiguous**, never a pick. If they agree (a building of condos), it is matched.
+5. **Each match records** how it was made (`how`: the street exact or by core words, by ZIP code or city, the unit used), a confidence (high for an exact street by ZIP code, medium otherwise), how many parcels the number returned and how many agreed.
+6. **A filing with no match of its own** takes its case's: the other documents of the same foreclosure that matched, when they agree.
+
+### Where it lives
+
+`loans/parcels/<source>.json`, keyed by document id. It is derived data: for each filing, the parcels' schedule numbers and PINs, assessor codes with their values, building uses, units and buildings, the kind, sector and land use, how it was matched, the confidence and when it was checked (`checkedAt`). The file carries the source's attribution and licence. **No owner and no address:** the filing's address is kept only as a hash, so a changed address is looked up again. Like everything under `loans/`, no model-facing action and no scoring run loads it. `LOADS.loans` covers it (`loans/`), and `LOADS.cmbs` lists `loans/parcels/` (the CMBS link applies the same scope).
+
+**When it runs:**
+
+- **The weekly `loans.watch` job** looks up the parcel of every filing a county's run added or changed, and every one not looked up yet, after reading the county and before the index, in the same unit of work. A lookup that fails is counted in the county's `parcels` (outcome, looked, matched, ambiguous, unmatched, no address, failed, requests) and **never fails the county's run**; the filings it left are looked up next time.
+- **`outbound loans parcels [--source jefferson] [--refresh]`** fills what is missing (with `--refresh`, everything) and prints counts only: matched by how, ambiguous, unmatched, no address, no ZIP code, by class, the leads by the loan type alone and by the parcel record, the documents out, and the property-not-confirmed list (below).
+- **`outbound loans rebuild`** reads the stored matches and never the network.
+
+### The property-not-confirmed list
+
+`loans/unconfirmed.json`, written by the index: one entry per filing whose property no county parcel confirms. It is **not** a lead list: none of it is an event, a Watch line, a bank row or a CMBS link line. It is there so a principal can check by hand the few the loan type alone would have kept (a commercial-sounding loan type, or an entity borrowing). Each entry holds the document's id, type, county, date and public link, its loan type and that rule's verdict, why the property is not confirmed (with the assessor's code for a parcel that does not decide), and the keys of the banks its lender-side names match. No borrower, no address, no parcel number. `outbound loans parcels` prints its counts by reason, and lists by id those the loan type alone would keep and those whose parcel's class does not decide. `outbound loans rebuild` prints its counts.
+
+### The loan type, still read
+
+The loan type no longer decides. It is still read, stored and shown, and the rule it used to be sorts the property-not-confirmed list (`loanTypeInScope` on each scope):
+
+1. **Its loan type** reads as a residential program or label: the flag `loan.commercial` is `false`. A stored `null` is read again from the type.
 2. **A document with no loan type of its own takes its case's**: another document of the same foreclosure number in the same source that gives one (a Colorado pre-sale entry and its NED).
-3. **With no loan type that decides**, either none at all (Caldwell, Douglas, a pre-sale entry with no NED stored) or one that reads `null` ("Unknown"), it is residential when every borrower and grantor it names is a natural person: not an entity by the entity test (`isEntityName`, `src/lenders.mjs`), and read as a person's name (`personName`). A name that is neither is not taken for a person.
-
-Otherwise it is in scope: a commercial type, or an unknown or blank one with an entity among the borrowers or no borrower named. (After the first rebuild, the 12 remaining events still held 5 "Unknown" loans to individuals and 4 HELOCs; rule 3 now covers the first, and the classifier the second.)
+3. **With no loan type that decides**, it is residential when every borrower and grantor it names is a natural person (`isEntityName` and `personName`, `src/lenders.mjs`).
 
 **The classifier** (`commercialFromLoanType`, shared by the Jefferson adapter and the rule; case, punctuation and spaces ignored):
 
@@ -146,18 +258,34 @@ Otherwise it is in scope: a commercial type, or an unknown or blank one with an 
 |---|---|
 | Commercial (and the misspellings Commerical, Comercial), BPL Commercial, Business, Construction, SBA, Multifamily | `true` |
 | FNMA, Fannie Mae, FHLMC, Freddie Mac, FHA, VA, USDA, RHS, GNMA, Conventional, Conv, Conventional Residential, Residential, Reverse (Mortgage), HECM, HELOC, Home Equity (Line of Credit) | `false` |
-| Unknown, blank, anything else | `null`: rule 3 decides |
+| Unknown, blank, anything else (COM, COMM, Comm among them) | `null` |
 
-**Where it applies.** The index (`buildLoanIndex`) applies it before the lender match: a document out of scope gives no bank row, no review name, no set-aside count and no event. It stays in `loans/docs/<source>.json`, so the weekly diff stays idempotent. Each bank row and event carries the `scope` it was written under (`{ commercial, borrowers }`, no name), and two guards check it again: the triage's county loop (`eventShown`) and the bank page (`inScope` in `web/lib/loans-view.mjs`), as do `outbound loans show` and `outbound loans events`. A row or event written before the rule carries no `scope` and shows nowhere until the rebuild writes it again.
+### Where it applies
 
-**The counts.** The run result, the job result and the run's state carry `inScope` and `outOfScope` (this source's stored documents); the index's counts add `outOfScopeWhy` (`residential-loan-type`, `individual-borrowers`), `originated` and `eventsRemoved`. The verify check's `matched` counts only documents in scope.
+The index (`buildLoanIndex`) applies the rule before the lender match: a filing that is not a lead gives no bank row, no review name, no set-aside count and no event. Each bank row, event and CMBS link carries the `scope` it was written under (`{ commercial, borrowers, property: { status, kind, sector, landUse } }`, no name, no address). The guards decide again from those stored facts alone (`decideScope`): the triage's county loop (`eventShown`), the bank page (`inScope` in `web/lib/loans-view.mjs`, the same decision), the servicer page, `outbound loans show`, `events` and `cmbs`. A row or event written before the parcel rule carries no property and shows nowhere until the rebuild writes it again.
+
+**What a principal sees.** Each lead's bank row names its property type and sector, the assessor's building use and units, that the county's parcel record confirmed it, and the attribution. Its event says so in its sentence, for example (invented):
+
+> A notice of election and demand was recorded on November 12, 2026 for a loan from this bank on a hotel in Example County, CO; property type confirmed from the county's parcel record.
+
+**The triage** keeps each county line's sentence and orders the county lines: a buy-box sector first (hospitality, multifamily, retail), then the other commercial sectors, then commercial land, within a bank and across banks of the same strength; each still shows. The property type's attribution is said once under the lists (`attributions` in the record, a line in the written triage and on This week).
+
+**The counts.** The run result, the job result and the run's state carry `inScope` (the leads) and `outOfScope`; the index's counts add `outOfScopeWhy` (`residential-parcel`, `residential-land`, `not-confirmed`), `parcels` (each status, the leads by sector, the property-not-confirmed list by reason, and how many the loan type alone would keep), `originated` and `eventsRemoved`. The verify check's `matched` counts only leads.
+
+**Measured on 2026-11-23** on a copy of the live data (counts only, read from the live layer in 21 requests):
+
+- **Matching:** 822 of 838 filings matched (808 by exact street, 14 by core words; 817 by ZIP code, 5 by city; 111 narrowed by unit), 1 ambiguous, 8 unmatched, 7 with no street address. The earlier measurement script's baseline was 765 matched; a hotel it missed (its filing names the frontage road without the highway) now matches by core words, as hospitality.
+- **Leads:** 47 by the loan type alone; 12 by the parcel record (hospitality 1, multifamily 1, retail 6, office 2, other-commercial 2). 3 moved in (an apartment building, a retail property and an office with residential loan types; the second apartment building on the 4-to-8-unit code has no unit count and is not confirmed), 38 moved out.
+- **Out:** 808 (802 homes, 6 on residential vacant land). **Not confirmed:** 18 (8 unmatched, 7 with no address, 1 ambiguous, 1 apartment code with no unit count, 1 other land), of which the loan type alone would keep 4.
+
+### The current holder and the rebuild
 
 **The current holder.** A document can name the loan's original lender (`lender`, or `beneficiary` on the deed of trust) apart from its current holder (`holder`: Jefferson's "Current Lender (Beneficiary)", a Texas notice's current mortgagee). Each bank row has a `relation`:
 
 - `current`: the bank holds the loan by the document: as its current holder, a party to an assignment, or as lender or beneficiary when the document names no separate current holder. MERS alone as holder is a nominee, not a separate holder.
 - `originated`: the bank is named only as the original lender and the document names another current holder, as `holder` or as an assignee (a CMBS trust's trustee, a fund, another bank). The CMBS link reads the current holder the same way (`currentHolders`, section 9). The row shows "Originated by this bank; now held by <holder>" (`relationLabel`, `heldBy`; a person is never named: "a person (name withheld)"), and **no event is written**: "a loan from this bank" would mislead.
 
-**The rebuild** (`outbound loans rebuild`, `rebuildLoanIndex`): every bank's file, the review list and the events written again from the stored documents under the rule, reading no county and leaving the documents untouched. An event whose document is now out of scope, or whose bank only originated the loan, is removed; one that remains is written again from its document and keeps its `matchedAt`, `runId` and `basis`, so the triage does not list it twice. It refuses a folder with no stored document, or with no bank list (which would empty every bank's file). On a folder pulled from the platform:
+**The rebuild** (`outbound loans rebuild`, `rebuildLoanIndex`): every bank's file, the review lists and the events written again from the stored documents and parcel matches under the rule, reading no county and no parcel layer (no network), and leaving the documents untouched. An event whose document is no longer a lead, or whose bank only originated the loan, is removed; one that remains is written again from its document and keeps its `matchedAt`, `runId` and `basis`, so the triage does not list it twice. It refuses a folder with no stored document, or with no bank list (which would empty every bank's file). On a folder pulled from the platform:
 
 ```sh
 npm run outbound -- platform pull --to ~/valley-outbound-pulled
@@ -175,16 +303,16 @@ npm run outbound -- platform push --from ~/valley-outbound-pulled
   - an unchanged one is left exactly as it was;
   - a document no longer listed stays, as history.
 - **Re-reading the same week** writes no document, no bank file and no event.
-- **An event** is written for each document in scope newly matched to a bank that holds the loan by the document (section 3a: a match on the current holder, or on the sole lender when the document names no separate holder; never on a bank that only originated it). Its sentence is a fixed template:
+- **An event** is written for each lead (section 3a: a county parcel confirmed commercial, multifamily of 5 or more units, or commercial land) newly matched to a bank that holds the loan by the document (a match on the current holder, or on the sole lender when the document names no separate holder; never on a bank that only originated it). Its sentence is a fixed template, naming the property and that the county's parcel record confirmed it:
 
-  > A notice of trustee's sale was filed on November 10, 2026 for a loan from this bank on a property in Example County, CO.
+  > A notice of trustee's sale was filed on November 10, 2026 for a loan from this bank on a retail property in Example County, CO; property type confirmed from the county's parcel record.
 
   - The date is the filing date, or the recording date when there is none, or the notice's own date ("A notice of trustee's sale dated October 21, 2026 was posted for a loan from this bank ..."), or its sale date ("A notice of trustee's sale for a sale on December 1, 2026 was posted ...").
   - An assignment says "moving a loan ... from this bank to another holder" (or "to this bank").
   - `basis` is `new-document`, or `new-match` when a principal's alias made an older document match.
 - **Events are context only.**
   - `scored: false`; scoring never loads `loans/`, and `scoring.json` has no county signal.
-  - The weekly triage lists them under **Watch**, never act now (`triage.json` strength `county-document`), once each.
+  - The weekly triage lists them under **Watch**, never act now (`triage.json` strength `county-document`), once each, buy-box sectors first among them (section 3a).
   - They carry no signal id, so they never bring back a bank a principal dismissed.
   - The bank page shows the documents themselves.
 
@@ -292,18 +420,18 @@ The backfill of Jefferson's NED archive (`report?t=14`, monthly from January 202
 
 - **The bank page:**
   - a **Loans we can see** card in the sidebar: the count, the newest three and the watched counties;
-  - a **Loans we can see** tab: each document's type, county, date, stage, amounts with their basis, property type and a link to the source document; for a loan the bank only originated, "Originated by this bank; now held by ...".
-  - Only rows in scope show (section 3a).
+  - a **Loans we can see** tab: each document's type, county, date, stage, amounts with their basis, property type (with the assessor's building use and units, and that the county's parcel record confirmed it) and a link to the source document; for a loan the bank only originated, "Originated by this bank; now held by ...". The property type's source is attributed under the table: "Property type: Jefferson County Assessor parcel data (CC BY 4.0)."
+  - Only leads show (section 3a).
   - With none, the page says which counties are watched and that none has a document for this bank yet.
 - **System status:** a **County records** row per watched county: the last run, documents read, new this week, matched to a bank, and names to review.
-- **The command line:** `outbound loans run | backfill | verify | status | show | review | alias | match | rebuild | events | cmbs`.
+- **The command line:** `outbound loans run | backfill | verify | status | show | review | alias | match | rebuild | parcels | events | cmbs`.
 - **CMBS links** (section 9): a filing whose current holder is a CMBS trust shows on the special servicer's page and as a Watch line in the triage.
 
 ## 7. Not built yet
 
 - The other counties in the recon.
 - The image reader (component 4).
-- The assessor join that gives `useCode` and `propertyType` (component 3). The scope rule (section 3a) is the commercial filter until then: it reads the loan type and the borrowers, never the property.
+- A parcel source for Douglas and Caldwell (component 3). Until one is built, none of their filings is a lead: each is on the property-not-confirmed list (section 3a).
 - The loan chain to the current holder (component 6).
 - The observed layer's figures (E14-S4).
 - Removing a document a county later marks confidential.
@@ -381,9 +509,9 @@ A county filing whose current holder is a CMBS trust (Jefferson's "Current Lende
 
 **3. The block.** A linked entry carries `cmbs`: the trust, CIK, asset number, the property's name and type, the original and current balance, the paid-through date, the payment status, whether it is in special servicing and since when (the transfer date), the workout strategy decoded from the CREFC codes (1 Modification, 2 Foreclosure, 3 Bankruptcy, 4 Extension, 5 Note sale, 6 Discounted payoff, 7 REO, 8 Resolved, 9 Pending return to master servicer, 10 Deed in lieu, 11 Full payoff, 12 Reps and warranties, 13 To be determined, 98 Other), the latest valuation and its date, occupancy, NOI and DSCR, the master servicer (`primaryServicerName`) and the special servicer (the trust's distribution report), and the SEC links (the ABS-EE filing, its EX-102, the 10-D). Every field is picked by name, so **no servicer commentary** (it can name borrowers and people) and **no borrower** is ever stored or shown.
 
-**Where it lives:** `loans/cmbs.json`, one entry per document in scope whose current holder is a CMBS trust, keyed by document id: the document's type, county, date and public link, its stated original amount, the trust as named, the outcome with its reason, what agreed (`matchedOn`) and what differed (`disagreed`), the block, the scope it was written under, and a fixed sentence. No borrower, grantor or owner, no address, APN or legal description. Like every county event it is context only (`scored: false`): no score, weight or tier reads it, and no model-facing action loads it (`LOADS.cmbs`, `test/cmbslinks.test.mjs`).
+**Where it lives:** `loans/cmbs.json`, one entry per lead (section 3a) whose current holder is a CMBS trust, keyed by document id: the document's type, county, date and public link, its stated original amount, the trust as named, the outcome with its reason, what agreed (`matchedOn`) and what differed (`disagreed`), the block, the scope it was written under, and a fixed sentence. No borrower, grantor or owner, no address, APN or legal description. Like every county event it is context only (`scored: false`): no score, weight or tier reads it, and no model-facing action loads it (`LOADS.cmbs`, `test/cmbslinks.test.mjs`).
 
-**The scope rule** (section 3a) applies as everywhere: a document out of scope is never linked, and each entry carries its `scope`, which the triage and the servicer page check again.
+**The scope rule** (section 3a) applies as everywhere: only a lead (a county parcel confirmed commercial, multifamily of 5 or more units, or commercial land) is linked, and each entry carries its `scope`, which the triage and the servicer page check again. The link's own logic is unchanged.
 
 **When it is rebuilt.** Whenever either side changes, from stored data only, in its own unit of work (`LOADS.cmbs`, flushed through `flush_uow` like the other jobs), and rewritten only when an entry changed:
 

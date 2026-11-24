@@ -93,14 +93,15 @@ const block = (over = {}) => ({ trust: 'Example 2019-X1 Mortgage Trust', cik: '1
   returnedToMasterOn: null, workout: { code: '2', label: 'Foreclosure' }, workouts: [{ code: '2', label: 'Foreclosure' }], valuation: 6100000, valuationDate: '2026-05-01', occupancy: 0.64, noi: 410000, dscr: 0.78,
   masterServicer: 'Example Master Servicer', specialServicer: 'Sample Special Servicing LLC', filings: { absEe: 'https://www.sec.gov/Archives/edgar/data/1900001/000190000126000102/', ex102: 'https://www.sec.gov/Archives/edgar/data/1900001/000190000126000102/exh_102.xml', distributionReport: 'javascript:alert(1)' }, ...over });
 const link = (id, over = {}) => ({ id: `cmbs:${id}`, documentId: id, status: 'linked', documentType: 'election_and_demand', typeLabel: 'Notice of election and demand', countyLabel: 'Arapahoe County, CO', date: '2026-11-03', dateKind: 'recorded',
-  link: 'https://publictrustee.example/foreclosures/FC-2026-0101', originalPrincipal: 7460000, matchedOn: ['originalAmount', 'state', 'county'], disagreed: [], scope: { commercial: true, borrowers: null },
+  link: 'https://publictrustee.example/foreclosures/FC-2026-0101', originalPrincipal: 7460000, matchedOn: ['originalAmount', 'state', 'county'], disagreed: [], scope: { commercial: true, borrowers: null, property: { status: 'matched', kind: 'commercial', sector: 'hospitality', landUse: null } },
   label: 'A notice of election and demand was recorded on November 3, 2026 in Arapahoe County, CO on a $7.5M hotel loan held by a CMBS trust (Example 2019-X1 Mortgage Trust, loan 37); it has been with special servicer Sample Special Servicing LLC since March 4, 2026.', cmbs: block(), ...over });
 
 test('a servicer\'s county filings: its linked filings in scope, newest first, with the loan\'s figures and only safe links', () => {
   const file = { links: {
     a: link('a'), b: link('b', { date: '2026-11-10' }),
     other: link('other', { cmbs: block({ specialServicer: 'Placeholder Special Servicer Inc' }) }),
-    residential: link('residential', { scope: { commercial: false, borrowers: null } }),
+    residential: link('residential', { scope: { commercial: true, borrowers: null, property: { status: 'matched', kind: 'residential', sector: null, landUse: null } } }),
+    unconfirmed: link('unconfirmed', { scope: { commercial: true, borrowers: null, property: { status: 'unmatched', kind: null, sector: null, landUse: null } } }),
     unscoped: link('unscoped', { scope: undefined }),
     notFound: { ...link('notFound'), status: 'not-found', cmbs: undefined },
     unknown: link('unknown', { cmbs: block({ specialServicer: null }) }),

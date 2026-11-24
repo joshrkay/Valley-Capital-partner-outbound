@@ -159,9 +159,15 @@ export function relations({ touches = [], accounts = [], items = [], aliases = {
   return out.sort((a, b) => cmp(a.key, b.key));
 }
 
+// The order of the county lines among themselves (docs/county-loans.md 3a): a property the county's parcel record puts in a buy-box
+// sector first (buybox.json sectors.include: hospitality, multifamily, retail), then another commercial sector, then commercial land.
+// Every one of them still shows. (Only a lead has an event: a filing whose property no parcel confirms has no line here.)
+export const countyRank = (sector, buyboxSectors = []) => (sector && buyboxSectors.includes(sector) ? 0 : sector ? 1 : 2);
+
 // ---- The run ---------------------------------------------------------------------------------------------------------------------
-// rules: triage.json. metros and scoring (metros.json, scoring.json) supply labels only. since: YYYY-MM-DD, the start of the window.
-export function runTriage({ dir, rules, now = new Date(), since, metros, scoring, filingRules } = {}) {
+// rules: triage.json. metros and scoring (metros.json, scoring.json) supply labels only; buybox (buybox.json) the sectors whose county
+// lines come first. since: YYYY-MM-DD, the start of the window.
+export function runTriage({ dir, rules, now = new Date(), since, metros, scoring, filingRules, buybox = null } = {}) {
   const errs = validateTriageRules(rules);
   if (errs.length) throw new Error(`triage.json has errors:\n  ${errs.join('\n  ')}`);
   const today = ymd(now);
@@ -230,7 +236,8 @@ export function runTriage({ dir, rules, now = new Date(), since, metros, scoring
 
   // ---- Findings: one per change, each from its own template ----
   const findings = [];
-  const add = (f) => findings.push({ ids: [], dates: [], signalIds: [], links: {}, ...f, strength: rules.strength[f.type] });
+  const add = (f) => findings.push({ ids: [], dates: [], signalIds: [], links: {}, rank: 0, ...f, strength: rules.strength[f.type] });
+  const buyboxSectors = Array.isArray(buybox?.sectors?.include) ? buybox.sectors.include : [];
 
   // SEC filings (E13-S1), straight from the listener's store so a filing found since the last scoring run is not missed.
   const strong = new Set(rules.actNow.secFilingSearches);
@@ -300,12 +307,17 @@ export function runTriage({ dir, rules, now = new Date(), since, metros, scoring
   // County loan documents (docs/county-loans.md): each document newly matched to a bank is a dated event, for a principal's context.
   // Always watch, never act now (no rule in triage.json makes it one), and it carries no signal id, so it never brings back a bank a
   // principal dismissed: an event is context, not a signal, and nothing scores it. Its line is the event's own fixed template.
-  // The scope guard (src/loans.mjs, eventShown): only an event the scope rule wrote, about a document not known to be residential, on
-  // the bank that holds the loan now. An event written before the rule waits for `outbound loans rebuild`.
+  // The scope guard (src/loans.mjs, eventShown): only an event the scope rule wrote, about a lead (a county parcel confirmed commercial,
+  // multifamily of 5 or more units, or commercial land), on the bank that holds the loan now. An event written before the rule waits for
+  // `outbound loans rebuild`. The line
+  // names the property and whether the county's parcel record confirmed it; a buy-box sector comes first among the county lines
+  // (countyRank), and a property type from a parcel record is attributed under the list.
   for (const e of Object.values(countyEvents).filter((x) => x && typeof x.id === 'string' && /^fdic:\d+$/.test(String(x.key)) && eventShown(x)).sort((a, b) => cmp(a.id, b.id))) {
     const n = newness({ seenKey: e.id, date: e.date, at: e.matchedAt });
     if (!n) continue;
-    add({ key: e.key, name: nameOf(e.key), type: 'county-document', act: false, reason: `${e.label}${lateNote(n, e.date)}`, ids: [e.id], dates: [e.date] });
+    const sector = typeof e.sector === 'string' && e.sector ? e.sector : null;
+    add({ key: e.key, name: nameOf(e.key), type: 'county-document', act: false, reason: `${e.label}${lateNote(n, e.date)}`, ids: [e.id], dates: [e.date],
+      rank: countyRank(sector, buyboxSectors), sector, propertySource: typeof e.propertySource === 'string' && e.propertySource ? e.propertySource : null });
   }
 
   // County filings on CMBS loans (docs/county-loans.md section 9, src/cmbslinks.mjs): a document whose current holder is a CMBS trust,
@@ -392,7 +404,7 @@ export function runTriage({ dir, rules, now = new Date(), since, metros, scoring
   const groups = new Map();
   for (const f of findings) { if (!groups.has(f.key)) groups.set(f.key, []); groups.get(f.key).push(f); }
   // An item leads with its act-now findings, so its one line of reasoning always says why it is in its category.
-  const byFinding = (a, b) => (Number(!!b.act) - Number(!!a.act)) || (b.strength - a.strength) || cmp(b.dates.at(-1) ?? '', a.dates.at(-1) ?? '') || cmp(a.type, b.type) || cmp(a.ids[0] ?? '', b.ids[0] ?? '');
+  const byFinding = (a, b) => (Number(!!b.act) - Number(!!a.act)) || (b.strength - a.strength) || (a.rank - b.rank) || cmp(b.dates.at(-1) ?? '', a.dates.at(-1) ?? '') || cmp(a.type, b.type) || cmp(a.ids[0] ?? '', b.ids[0] ?? '');
   const linksFor = (key, fs) => {
     const acct = accountFor(key);
     return {
@@ -403,13 +415,14 @@ export function runTriage({ dir, rules, now = new Date(), since, metros, scoring
       fdicLoanSales: fs.find((f) => f.links.fdicLoanSales)?.links.fdicLoanSales ?? null,
     };
   };
-  const finding = (f) => ({ type: f.type, category: f.act ? 'actNow' : 'watch', strength: f.strength, reason: f.reason, ids: f.ids, dates: f.dates, ...(f.note ? { note: f.note } : {}) });
+  const finding = (f) => ({ type: f.type, category: f.act ? 'actNow' : 'watch', strength: f.strength, reason: f.reason, ids: f.ids, dates: f.dates, ...(f.note ? { note: f.note } : {}),
+    ...(f.type === 'county-document' ? { sector: f.sector ?? null, ...(f.propertySource ? { propertySource: f.propertySource } : {}) } : {}) });
   const makeItem = (key, name, category, fs, extra = {}) => {
     const sorted = [...fs].sort(byFinding);
     const dates = uniq(sorted.flatMap((f) => f.dates)).filter(Boolean).sort();
     const notes = uniq([...sorted.map((f) => f.note).filter(Boolean), ...(extra.notes ?? [])]);
     const cand = byKey.get(key);
-    return { key, name, category, strength: sorted[0]?.strength ?? 0, date: extra.date ?? dates.at(-1) ?? null, reason: extra.reason ?? sorted[0]?.reason ?? '',
+    return { key, name, category, strength: sorted[0]?.strength ?? 0, rank: sorted[0]?.rank ?? 0, date: extra.date ?? dates.at(-1) ?? null, reason: extra.reason ?? sorted[0]?.reason ?? '',
       ...(cand ? { tier: cand.tier ?? null } : {}), findings: sorted.map(finding), ids: uniq(sorted.flatMap((f) => f.ids)), dates, links: linksFor(key, sorted),
       ...(notes.length ? { notes } : {}), ...(extra.latestTouch ? { latestTouch: extra.latestTouch, conversation: extra.conversation } : {}) };
   };
@@ -457,8 +470,10 @@ export function runTriage({ dir, rules, now = new Date(), since, metros, scoring
     if (d?.status === 'dismissed') { const known = new Set(d.signalIds ?? []); if (!returned.has(key) && !(byKey.get(key)?.signals ?? []).some((s) => !known.has(s.id))) counts.dismissed++; }
   }
   counts.suppressed = suppressedKeys.size;
-  const byItem = (a, b) => (b.strength - a.strength) || cmp(b.date ?? '', a.date ?? '') || cmp(a.key, b.key);
+  const byItem = (a, b) => (b.strength - a.strength) || (a.rank - b.rank) || cmp(b.date ?? '', a.date ?? '') || cmp(a.key, b.key);
   for (const c of CATEGORIES) { out[c].sort(byItem); counts[c] = out[c].length; }
+  // CC BY 4.0: each parcel source a county line's property type came from, said once under the lists.
+  const attributions = uniq(CATEGORIES.flatMap((c) => out[c].flatMap((i) => i.findings.map((f) => f.propertySource).filter(Boolean)))).sort();
 
   // ---- The FDIC quarter ----
   const maxRep = (...xs) => xs.filter((x) => /^\d{8}$/.test(String(x ?? ''))).map(String).sort().at(-1) ?? null;
@@ -511,6 +526,7 @@ export function runTriage({ dir, rules, now = new Date(), since, metros, scoring
     window, rulesHash: contentHash(rules),
     candidates: latest ? { runId: latest.runId ?? null, scoredAt: latest.scoredAt ?? null, latestRepdte: latest.latestRepdte ?? null, provisional: !!latest.provisional } : null,
     fdicQuarter, counts, actNow: out.actNow, watch: out.watch, inConversation: out.inConversation, calendar, health, baseline,
+    ...(attributions.length ? { attributions } : {}),
   };
 
   // The snapshot the next triage compares with. Seen events are kept until they have not been seen for maxEventAgeDays.
@@ -601,6 +617,7 @@ export function renderTriage(r) {
   section('actNow');
   section('watch');
   section('inConversation', 'Shown apart: a principal is already talking to these institutions. Nothing here is act now.');
+  if (r.attributions?.length) L.push('', `Property type: ${r.attributions.join('; ')}.`);
   const c = r.counts;
   L.push('', '## Left out', '');
   L.push(`- Snoozed: ${c.snoozed}. Dismissed: ${c.dismissed}. They come back when the snooze ends, or when a new signal fires after the dismissal. Held back this window: ${c.heldBack}.`);

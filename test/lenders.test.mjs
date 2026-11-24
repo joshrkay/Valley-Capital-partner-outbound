@@ -114,6 +114,8 @@ test('the review list names no person: people set aside are one counted line wit
   const doc = (n, lender) => buildDocument({ documentType: 'notice_of_trustee_sale', documentNumber: n, dates: { recorded: '2026-11-11', filed: null, sale: '2026-12-01' }, parties: [{ role: 'lender', name: lender }, { role: 'grantor', name: 'Sample Holdings LLC' }],
     amounts: {}, url: `https://publictrustee.example/documents/${n}` }, { source: exampleCounty, fetchedAt: '2026-11-16T12:00:00.000Z', runId: 'r1' }).record;
   writeDiff(dir, 'example-county', diffDocuments({}, [doc('1', 'Pat Example and Jordan Example'), doc('2', 'Riley Placeholder'), doc('3', 'Example Bank, N.A.')], { runId: 'r1' }), { runId: 'r1' });
+  // Each a lead: its county parcel confirms a commercial property (docs/county-loans.md 3a).
+  (await import('./parcels-kit.mjs')).confirmParcels(dir, 'example-county');
   const idx = buildLoanIndex({ dir, runId: 'r1' });
   assert.deepEqual([idx.matchedDocuments, idx.setAside], [1, 2]);
   const review = readFileSync(loansPaths(dir).review, 'utf8');

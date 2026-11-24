@@ -2,6 +2,7 @@
 // trust's own loan record from SEC EDGAR. The recognizer, the match, the block, the rebuild after each job, the triage line, and the rules
 // (context only, no borrower, no commentary, out of the drafter's and briefer's loads). Invented trusts, firms and places only
 // (test/cmbs-fake.mjs); no network.
+import { parcelDocument } from './parcels-kit.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -170,9 +171,9 @@ test('buildCmbsLinks: linked and not-found entries, the scope rule, no borrower 
     countyDoc(),
     // Not found: the same trust, an amount no stored loan has.
     countyDoc({ documentNumber: 'FC-2026-0102/NED', amounts: { originalPrincipal: { value: 3210000, basis: 'index' } } }),
-    // Out of scope: a residential loan type. Never linked, whatever its holder.
+    // Not a lead: its county parcel is a house (below), whatever its loan type. Never linked, whatever its holder.
     countyDoc({ documentNumber: 'FC-2026-0103/NED', loan: { type: 'FHA', commercial: false } }),
-    // Out of scope: no loan type, and every borrower a person.
+    // Not a lead: its property is not matched to a county parcel (below), whatever its loan type says.
     countyDoc({ documentNumber: 'FC-2026-0104/NED', loan: null, parties: [{ role: 'holder', name: holderOf() }, { role: 'grantor', name: 'Pat Example and Jordan Example' }] }),
     // The trust is only the beneficiary on the deed of trust; a fund holds the loan now.
     countyDoc({ documentNumber: 'FC-2026-0105/NED', parties: [{ role: 'holder', name: 'Sample Capital Fund LP' }, { role: 'beneficiary', name: holderOf() }, { role: 'grantor', name: 'Zephyrine Hospitality LLC' }] }),
@@ -181,13 +182,14 @@ test('buildCmbsLinks: linked and not-found entries, the scope rule, no borrower 
     // A bank holds it: nothing to link.
     countyDoc({ documentNumber: 'FC-2026-0107/NED', parties: [{ role: 'holder', name: 'Example Origination Bank, N.A.' }, { role: 'grantor', name: 'Zephyrine Hospitality LLC' }] }),
   ];
-  const dir = writeWorld(makeDir(), { docs });
+  const dir = writeWorld(makeDir(), { docs, parcels: { 'example-arapahoe:FC-2026-0103/NED': 'house', 'example-arapahoe:FC-2026-0104/NED': { status: 'unmatched' } } });
   const c = buildCmbsLinks({ dir, now: NOW });
   assert.deepEqual(c, { documents: 7, outOfScope: 2, named: 2, linked: 1, notFound: 1, unconfirmed: 0, byReason: { 'no-asset': 1 }, written: true });
   const f = readLinks(dir);
   assert.deepEqual(Object.keys(f.links).sort(), ['example-arapahoe:FC-2026-0101/NED', 'example-arapahoe:FC-2026-0102/NED']);
   const l = f.links['example-arapahoe:FC-2026-0101/NED'];
-  assert.deepEqual([l.status, l.cmbs.loanKey, l.contextOnly, l.scored, l.scope], ['linked', 'cmbs:1900001:37', true, false, { commercial: true, borrowers: null }]);
+  assert.deepEqual([l.status, l.cmbs.loanKey, l.contextOnly, l.scored, l.scope], ['linked', 'cmbs:1900001:37', true, false,
+    { commercial: true, borrowers: null, property: { status: 'matched', kind: 'commercial', sector: 'hospitality', landUse: null } }]);
   assert.equal(f.links['example-arapahoe:FC-2026-0102/NED'].reason, 'no-asset');
   const text = JSON.stringify(f);
   for (const leak of DOC_ONLY) assert.ok(!text.includes(leak), `the link file holds "${leak}"`);
@@ -213,8 +215,10 @@ test('the servicer\'s list holds its linked filings in scope only', () => {
   const f = readLinks(dir);
   assert.deepEqual(cmbsLinksForServicer(f, SERVICER).map((e) => e.documentId), ['example-arapahoe:FC-2026-0101/NED']);
   assert.deepEqual(cmbsLinksForServicer(f, 'Placeholder Special Servicer Inc'), []);
-  const residential = { links: { x: { ...f.links['example-arapahoe:FC-2026-0101/NED'], scope: { commercial: false, borrowers: null } } } };
-  assert.deepEqual(cmbsLinksForServicer(residential, SERVICER), [], 'the scope guard');
+  const residential = { links: { x: { ...f.links['example-arapahoe:FC-2026-0101/NED'], scope: { commercial: true, borrowers: null, property: { status: 'matched', kind: 'residential' } } } } };
+  assert.deepEqual(cmbsLinksForServicer(residential, SERVICER), [], 'the scope guard: a home by its parcel record');
+  const unconfirmed = { links: { x: { ...f.links['example-arapahoe:FC-2026-0101/NED'], scope: { commercial: true, borrowers: null, property: { status: 'unmatched' } } } } };
+  assert.deepEqual(cmbsLinksForServicer(unconfirmed, SERVICER), [], 'the scope guard: a property no parcel confirms, whatever its loan type');
   assert.deepEqual(cmbsLinksForServicer({ links: { x: { ...f.links['example-arapahoe:FC-2026-0101/NED'], scope: undefined } } }, SERVICER), [], 'written before the rule: not shown');
 });
 
@@ -235,10 +239,10 @@ test('the weekly triage: one Watch line per newly linked filing, under its speci
   // The next week: seen, not listed again.
   const t2 = runTriage({ dir, rules, now: new Date('2026-11-30T14:00:00Z'), metros: loadJson('metros.json'), scoring: loadJson('scoring.json') });
   assert.ok(![...t2.actNow, ...t2.watch].some((i) => i.findings.some((f) => f.type === 'county-cmbs')));
-  // A link the scope rule did not write (or wrote residential) is never listed.
+  // A link the scope rule did not write (or wrote on a home, or on a property no parcel confirms) is never listed.
   const d2 = makeDir();
   const f = readJson(join(dir, 'loans', 'cmbs.json'));
-  for (const e of Object.values(f.links)) e.scope = { commercial: false, borrowers: null };
+  for (const e of Object.values(f.links)) e.scope = { commercial: true, borrowers: null, property: { status: 'none' } };
   put(d2, 'loans/cmbs.json', f);
   const t3 = runTriage({ dir: d2, rules, now: MONDAY, metros: loadJson('metros.json'), scoring: loadJson('scoring.json') });
   assert.ok(![...t3.actNow, ...t3.watch].some((i) => i.findings.some((x) => x.type === 'county-cmbs')));
@@ -250,7 +254,7 @@ test('LOADS: the link file is out of the drafter\'s, the briefer\'s, every model
   const modelFacing = { research: LOADS.research, draft: LOADS.draft, approve: LOADS.approve, callDesk: LOADS.callDesk, callDeskNarrowed: callDeskLoads('acme-bank'),
     ...Object.fromEntries(['callPrep', 'callNotes', 'callExtract', 'callConfirm'].flatMap((k) => [[k, LOADS[k]], [`${k}Narrowed`, callLoads(k, 'acme-bank')]])), score: LOADS.score };
   for (const [kind, list] of Object.entries(modelFacing)) for (const p of [CMBS_LINKS_REL, 'loans/docs/example-arapahoe.json']) assert.ok(!list.some((x) => covers(x, p)), `${kind} covers ${p}`);
-  assert.deepEqual(LOADS.cmbs, ['loans/docs/', 'loans/cmbs.json', 'sources/edgar/trusts.json', 'sources/edgar/loans.json', 'sources/edgar/state.json']);
+  assert.deepEqual(LOADS.cmbs, ['loans/docs/', 'loans/parcels/', 'loans/cmbs.json', 'sources/edgar/trusts.json', 'sources/edgar/loans.json', 'sources/edgar/state.json']);
   assert.ok(LOADS.triage.includes(CMBS_LINKS_REL) && !LOADS.triage.some((p) => p === 'loans/' || p.startsWith('loans/docs')), 'the triage reads the links, never the documents');
   // Scoring's rules name no county or CMBS-link signal.
   assert.doesNotMatch(JSON.stringify(loadJson('scoring.json').signals ?? []), /county|cmbs link|trustee/i);
@@ -277,6 +281,9 @@ async function platform() {
   const fake = fakePostgrest();
   const doc = laDoc();
   fake.docs.set(`loans/docs/${LA.id}.json`, { path: `loans/docs/${LA.id}.json`, kind: 'json', body: { [doc.id]: doc }, text: null, version: 1 });
+  // Its county parcel record: apartments of 5 or more units, so it is a lead and can be linked.
+  const pf = parcelDocument(LA.id, [doc.id], 'apartments');
+  fake.docs.set(pf.path, { path: pf.path, kind: 'json', body: pf.body, text: null, version: 1 });
   const url = 'https://example-project.supabase.test';
   return { fake, pat: platformClient({ url, key: 'anon-key', accessToken: 'user:pat@example.test', fetchImpl: fake.fetchImpl }), service: platformClient({ url, key: 'service', fetchImpl: fake.fetchImpl }), doc };
 }
